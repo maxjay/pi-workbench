@@ -30,3 +30,15 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked
+      - name: Capture native Linux preview
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y xvfb xauth xdotool imagemagick mesa-vulkan-drivers fonts-dejavu-core
+          bash scripts/capture-preview.sh
+      - name: Upload native preview
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-workbench-linux-preview
+          path: artifacts/
+          if-no-files-found: error
