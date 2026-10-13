@@ -8,3 +8,6 @@ rust-version.workspace = true
 floem.workspace = true
 workbench-core.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

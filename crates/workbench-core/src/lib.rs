@@ -2,3 +2,5 @@
 
 pub mod files;
 pub mod layout;
+
+pub const MAX_OPEN_DOCUMENTS: usize = 64;

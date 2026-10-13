@@ -47,7 +47,7 @@ impl Layout {
             0.5
         };
         self.open_files.retain(|path| safe_relative(path));
-        self.open_files.truncate(64);
+        self.open_files.truncate(crate::MAX_OPEN_DOCUMENTS);
         let mut seen = std::collections::HashSet::new();
         self.open_files.retain(|path| seen.insert(path.clone()));
         for active in &mut self.active {

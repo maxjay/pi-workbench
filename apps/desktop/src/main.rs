@@ -1,6 +1,8 @@
 mod commands;
-mod state;
+mod documents;
+mod explorer;
 mod ui;
+mod workspace;
 
 use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
@@ -20,6 +22,27 @@ fn window_config() -> floem::window::WindowConfig {
         .title("Pi Workbench")
 }
 
+fn open_folder() {
+    floem::open_file(
+        floem::FileDialogOptions::new()
+            .select_directories()
+            .title("Open workspace"),
+        |selected| {
+            if let Some(info) = selected
+                && let Some(path) = info.path.first()
+            {
+                match workspace_paths(path) {
+                    Ok((root, layout)) => floem::new_window(
+                        move |id| ui::workbench(id, root, layout),
+                        Some(window_config()),
+                    ),
+                    Err(err) => eprintln!("Cannot open workspace: {err}"),
+                }
+            }
+        },
+    );
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     let path = args
@@ -27,9 +50,12 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or(std::env::current_dir()?);
     if path == Path::new("--help") || path == Path::new("-h") {
-        println!(
-            "Pi Workbench\n\nUsage: pi-workbench [workspace-folder]\n\nCtrl/Cmd+S: save · Ctrl/Cmd+W: close file · Ctrl/Cmd+B: explorer\nCtrl/Cmd+\\: split · Ctrl/Cmd+Shift+P: commands"
-        );
+        println!("Pi Workbench\n\nUsage: pi-workbench [workspace-folder]\n");
+        for command in commands::COMMANDS {
+            if command.shortcut().is_some() {
+                println!("{}: {}", command.shortcut_label(), command.title());
+            }
+        }
         return Ok(());
     }
     ensure!(

@@ -1,6 +1,6 @@
-use crate::state::{Confirm, Workbench};
+//! One command list supplies palette labels and actual keyboard bindings.
+use crate::workspace::Workbench;
 use floem::prelude::*;
-use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
@@ -15,135 +15,168 @@ pub enum Command {
     Refresh,
     ResetLayout,
     Quit,
+    Palette,
 }
 
-/// The toolbar and command palette use the same internal contribution surface.
-pub struct CommandSpec {
-    pub id: Command,
-    pub title: &'static str,
-    pub shortcut: &'static str,
-}
-
-pub const COMMANDS: &[CommandSpec] = &[
-    CommandSpec {
-        id: Command::Quit,
-        title: "Close workspace window",
-        shortcut: "Ctrl/Cmd+Q",
-    },
-    CommandSpec {
-        id: Command::OpenFolder,
-        title: "Open folder in new window",
-        shortcut: "",
-    },
-    CommandSpec {
-        id: Command::Save,
-        title: "Save active file",
-        shortcut: "Ctrl/Cmd+S",
-    },
-    CommandSpec {
-        id: Command::SaveAll,
-        title: "Save all files",
-        shortcut: "",
-    },
-    CommandSpec {
-        id: Command::CloseFile,
-        title: "Close active file",
-        shortcut: "Ctrl/Cmd+W",
-    },
-    CommandSpec {
-        id: Command::Reload,
-        title: "Reload active file from disk",
-        shortcut: "",
-    },
-    CommandSpec {
-        id: Command::Split,
-        title: "Toggle second editor pane",
-        shortcut: "Ctrl/Cmd+\\",
-    },
-    CommandSpec {
-        id: Command::Explorer,
-        title: "Toggle explorer",
-        shortcut: "Ctrl/Cmd+B",
-    },
-    CommandSpec {
-        id: Command::MoveExplorer,
-        title: "Move explorer to opposite side",
-        shortcut: "",
-    },
-    CommandSpec {
-        id: Command::Refresh,
-        title: "Refresh expanded folders",
-        shortcut: "",
-    },
-    CommandSpec {
-        id: Command::ResetLayout,
-        title: "Reset panel layout",
-        shortcut: "",
-    },
+pub const COMMANDS: &[Command] = &[
+    Command::Palette,
+    Command::Quit,
+    Command::OpenFolder,
+    Command::Save,
+    Command::SaveAll,
+    Command::CloseFile,
+    Command::Reload,
+    Command::Split,
+    Command::Explorer,
+    Command::MoveExplorer,
+    Command::Refresh,
+    Command::ResetLayout,
 ];
 
-pub fn execute(state: &Rc<Workbench>, command: Command) {
+impl Command {
+    fn details(self) -> (&'static str, Option<Shortcut>) {
+        let primary = |key| Some(Shortcut { key, shift: false });
+        match self {
+            Self::Palette => (
+                "Toggle command palette",
+                Some(Shortcut {
+                    key: "p",
+                    shift: true,
+                }),
+            ),
+            Self::Quit => ("Close workspace window", primary("q")),
+            Self::OpenFolder => ("Open folder in new window", None),
+            Self::Save => ("Save active file", primary("s")),
+            Self::SaveAll => ("Save all files", None),
+            Self::CloseFile => ("Close active file", primary("w")),
+            Self::Reload => ("Reload active file from disk", None),
+            Self::Split => ("Toggle second editor pane", primary("\\")),
+            Self::Explorer => ("Toggle explorer", primary("b")),
+            Self::MoveExplorer => ("Move explorer to opposite side", None),
+            Self::Refresh => ("Refresh expanded folders", None),
+            Self::ResetLayout => ("Reset panel layout", None),
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        self.details().0
+    }
+    pub fn shortcut(self) -> Option<Shortcut> {
+        self.details().1
+    }
+    pub fn shortcut_label(self) -> String {
+        self.shortcut().map(Shortcut::label).unwrap_or_default()
+    }
+}
+
+pub fn execute(state: &Workbench, command: Command) {
     match command {
-        Command::Quit => state.request_quit(),
-        Command::OpenFolder => {
-            floem::open_file(
-                floem::FileDialogOptions::new()
-                    .select_directories()
-                    .title("Open workspace"),
-                |selected| {
-                    if let Some(info) = selected
-                        && let Some(path) = info.path.first()
-                    {
-                        match crate::workspace_paths(path) {
-                            Ok((root, layout)) => floem::new_window(
-                                move |id| crate::ui::workbench(id, root, layout),
-                                Some(crate::window_config()),
-                            ),
-                            Err(err) => eprintln!("Cannot open workspace: {err}"),
-                        }
-                    }
-                },
-            );
-        }
+        Command::OpenFolder => crate::open_folder(),
         Command::Save => state.save_active(),
-        Command::SaveAll => state.save_all(),
-        Command::CloseFile => {
-            if let Some(path) = state.active[state.focused.get_untracked()].get_untracked() {
-                state.close_file(path);
+        Command::SaveAll => state.documents.save_all(),
+        Command::CloseFile => state.close_active(),
+        Command::Reload => state.reload_active(),
+        Command::Split => state.toggle_split(),
+        Command::Explorer => state.toggle_explorer(),
+        Command::MoveExplorer => state.move_explorer(),
+        Command::Refresh => state.explorer.refresh(),
+        Command::ResetLayout => state.reset_layout(),
+        Command::Quit => state.request_quit(),
+        Command::Palette => state.toggle_palette(),
+    }
+}
+
+/// All bindings use Ctrl on Windows/Linux and Cmd on macOS.
+#[derive(Clone, Copy)]
+pub struct Shortcut {
+    key: &'static str,
+    shift: bool,
+}
+
+fn primary_modifier() -> Modifiers {
+    if cfg!(target_os = "macos") {
+        Modifiers::META
+    } else {
+        Modifiers::CONTROL
+    }
+}
+
+impl Shortcut {
+    fn modifiers(self) -> Modifiers {
+        primary_modifier()
+            | if self.shift {
+                Modifiers::SHIFT
+            } else {
+                Modifiers::empty()
+            }
+    }
+
+    fn matches(self, key: &Key, modifiers: Modifiers) -> bool {
+        // Ignore lock keys, but do not consume unrelated Ctrl+Alt/Shift combinations.
+        let relevant =
+            modifiers & (Modifiers::CONTROL | Modifiers::META | Modifiers::ALT | Modifiers::SHIFT);
+        matches!(key, Key::Character(key) if key.eq_ignore_ascii_case(self.key))
+            && relevant == self.modifiers()
+    }
+
+    fn label(self) -> String {
+        format!(
+            "Ctrl/Cmd+{}{}",
+            if self.shift { "Shift+" } else { "" },
+            self.key.to_uppercase()
+        )
+    }
+}
+
+pub fn for_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
+    COMMANDS.iter().copied().find(|command| {
+        command
+            .shortcut()
+            .is_some_and(|binding| binding.matches(key, modifiers))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_use_the_registry_and_reject_extra_modifiers() {
+        for command in COMMANDS {
+            if let Some(binding) = command.shortcut() {
+                assert_eq!(
+                    for_key(
+                        &Key::Character(binding.key.to_uppercase()),
+                        binding.modifiers()
+                    ),
+                    Some(*command)
+                );
             }
         }
-        Command::Reload => {
-            if let Some(path) = state.active[state.focused.get_untracked()].get_untracked() {
-                if state.document(&path).is_some_and(|doc| doc.dirty()) {
-                    state.confirm.set(Some(Confirm::Reload(path)));
-                } else {
-                    state.reload(path);
-                }
-            }
-        }
-        Command::Split => {
-            state.layout.update(|layout| layout.split = !layout.split);
-            if !state.layout.get_untracked().split {
-                state.focused.set(0);
-            } else if state.active[1].get_untracked().is_none() {
-                state.active[1].set(state.active[0].get_untracked());
-            }
-        }
-        Command::Explorer => state
-            .layout
-            .update(|layout| layout.explorer_visible = !layout.explorer_visible),
-        Command::MoveExplorer => state
-            .layout
-            .update(|layout| layout.explorer_right = !layout.explorer_right),
-        Command::Refresh => {
-            state.read_directory(state.root.clone());
-            for path in state.expanded.get_untracked() {
-                state.read_directory(path);
-            }
-        }
-        Command::ResetLayout => {
-            state.layout.set(Default::default());
-            state.focused.set(0);
-        }
+        assert_eq!(
+            for_key(
+                &Key::Character("s".into()),
+                primary_modifier() | Modifiers::ALT
+            ),
+            None
+        );
+        assert_eq!(
+            for_key(
+                &Key::Character("s".into()),
+                primary_modifier() | Modifiers::SHIFT
+            ),
+            None
+        );
+        assert_eq!(
+            for_key(&Key::Character("p".into()), primary_modifier()),
+            None
+        );
+        assert_eq!(
+            for_key(
+                &Key::Character("P".into()),
+                primary_modifier() | Modifiers::SHIFT
+            ),
+            Some(Command::Palette)
+        );
     }
 }
