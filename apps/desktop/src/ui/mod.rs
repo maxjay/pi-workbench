@@ -46,6 +46,15 @@ const CODE_FONT: &str =
 const CODE_SIZE: usize = 14;
 /// Floem's editor background, which its style API does not let us change.
 const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
+
+/// How the lens marks who added a line.
+fn origin_color(origin: crate::origins::Origin) -> Color {
+    match origin {
+        crate::origins::Origin::Pi => ACCENT,
+        crate::origins::Origin::You => INFO,
+        crate::origins::Origin::Others => WARN,
+    }
+}
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
@@ -313,8 +322,35 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     .on_event_stop(el::Click, move |_, _| {
         lens_open.update(|open| *open = !*open)
     });
+    // Who added the changed lines, as the editors colour them.
+    let legend_changes = state.lens.changes();
+    let legend = Stack::horizontal(
+        [
+            ("Pi", crate::origins::Origin::Pi),
+            ("you", crate::origins::Origin::You),
+            ("others", crate::origins::Origin::Others),
+        ]
+        .map(|(name, origin)| {
+            Stack::horizontal((
+                Empty::new().style(move |s| {
+                    s.size(8, 8)
+                        .border_radius(2)
+                        .background(origin_color(origin))
+                }),
+                Label::new(name).style(|s| s.color(MUTED).font_size(11)),
+            ))
+            .style(|s| s.gap(4).items_center())
+        }),
+    )
+    .style(move |s| {
+        s.gap(10)
+            .items_center()
+            .flex_shrink(0.0_f32)
+            .apply_if(legend_changes.with(Vec::is_empty), |s| s.hide())
+    });
     let footer = Stack::horizontal((
         lens_summary,
+        legend,
         Label::derived(move || status.get()).style(|s| {
             s.color(MUTED)
                 .flex_grow(1.0_f32)

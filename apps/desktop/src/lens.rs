@@ -1,5 +1,9 @@
 //! The changes lens: what the workspace is compared against, which files
 //! differ, and each open file's diff. Every view reads from here.
+use crate::{
+    origins::{self, Authorship, Context, Origin, PiLines, Records},
+    session::Turn,
+};
 use floem::{
     action::exec_after,
     ext_event::create_ext_action,
@@ -53,10 +57,20 @@ pub struct Comparison {
     revision: u64,
     /// Every hunk with the key that marks it seen.
     pub hunks: Vec<(Hunk, u64)>,
+    /// Per hunk: whether it only reformats.
+    pub formatting: Vec<bool>,
+    /// Per line: who added it, for added lines.
+    pub origins: Vec<Option<Origin>>,
 }
 
 impl Comparison {
-    fn new(path: &Path, base: Arc<Option<String>>, text: &str, revision: u64) -> Self {
+    fn new(
+        path: &Path,
+        base: Arc<Option<String>>,
+        text: &str,
+        revision: u64,
+        context: &Context,
+    ) -> Self {
         let diff = match base.as_ref() {
             Some(base) => LineDiff::compute(base, text),
             None => LineDiff::all_added(text),
@@ -81,12 +95,28 @@ impl Comparison {
                 (content, *count).hash(&mut hasher);
                 (hunk, hasher.finish())
             })
-            .collect();
+            .collect::<Vec<(Hunk, u64)>>();
+        let plain: Vec<Hunk> = hunks.iter().map(|(hunk, _)| hunk.clone()).collect();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let formatting = origins::formatting(
+            &name,
+            base.as_deref(),
+            text,
+            &plain,
+            &base_lines,
+            &current_lines,
+        );
+        let origins = origins::origins(&diff, &plain, &current_lines, text, context);
         Self {
             diff,
             base,
             revision,
             hunks,
+            formatting,
+            origins,
         }
     }
 
@@ -128,6 +158,8 @@ pub struct FileLens {
     revision: ReadSignal<u64>,
     /// Baseline text; `None` inside means the file is new there.
     base: RefCell<Option<Arc<Option<String>>>>,
+    /// Who wrote the committed lines, when someone else did.
+    authorship: RefCell<Option<Arc<Authorship>>>,
     comparison: RwSignal<Option<Rc<Comparison>>>,
     generation: Cell<u64>,
     /// Owns the effect that follows edits, so closing the file frees it.
@@ -148,12 +180,25 @@ impl FileLens {
     }
 }
 
+/// The files one Pi turn changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnFiles {
+    pub number: usize,
+    pub prompt: String,
+    pub files: Vec<FileChange>,
+}
+
+/// One open file's baseline and authorship, as read in the background.
+type Loaded = (anyhow::Result<Option<String>>, Option<Arc<Authorship>>);
+
 /// What one background refresh found.
 struct Refreshed {
     head: Option<String>,
     branch_base: Option<Base>,
     changes: Option<anyhow::Result<Vec<FileChange>>>,
-    bases: Vec<(PathBuf, anyhow::Result<Option<String>>)>,
+    bases: Vec<(PathBuf, Loaded)>,
+    turn_files: Vec<TurnFiles>,
+    pi: PiLines,
 }
 
 pub struct Lens {
@@ -166,8 +211,13 @@ pub struct Lens {
     since: RwSignal<Since>,
     branch_base: RwSignal<Option<Base>>,
     head: RwSignal<Option<String>>,
-    /// Snapshots the active session took before each prompt, oldest first.
-    turns: RwSignal<Vec<String>>,
+    /// The active session's turns, oldest first.
+    turns: RwSignal<Vec<Turn>>,
+    turn_files: RwSignal<Vec<TurnFiles>>,
+    /// What Pi's sessions wrote, by file.
+    pi: RwSignal<PiLines>,
+    records: Arc<Records>,
+    show_formatting: RwSignal<bool>,
     changes: RwSignal<Vec<FileChange>>,
     files: RefCell<HashMap<PathBuf, Rc<FileLens>>>,
     focus: RwSignal<bool>,
@@ -191,6 +241,10 @@ impl Lens {
             branch_base: RwSignal::new(None),
             head: RwSignal::new(None),
             turns: RwSignal::new(Vec::new()),
+            turn_files: RwSignal::new(Vec::new()),
+            pi: RwSignal::new(PiLines::default()),
+            records: Arc::default(),
+            show_formatting: RwSignal::new(false),
             changes: RwSignal::new(Vec::new()),
             files: RefCell::new(HashMap::new()),
             focus: RwSignal::new(false),
@@ -223,6 +277,23 @@ impl Lens {
     pub fn toggle_changed_only(&self) {
         self.changed_only.update(|f| *f = !*f);
     }
+    pub fn turn_files(&self) -> ReadSignal<Vec<TurnFiles>> {
+        self.turn_files.read_only()
+    }
+    pub fn show_formatting(&self) -> ReadSignal<bool> {
+        self.show_formatting.read_only()
+    }
+    pub fn toggle_formatting(&self) {
+        self.show_formatting.update(|f| *f = !*f);
+    }
+
+    /// Tracked: whether a hunk is out of view, because it was marked seen or
+    /// only reformats while formatting is hidden.
+    pub fn hidden(&self, comparison: &Comparison, index: usize) -> bool {
+        let key = comparison.hunks[index].1;
+        self.seen.with(|seen| seen.contains(&key))
+            || (!self.show_formatting.get() && comparison.formatting[index])
+    }
 
     /// Tracked: the label the status bar shows for `since`.
     pub fn label(&self, since: Since) -> String {
@@ -244,8 +315,12 @@ impl Lens {
                 .branch_base
                 .with(|b| b.as_ref().map(|b| Rev::Commit(b.commit.clone()))),
             Since::Head => self.head.get().map(Rev::Commit),
-            Since::SessionStart => self.turns.with(|t| t.first().cloned()).map(Rev::Tree),
-            Since::LastTurn => self.turns.with(|t| t.last().cloned()).map(Rev::Tree),
+            Since::SessionStart => self
+                .turns
+                .with(|t| t.first().map(|t| Rev::Tree(t.before.clone()))),
+            Since::LastTurn => self
+                .turns
+                .with(|t| t.last().map(|t| Rev::Tree(t.before.clone()))),
         }
     }
 
@@ -254,15 +329,11 @@ impl Lens {
         self.refresh();
     }
 
-    pub fn set_turns(self: &Rc<Self>, turns: Vec<String>) {
+    /// Follows the active session; a finished turn also regroups the changes.
+    pub fn set_turns(self: &Rc<Self>, turns: Vec<Turn>) {
         if self.turns.with_untracked(|t| *t != turns) {
             self.turns.set(turns);
-            if matches!(
-                self.since.get_untracked(),
-                Since::SessionStart | Since::LastTurn
-            ) {
-                self.refresh();
-            }
+            self.refresh();
         }
     }
 
@@ -345,6 +416,7 @@ impl Lens {
             .values()
             .map(|file| (file.path.clone(), self.relative(&file.path)))
             .collect();
+        let (records, root) = (self.records.clone(), self.root.clone());
         let lens = self.clone();
         let finish = create_ext_action(self.scope, move |found: Refreshed| {
             lens.refreshing.set(false);
@@ -359,22 +431,44 @@ impl Lens {
             let rev = match since {
                 Since::Branch => branch_base.as_ref().map(|b| Rev::Commit(b.commit.clone())),
                 Since::Head => head.clone().map(Rev::Commit),
-                Since::SessionStart => turns.first().cloned().map(Rev::Tree),
-                Since::LastTurn => turns.last().cloned().map(Rev::Tree),
+                Since::SessionStart => turns.first().map(|t| Rev::Tree(t.before.clone())),
+                Since::LastTurn => turns.last().map(|t| Rev::Tree(t.before.clone())),
             };
             let changes = rev.as_ref().map(|rev| repo.changes(rev));
+            let me = repo.user_email().ok().flatten();
             let bases = match &rev {
                 Some(rev) => files
                     .into_iter()
-                    .filter_map(|(path, relative)| Some((path, repo.read(rev, &relative?))))
+                    .filter_map(|(path, relative)| {
+                        let relative = relative?;
+                        let base = repo.read(rev, &relative);
+                        let authorship = Authorship::read(&repo, &relative, me.as_deref());
+                        Some((path, (base, authorship)))
+                    })
                     .collect(),
                 None => Vec::new(),
             };
+            let turn_files = turns
+                .iter()
+                .enumerate()
+                .filter_map(|(index, turn)| {
+                    let before = Rev::Tree(turn.before.clone());
+                    let after = Rev::Tree(turn.after.clone()?);
+                    let files = repo.changes_between(&before, &after).ok()?;
+                    Some(TurnFiles {
+                        number: index + 1,
+                        prompt: turn.prompt.clone(),
+                        files,
+                    })
+                })
+                .collect();
             finish(Refreshed {
                 head,
                 branch_base,
                 changes,
                 bases,
+                turn_files,
+                pi: records.read(&root),
             })
         });
     }
@@ -389,6 +483,21 @@ impl Lens {
         if self.changes_generation.get() != generation {
             return;
         }
+        if self.pi.with_untracked(|pi| **pi != *found.pi) {
+            self.pi.set(found.pi);
+        }
+        let turn_files: Vec<TurnFiles> = found
+            .turn_files
+            .into_iter()
+            .map(|mut turn| {
+                turn.files = self.in_workspace(turn.files);
+                turn
+            })
+            .filter(|turn| !turn.files.is_empty())
+            .collect();
+        if self.turn_files.with_untracked(|t| *t != turn_files) {
+            self.turn_files.set(turn_files);
+        }
         let Some(changes) = found.changes else {
             // Nothing to compare with yet, such as a session that has not run.
             self.changes.set(Vec::new());
@@ -401,27 +510,32 @@ impl Lens {
         };
         match changes {
             Ok(changes) => {
-                // Workspace paths use `canonicalize` form; git reports plain ones.
-                // The repository may hold more than this workspace shows.
-                let changes: Vec<FileChange> = changes
-                    .into_iter()
-                    .map(|mut change| {
-                        change.path = self.workspace_path(&change.path);
-                        change
-                    })
-                    .filter(|change| change.path.starts_with(&self.root))
-                    .collect();
+                let changes = self.in_workspace(changes);
                 if self.changes.with_untracked(|c| *c != changes) {
                     self.changes.set(changes);
                 }
             }
             Err(err) => self.status.set(format!("Changes: {err:#}")),
         }
-        for (path, base) in found.bases {
+        for (path, (base, authorship)) in found.bases {
             if let Some(file) = self.file(&path) {
+                *file.authorship.borrow_mut() = authorship;
                 self.set_base(&file, base);
             }
         }
+    }
+
+    /// Workspace paths use `canonicalize` form; git reports plain ones. The
+    /// repository may also hold more than this workspace shows.
+    fn in_workspace(&self, changes: Vec<FileChange>) -> Vec<FileChange> {
+        changes
+            .into_iter()
+            .map(|mut change| {
+                change.path = self.workspace_path(&change.path);
+                change
+            })
+            .filter(|change| change.path.starts_with(&self.root))
+            .collect()
     }
 
     fn set_base(self: &Rc<Self>, file: &Rc<FileLens>, base: anyhow::Result<Option<String>>) {
@@ -452,13 +566,18 @@ impl Lens {
         let generation = self.changes_generation.get();
         let lens = self.clone();
         let target = file.clone();
-        let finish = create_ext_action(self.scope, move |base| {
+        let finish = create_ext_action(self.scope, move |(base, authorship): Loaded| {
             if lens.changes_generation.get() == generation {
+                *target.authorship.borrow_mut() = authorship;
                 lens.set_base(&target, base);
             }
         });
         let (repo, rev) = (repo.clone(), rev.clone());
-        std::thread::spawn(move || finish(repo.read(&rev, &relative)));
+        std::thread::spawn(move || {
+            let me = repo.user_email().ok().flatten();
+            let authorship = Authorship::read(&repo, &relative, me.as_deref());
+            finish((repo.read(&rev, &relative), authorship))
+        });
     }
 
     /// Starts tracking an open file; its diff follows edits.
@@ -478,6 +597,7 @@ impl Lens {
                 text: text.clone(),
                 revision,
                 base: RefCell::new(None),
+                authorship: RefCell::new(None),
                 comparison: RwSignal::new(None),
                 generation: Cell::new(0),
                 scope,
@@ -535,7 +655,11 @@ impl Lens {
             }
         });
         let path = file.path.clone();
-        std::thread::spawn(move || finish(Comparison::new(&path, base, &text, revision)));
+        let context = Context {
+            pi: self.pi.with_untracked(|pi| pi.get(&path).cloned()),
+            authorship: file.authorship.borrow().clone(),
+        };
+        std::thread::spawn(move || finish(Comparison::new(&path, base, &text, revision, &context)));
     }
 
     pub fn mark_seen(&self, key: u64) {
@@ -550,7 +674,13 @@ mod tests {
     use super::*;
 
     fn compare(base: &str, text: &str) -> Comparison {
-        Comparison::new(Path::new("a.rs"), Arc::new(Some(base.into())), text, 0)
+        Comparison::new(
+            Path::new("a.rs"),
+            Arc::new(Some(base.into())),
+            text,
+            0,
+            &Context::default(),
+        )
     }
 
     #[test]

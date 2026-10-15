@@ -13,6 +13,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Sessions:** every Pi session is a tab in the sessions rail. Sessions resume from Pi's own store with their history, so the Pi command line and the workbench see the same sessions.
 - **Conversation:** replies render as markdown; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
 - **Changes lens:** everything is read against one baseline you pick in the status bar: where your branch left develop, the start of the session, Pi's last turn, or the last commit. The explorer marks changed files, editors show removed lines as ghost lines in place, and you walk the changes file to file without opening a diff.
+- **Who changed it:** changed lines are coloured by who wrote them: Pi, you, or someone else on the branch. Reformatting is filtered out, and the changed files are grouped by the Pi turn that changed them.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
 - **Editor:** syntax highlighting, open by name (Ctrl+P), search across files (Ctrl+Shift+F), cursor and scroll kept per tab, and an explorer that hides what `.gitignore` ignores.
 - A second pane, background saves, and a command palette.
@@ -74,6 +75,18 @@ The lens reads git without running the repository's filters or hooks, and the wo
 
 ![The explorer through the lens](docs/screenshots/lens-explorer.png)
 
+### Who changed it
+
+![Pi's lines, a teammate's commit, your edit, and a reindent filtered out](docs/screenshots/origins.png)
+
+Changed lines carry the colour of whoever wrote them:
+
+- **Pi:** lines Pi wrote, recognised against the edits recorded in Pi's own sessions for this folder, including sessions run from the command line.
+- **you:** your edits, and lines you committed.
+- **others:** lines committed by someone else, from `git blame` of the last commit compared with your `user.email`.
+
+Changes that only reformat (the same text once whitespace is ignored or, with [difftastic](https://difftastic.wilfred.me.uk) installed, the same syntax tree) keep a hairline in the margin and stay out of the way of navigation; **Show or hide formatting-only changes** in the palette brings them back. With **Changed** on, files are grouped under the Pi turn that changed them, newest first, with each turn's prompt; the rest are under **Other changes**.
+
 ## Finding your way
 
 ![Search across files](docs/screenshots/search.png)
@@ -112,6 +125,7 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [workspace.rs](apps/desktop/src/workspace.rs) | Opening files, panes, confirmations, layout |
 | [documents.rs](apps/desktop/src/documents.rs) | Buffers, saves, reloads, merging outside changes |
 | [lens.rs](apps/desktop/src/lens.rs) | The changes lens: baseline, changed files, per-file diffs, seen changes |
+| [origins.rs](apps/desktop/src/origins.rs) | Who wrote each changed line, and which changes only reformat |
 | [watcher.rs](apps/desktop/src/watcher.rs) | Watching the workspace for outside changes |
 | [markdown.rs](apps/desktop/src/markdown.rs) | Reply markdown to timeline blocks |
 | [syntax.rs](apps/desktop/src/syntax.rs) | Highlighting open files off the UI thread |
@@ -120,7 +134,7 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [ui/](apps/desktop/src/ui) | Views and styling: rail, conversation, panes, changes |
 | [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars, focus and highlighting inside an editor |
 | [ui/finder.rs](apps/desktop/src/ui/finder.rs) | Open by name and search in files |
-| [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, read-only git access |
+| [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, read-only git access and blame, difftastic |
 | [workbench-text](crates/workbench-text/src) | Syntax highlighting, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |
 

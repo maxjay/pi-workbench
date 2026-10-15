@@ -1,7 +1,7 @@
 //! The changes lens inside an editor: removed lines appear as ghost lines in
 //! place, changed lines get a bar and a tint, and focus mode dims the rest.
-use super::{ACCENT, ADDED, MUTED, REMOVED, REMOVED_TEXT};
-use crate::{lens::Comparison, syntax::Lines};
+use super::{ADDED, MUTED, REMOVED, REMOVED_TEXT};
+use crate::{lens::Comparison, origins::Origin, syntax::Lines};
 use floem::views::editor::core::xi_rope::Rope;
 use floem::{
     peniko::Color,
@@ -42,25 +42,41 @@ pub struct Overlay {
     pub ghosts: BTreeMap<usize, String>,
     /// Focus mode: lines far from any unseen change, drawn faint.
     pub dimmed: Vec<bool>,
-    /// Lines of changes marked seen: no marks and no ghosts.
+    /// Lines of changes marked seen or hidden as formatting: no tint and no ghosts.
     pub quiet: Vec<bool>,
+    /// Lines of hidden formatting changes, which keep a faint mark.
+    pub faint: Vec<bool>,
+}
+
+/// Why a hunk is out of view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quiet {
+    Seen,
+    Formatting,
 }
 
 impl Overlay {
-    /// `seen` says, by position, which of the diff's hunks are marked seen.
-    pub fn new(diff: &LineDiff, base: &str, focus: bool, seen: impl Fn(usize) -> bool) -> Self {
+    /// `quiet` says, by position, which of the diff's hunks are out of view.
+    pub fn new(
+        diff: &LineDiff,
+        base: &str,
+        focus: bool,
+        quiet_hunk: impl Fn(usize) -> Option<Quiet>,
+    ) -> Self {
         let base_lines: Vec<&str> = base.split('\n').map(|l| l.trim_end_matches('\r')).collect();
         let mut unseen = Vec::new();
         let lines = diff.current.len();
         let mut quiet = vec![false; lines];
+        let mut faint = vec![false; lines];
         for (index, hunk) in diff.hunks_iter().enumerate() {
-            if !seen(index) {
+            let Some(why) = quiet_hunk(index) else {
                 unseen.push(hunk);
                 continue;
+            };
+            for line in hunk.current.clone().filter(|&line| line < lines) {
+                quiet[line] = true;
+                faint[line] = why == Quiet::Formatting;
             }
-            quiet[hunk.current.clone()]
-                .iter_mut()
-                .for_each(|q| *q = true);
         }
         let ghosts = unseen
             .iter()
@@ -88,6 +104,7 @@ impl Overlay {
             ghosts,
             dimmed,
             quiet,
+            faint,
         }
     }
 }
@@ -295,7 +312,8 @@ impl Styling for LensStyling {
         line: usize,
         layout_line: &mut TextLayoutLine,
     ) {
-        if Self::flag(&self.overlay.quiet, line) {
+        let faint = Self::flag(&self.overlay.faint, line);
+        if Self::flag(&self.overlay.quiet, line) && !faint {
             return;
         }
         let row = f64::from(self.line_height(edid, line));
@@ -328,13 +346,23 @@ impl Styling for LensStyling {
             under_line: None,
             wave_line: None,
         };
-        if added(self.incoming.as_deref(), line) {
-            layout_line.extra_style.push(mark(None, ADDED));
-        } else if added(self.lens.as_ref().map(|c| &c.diff), line) {
+        if faint {
+            // Reformatted only: a hairline, so it can be found but not read as a change.
             layout_line
                 .extra_style
-                .push(mark(None, ADDED.with_alpha(0.08)));
-            layout_line.extra_style.push(mark(Some(3.0), ACCENT));
+                .push(mark(Some(1.0), MUTED.with_alpha(0.5)));
+        } else if added(self.incoming.as_deref(), line) {
+            layout_line.extra_style.push(mark(None, ADDED));
+        } else if added(self.lens.as_ref().map(|c| &c.diff), line) {
+            let origin = self
+                .lens
+                .as_ref()
+                .and_then(|c| c.origins.get(line).copied().flatten());
+            let color = super::origin_color(origin.unwrap_or(Origin::You));
+            layout_line
+                .extra_style
+                .push(mark(None, color.with_alpha(0.08)));
+            layout_line.extra_style.push(mark(Some(3.0), color));
         }
     }
 }
@@ -347,7 +375,7 @@ mod tests {
     fn ghosts_sit_before_the_line_they_were_removed_from() {
         let base = "a\nold 1\nold 2\nb\nc";
         let diff = LineDiff::compute(base, "a\nnew\nb\nc\nd");
-        let overlay = Overlay::new(&diff, base, false, |_| false);
+        let overlay = Overlay::new(&diff, base, false, |_| None);
         assert_eq!(
             overlay.ghosts.get(&1).map(String::as_str),
             Some("old 1\nold 2")
@@ -363,7 +391,9 @@ mod tests {
             .replace("\n2\n", "\ntwo\n");
         let diff = LineDiff::compute(&base, &current);
         // The change at line 2 is seen, so only line 10 keeps lines bright.
-        let overlay = Overlay::new(&diff, &base, true, |index| index == 0);
+        let overlay = Overlay::new(&diff, &base, true, |index| {
+            (index == 0).then_some(Quiet::Seen)
+        });
         assert!(overlay.dimmed[2] && overlay.dimmed[6]);
         assert!(!overlay.dimmed[7] && !overlay.dimmed[10] && !overlay.dimmed[13]);
         assert!(overlay.dimmed[14]);

@@ -158,6 +158,51 @@ pub fn summarize(path: &Path) -> Option<SessionSummary> {
     })
 }
 
+/// What Pi wrote with its edit and write tools in one session: the session's
+/// working directory and, per tool call, the path as Pi gave it and the text.
+pub fn written(path: &Path) -> (Option<PathBuf>, Vec<(String, String)>) {
+    let Ok(file) = fs::File::open(path) else {
+        return (None, Vec::new());
+    };
+    let mut cwd = None;
+    let mut written = Vec::new();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        // Most lines are not tool calls; skip parsing them.
+        if !line.contains("\"toolCall\"") && !line.contains("\"type\":\"session\"") {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if entry["type"] == "session" {
+            cwd = entry["cwd"].as_str().map(PathBuf::from);
+            continue;
+        }
+        let Some(content) = entry["message"]["content"].as_array() else {
+            continue;
+        };
+        for call in content.iter().filter(|c| c["type"] == "toolCall") {
+            let arguments = &call["arguments"];
+            let Some(target) = arguments["path"].as_str() else {
+                continue;
+            };
+            let mut texts = Vec::new();
+            match call["name"].as_str() {
+                Some("write") => texts.extend(arguments["content"].as_str()),
+                Some("edit") => {
+                    texts.extend(arguments["newText"].as_str());
+                    if let Some(edits) = arguments["edits"].as_array() {
+                        texts.extend(edits.iter().filter_map(|e| e["newText"].as_str()));
+                    }
+                }
+                _ => {}
+            }
+            written.extend(texts.into_iter().map(|t| (target.to_owned(), t.to_owned())));
+        }
+    }
+    (cwd, written)
+}
+
 fn same_dir(a: &str, b: &str) -> bool {
     let normal = |p: &str| {
         let p = p.replace('\\', "/");
@@ -191,6 +236,29 @@ pub fn list(cwd: &Path) -> Vec<SessionSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_collects_edit_and_write_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let lines = [
+            r#"{"type":"session","id":"1","cwd":"/work"}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"edit","arguments":{"path":"src/a.rs","edits":[{"oldText":"x","newText":"y\nz"}]}},{"type":"toolCall","name":"bash","arguments":{"command":"ls"}}]}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"write","arguments":{"path":"/work/b.md","content":"Bee"}}]}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"edit","arguments":{"path":"c.rs","oldText":"a","newText":"b"}}]}}"#,
+        ];
+        fs::write(&path, lines.join("\n")).unwrap();
+        let (cwd, written) = written(&path);
+        assert_eq!(cwd, Some(PathBuf::from("/work")));
+        assert_eq!(
+            written,
+            [
+                ("src/a.rs".to_owned(), "y\nz".to_owned()),
+                ("/work/b.md".to_owned(), "Bee".to_owned()),
+                ("c.rs".to_owned(), "b".to_owned()),
+            ]
+        );
+    }
 
     #[test]
     fn summaries_prefer_the_session_name_then_the_first_prompt() {

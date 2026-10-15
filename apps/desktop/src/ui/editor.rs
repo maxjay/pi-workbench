@@ -1,6 +1,6 @@
 use super::{
     ACCENT, BG, BORDER, CAPTURE, MUTED, PANEL, TEXT,
-    lens_doc::{LensDocument, LensStyling, Overlay},
+    lens_doc::{LensDocument, LensStyling, Overlay, Quiet},
 };
 use crate::{
     commands::{self, Command},
@@ -188,6 +188,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         });
         let focus = lens.focus().get();
         let seen = lens.seen().get();
+        let show_formatting = lens.show_formatting().get();
         let (comparison, incoming, view, spans, text) = match &doc {
             Some(doc) => {
                 let comparison = lens
@@ -195,7 +196,11 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     .and_then(|file| file.comparison().get());
                 let view = match &comparison {
                     Some(c) => Overlay::new(&c.diff, c.base_text(), focus, |index| {
-                        seen.contains(&c.hunks[index].1)
+                        if seen.contains(&c.hunks[index].1) {
+                            Some(Quiet::Seen)
+                        } else {
+                            (!show_formatting && c.formatting[index]).then_some(Quiet::Formatting)
+                        }
                     }),
                     None => Overlay::default(),
                 };
