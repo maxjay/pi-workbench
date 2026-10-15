@@ -217,7 +217,7 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
     )
     .style(|s| s.flex_col().width_full())
     .scroll()
-    .style(|s| s.width_full().max_height(420));
+    .style(|s| s.width_full().max_height(420).flex_shrink(0.0_f32));
 
     let dismiss = state.clone();
     Stack::vertical((
