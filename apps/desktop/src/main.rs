@@ -6,6 +6,7 @@ mod markdown;
 mod session;
 mod sessions;
 mod ui;
+mod watcher;
 mod workspace;
 
 use anyhow::{Context, Result, ensure};

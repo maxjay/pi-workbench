@@ -189,11 +189,7 @@ mod tests {
 
     #[test]
     fn new_files_count_content_lines_as_added() {
-        let diff = LineDiff::all_added(
-            "one
-two
-",
-        );
+        let diff = LineDiff::all_added("one\ntwo\n");
         assert_eq!((diff.added(), diff.removed(), diff.hunks()), (2, 0, 1));
         assert_eq!(diff.base_line(1), 0);
         assert_eq!(LineDiff::all_added("").hunks(), 0);
@@ -201,20 +197,29 @@ two
 
     #[test]
     fn hunks_pair_removed_and_added_lines() {
-        let diff = LineDiff::compute("a
+        let diff = LineDiff::compute(
+            "a
 b
 c
-d", "a
+d",
+            "a
 B
 c
 d
-e");
+e",
+        );
         let hunks: Vec<_> = diff.hunks_iter().collect();
         assert_eq!(
             hunks,
             [
-                Hunk { base: 1..2, current: 1..2 },
-                Hunk { base: 4..4, current: 4..5 }
+                Hunk {
+                    base: 1..2,
+                    current: 1..2
+                },
+                Hunk {
+                    base: 4..4,
+                    current: 4..5
+                }
             ]
         );
     }

@@ -239,10 +239,7 @@ mod tests {
             let header = serde_json::json!({"type": "session", "id": name, "cwd": cwd});
             fs::write(
                 dir.path().join(format!("{name}.jsonl")),
-                format!(
-                    "{header}
-"
-                ),
+                format!("{header}\n"),
             )
             .unwrap();
         };

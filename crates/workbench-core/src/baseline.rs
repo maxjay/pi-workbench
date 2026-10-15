@@ -115,18 +115,8 @@ mod tests {
                 "git hash-object -w --stdin && touch ran",
             ],
         );
-        fs::write(
-            root.join(".gitattributes"),
-            "*.rs filter=evil
-",
-        )
-        .unwrap();
-        fs::write(
-            root.join("a.rs"),
-            "text
-",
-        )
-        .unwrap();
+        fs::write(root.join(".gitattributes"), "*.rs filter=evil\n").unwrap();
+        fs::write(root.join("a.rs"), "text\n").unwrap();
         run(&root, &["add", "a.rs"]);
         run(
             &root,
@@ -142,10 +132,7 @@ mod tests {
         );
         assert_eq!(
             GitHead.load(&root.join("a.rs")).unwrap().as_deref(),
-            Some(
-                "text
-"
-            )
+            Some("text\n")
         );
         assert!(!root.join("ran").exists());
     }

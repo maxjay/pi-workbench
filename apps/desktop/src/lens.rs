@@ -24,7 +24,7 @@ use workbench_core::{
 /// Coalesces bursts of typing into one background diff.
 const REFRESH_DELAY: Duration = Duration::from_millis(150);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Since {
     /// Where this branch left develop (or main, or master).
     Branch,
@@ -37,7 +37,12 @@ pub enum Since {
 }
 
 impl Since {
-    pub const ALL: [Since; 4] = [Since::Branch, Since::SessionStart, Since::LastTurn, Since::Head];
+    pub const ALL: [Since; 4] = [
+        Since::Branch,
+        Since::SessionStart,
+        Since::LastTurn,
+        Since::Head,
+    ];
 }
 
 /// One open file under the lens.
@@ -128,9 +133,6 @@ impl Lens {
     pub fn toggle_changed_only(&self) {
         self.changed_only.update(|f| *f = !*f);
     }
-    pub fn has_repo(&self) -> bool {
-        self.repo.borrow().is_some()
-    }
 
     /// Tracked: the label the status bar shows for `since`.
     pub fn label(&self, since: Since) -> String {
@@ -148,7 +150,9 @@ impl Lens {
     /// Tracked: the revision `since` currently means, if it exists yet.
     pub fn rev(&self) -> Option<Rev> {
         match self.since.get() {
-            Since::Branch => self.branch_base.with(|b| b.as_ref().map(|b| Rev::Commit(b.commit.clone()))),
+            Since::Branch => self
+                .branch_base
+                .with(|b| b.as_ref().map(|b| Rev::Commit(b.commit.clone()))),
             Since::Head => self.head.get().map(Rev::Commit),
             Since::SessionStart => self.turns.with(|t| t.first().cloned()).map(Rev::Tree),
             Since::LastTurn => self.turns.with(|t| t.last().cloned()).map(Rev::Tree),
@@ -163,7 +167,10 @@ impl Lens {
     pub fn set_turns(self: &Rc<Self>, turns: Vec<String>) {
         if self.turns.with_untracked(|t| *t != turns) {
             self.turns.set(turns);
-            if matches!(self.since.get_untracked(), Since::SessionStart | Since::LastTurn) {
+            if matches!(
+                self.since.get_untracked(),
+                Since::SessionStart | Since::LastTurn
+            ) {
                 self.refresh();
             }
         }
@@ -183,25 +190,33 @@ impl Lens {
 
     fn relative(&self, path: &Path) -> Option<PathBuf> {
         let root = self.repo_root.borrow();
-        path.strip_prefix(root.as_ref()?).ok().map(Path::to_path_buf)
+        path.strip_prefix(root.as_ref()?)
+            .ok()
+            .map(Path::to_path_buf)
     }
 
     /// Finds the repository, the base branch and HEAD off the UI thread.
     pub fn start(self: &Rc<Self>) {
         let lens = self.clone();
         let root = self.root.clone();
-        let finish = create_ext_action(self.scope, move |found: Option<(Repo, PathBuf, Option<Base>, Option<String>)>| {
-            if let Some((repo, repo_root, base, head)) = found {
-                *lens.repo.borrow_mut() = Some(repo);
-                *lens.repo_root.borrow_mut() = Some(repo_root);
-                lens.branch_base.set(base);
-                lens.head.set(head);
-                lens.refresh();
-            }
-        });
+        let finish = create_ext_action(
+            self.scope,
+            move |found: Option<(Repo, PathBuf, Option<Base>, Option<String>)>| {
+                if let Some((repo, repo_root, base, head)) = found {
+                    *lens.repo.borrow_mut() = Some(repo);
+                    *lens.repo_root.borrow_mut() = Some(repo_root);
+                    lens.branch_base.set(base);
+                    lens.head.set(head);
+                    lens.refresh();
+                }
+            },
+        );
         std::thread::spawn(move || {
             let found = Repo::discover(&root).ok().flatten().map(|repo| {
-                let repo_root = repo.root().canonicalize().unwrap_or_else(|_| repo.root().to_path_buf());
+                let repo_root = repo
+                    .root()
+                    .canonicalize()
+                    .unwrap_or_else(|_| repo.root().to_path_buf());
                 let base = repo.default_base().ok().flatten();
                 let head = repo.head().ok().flatten();
                 (repo, repo_root, base, head)
@@ -222,7 +237,9 @@ impl Lens {
 
     /// Recomputes the changed files and every open file's baseline.
     pub fn refresh(self: &Rc<Self>) {
-        let Some(repo) = self.repo.borrow().clone() else { return };
+        let Some(repo) = self.repo.borrow().clone() else {
+            return;
+        };
         let rev = self.rev_untracked();
         let generation = self.changes_generation.get() + 1;
         self.changes_generation.set(generation);
@@ -237,25 +254,28 @@ impl Lens {
             return;
         };
         let lens = self.clone();
-        let finish = create_ext_action(self.scope, move |result: anyhow::Result<Vec<FileChange>>| {
-            if lens.changes_generation.get() != generation {
-                return;
-            }
-            match result {
-                Ok(changes) => {
-                    // Workspace paths use `canonicalize` form; git reports plain ones.
-                    let changes = changes
-                        .into_iter()
-                        .map(|mut change| {
-                            change.path = lens.workspace_path(&change.path);
-                            change
-                        })
-                        .collect();
-                    lens.changes.set(changes)
+        let finish = create_ext_action(
+            self.scope,
+            move |result: anyhow::Result<Vec<FileChange>>| {
+                if lens.changes_generation.get() != generation {
+                    return;
                 }
-                Err(err) => lens.status.set(format!("Changes: {err:#}")),
-            }
-        });
+                match result {
+                    Ok(changes) => {
+                        // Workspace paths use `canonicalize` form; git reports plain ones.
+                        let changes = changes
+                            .into_iter()
+                            .map(|mut change| {
+                                change.path = lens.workspace_path(&change.path);
+                                change
+                            })
+                            .collect();
+                        lens.changes.set(changes)
+                    }
+                    Err(err) => lens.status.set(format!("Changes: {err:#}")),
+                }
+            },
+        );
         let changes_rev = rev.clone();
         let changes_repo = repo.clone();
         std::thread::spawn(move || finish(changes_repo.changes(&changes_rev)));
@@ -270,7 +290,9 @@ impl Lens {
     }
 
     fn load_base(self: &Rc<Self>, file: &Rc<FileLens>, repo: &Repo, rev: &Rev) {
-        let Some(relative) = self.relative(&file.path) else { return };
+        let Some(relative) = self.relative(&file.path) else {
+            return;
+        };
         let generation = self.changes_generation.get();
         let lens = self.clone();
         let target = file.clone();
@@ -285,7 +307,12 @@ impl Lens {
     }
 
     /// Starts tracking an open file; its diff follows edits.
-    pub fn track(self: &Rc<Self>, path: &Path, text: Rc<TextDocument>, revision: ReadSignal<u64>) -> Rc<FileLens> {
+    pub fn track(
+        self: &Rc<Self>,
+        path: &Path,
+        text: Rc<TextDocument>,
+        revision: ReadSignal<u64>,
+    ) -> Rc<FileLens> {
         if let Some(file) = self.files.borrow().get(path) {
             return file.clone();
         }
@@ -298,7 +325,9 @@ impl Lens {
                 generation: Cell::new(0),
             })
         });
-        self.files.borrow_mut().insert(path.to_path_buf(), file.clone());
+        self.files
+            .borrow_mut()
+            .insert(path.to_path_buf(), file.clone());
         let (lens, target) = (self.clone(), file.clone());
         let pending = Rc::new(Cell::new(0u64));
         self.scope.enter(|| {
@@ -306,7 +335,8 @@ impl Lens {
                 revision.track();
                 let current = pending.get() + 1;
                 pending.set(current);
-                let (lens, target, pending, text) = (lens.clone(), target.clone(), pending.clone(), text.clone());
+                let (lens, target, pending, text) =
+                    (lens.clone(), target.clone(), pending.clone(), text.clone());
                 exec_after(REFRESH_DELAY, move |_| {
                     if pending.get() == current {
                         lens.rediff_with(&target, text.text().to_string());
@@ -353,13 +383,19 @@ impl Lens {
     /// Identifies a hunk by its content, so "seen" survives unrelated edits.
     pub fn hunk_key(&self, file: &FileLens, hunk: &Hunk, current: &str) -> u64 {
         let lines: Vec<&str> = current.split('\n').collect();
-        let text = lines.get(hunk.current.clone()).unwrap_or_default().join("\n");
+        let text = lines
+            .get(hunk.current.clone())
+            .unwrap_or_default()
+            .join("\n");
         let base = file
             .base_text()
             .and_then(|b| (*b).clone())
             .unwrap_or_default();
         let base_lines: Vec<&str> = base.split('\n').collect();
-        let removed = base_lines.get(hunk.base.clone()).unwrap_or_default().join("\n");
+        let removed = base_lines
+            .get(hunk.base.clone())
+            .unwrap_or_default()
+            .join("\n");
         hunk_key(&file.path, &format!("{removed}\u{0}{text}"))
     }
 

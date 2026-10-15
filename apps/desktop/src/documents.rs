@@ -507,57 +507,19 @@ mod tests {
 
     #[test]
     fn disk_changes_merge_into_unsaved_edits_and_saving_still_works() {
-        with_text(
-            "a
-b
-c
-",
-            |doc| {
-                edit(
-                    &doc, "A
-b
-c
-",
-                );
-                assert_eq!(
-                    doc.sync_disk(
-                        "a
-b
-C
-"
-                        .into(),
-                        "pi"
-                    ),
-                    Synced::Merged { conflicts: 0 }
-                );
-                assert_eq!(
-                    doc.text.text().to_string(),
-                    "A
-b
-C
-"
-                );
-                assert!(doc.dirty());
-                // The next save compares against what is now on disk.
-                assert_eq!(
-                    doc.start_save().unwrap().baseline,
-                    "a
-b
-C
-"
-                );
-                // Changes arriving mid-save wait for the save to settle.
-                assert_eq!(
-                    doc.sync_disk(
-                        "z
-"
-                        .into(),
-                        "pi"
-                    ),
-                    Synced::Deferred
-                );
-            },
-        );
+        with_text("a\nb\nc\n", |doc| {
+            edit(&doc, "A\nb\nc\n");
+            assert_eq!(
+                doc.sync_disk("a\nb\nC\n".into(), "pi"),
+                Synced::Merged { conflicts: 0 }
+            );
+            assert_eq!(doc.text.text().to_string(), "A\nb\nC\n");
+            assert!(doc.dirty());
+            // The next save compares against what is now on disk.
+            assert_eq!(doc.start_save().unwrap().baseline, "a\nb\nC\n");
+            // Changes arriving mid-save wait for the save to settle.
+            assert_eq!(doc.sync_disk("z\n".into(), "pi"), Synced::Deferred);
+        });
     }
 
     #[test]
@@ -577,42 +539,14 @@ C
 
     #[test]
     fn crlf_buffers_take_lf_writes_without_false_conflicts() {
-        with_text(
-            "a
-b
-",
-            |doc| {
-                assert_eq!(
-                    doc.sync_disk(
-                        "a
-B
-"
-                        .into(),
-                        "pi"
-                    ),
-                    Synced::Reloaded
-                );
-                assert!(doc.can_close());
-                // A second edit must not see every line as changed by the editor.
-                assert_eq!(
-                    doc.sync_disk(
-                        "A
-B
-"
-                        .into(),
-                        "pi"
-                    ),
-                    Synced::Reloaded
-                );
-                assert_eq!(
-                    doc.text.text().to_string(),
-                    "A
-B
-"
-                );
-                assert!(doc.can_close());
-            },
-        );
+        with_text("a\r\nb\r\n", |doc| {
+            assert_eq!(doc.sync_disk("a\nB\n".into(), "pi"), Synced::Reloaded);
+            assert!(doc.can_close());
+            // A second edit must not see every line as changed by the editor.
+            assert_eq!(doc.sync_disk("A\nB\n".into(), "pi"), Synced::Reloaded);
+            assert_eq!(doc.text.text().to_string(), "A\r\nB\r\n");
+            assert!(doc.can_close());
+        });
     }
 
     #[test]
@@ -620,72 +554,33 @@ B
         let scope = Scope::new();
         scope.enter(|| {
             let docs = Documents::new(scope, "/".into(), RwSignal::new(String::new()));
-            docs.insert(
-                "/a.rs".into(),
-                "one
-"
-                .into(),
-            );
+            docs.insert("/a.rs".into(), "one\n".into());
             let doc = docs.get(Path::new("/a.rs")).unwrap();
-            edit(
-                &doc, "mine
-",
-            );
+            edit(&doc, "mine\n");
             docs.hold_saves();
             docs.save(doc.clone());
             assert!(!doc.saving());
             assert_eq!(*docs.deferred.borrow(), [PathBuf::from("/a.rs")]);
             // An older read must not apply once a newer sync has started.
             docs.sync_generation.set(2);
-            docs.finish_sync(
-                1,
-                vec![doc.clone()],
-                vec![Some(
-                    "stale
-"
-                    .into(),
-                )],
-                "pi",
-            );
-            assert_eq!(
-                doc.text.text().to_string(),
-                "mine
-"
-            );
+            docs.finish_sync(1, vec![doc.clone()], vec![Some("stale\n".into())], "pi");
+            assert_eq!(doc.text.text().to_string(), "mine\n");
         });
         scope.dispose();
     }
 
     #[test]
     fn overlapping_disk_changes_are_marked_not_prompted() {
-        with_text(
-            "a
-b
-",
-            |doc| {
-                edit(
-                    &doc, "mine
-b
-",
-                );
-                assert_eq!(
-                    doc.sync_disk(
-                        "theirs
-b
-"
-                        .into(),
-                        "pi"
-                    ),
-                    Synced::Merged { conflicts: 1 }
-                );
-                let text = doc.text.text().to_string();
-                assert!(text.contains("<<<<<<< editor") && text.contains(">>>>>>> pi"));
-                assert!(text.ends_with(
-                    "b
-"
-                ));
-            },
-        );
+        with_text("a\nb\n", |doc| {
+            edit(&doc, "mine\nb\n");
+            assert_eq!(
+                doc.sync_disk("theirs\nb\n".into(), "pi"),
+                Synced::Merged { conflicts: 1 }
+            );
+            let text = doc.text.text().to_string();
+            assert!(text.contains("<<<<<<< editor") && text.contains(">>>>>>> pi"));
+            assert!(text.ends_with("b\n"));
+        });
     }
 
     #[test]

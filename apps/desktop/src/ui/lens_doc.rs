@@ -1,6 +1,7 @@
 //! The changes lens inside an editor: removed lines appear as ghost lines in
 //! place, changed lines get a bar and a tint, and focus mode folds the rest.
 use super::{ACCENT, ADDED, MUTED, REMOVED, REMOVED_TEXT};
+use floem::views::editor::core::xi_rope::Rope;
 use floem::{
     peniko::Color,
     prelude::*,
@@ -22,14 +23,13 @@ use floem::{
         view::{ScreenLines, ScreenLinesBase},
     },
 };
-use floem::views::editor::core::xi_rope::Rope;
 use std::{
     borrow::Cow,
     collections::BTreeMap,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
-use workbench_core::diff::{LineChange, LineDiff};
+use workbench_core::diff::{Hunk, LineChange, LineDiff};
 
 /// What the lens adds to one document, rebuilt whenever its diff changes.
 #[derive(Clone, Default)]
@@ -39,16 +39,25 @@ pub struct Overlay {
     /// Focus mode: lines folded away, and the count shown where each fold starts.
     pub folded: Vec<bool>,
     pub folds: BTreeMap<usize, usize>,
+    /// Lines of changes marked seen: no marks, no ghosts, folded like the rest.
+    pub quiet: Vec<bool>,
 }
 
 /// Lines kept around each change when focusing.
 const CONTEXT: usize = 3;
 
 impl Overlay {
-    pub fn new(diff: &LineDiff, base: &str, focus: bool) -> Self {
+    pub fn new(diff: &LineDiff, base: &str, focus: bool, seen: impl Fn(&Hunk) -> bool) -> Self {
         let base_lines: Vec<&str> = base.split('\n').map(|l| l.trim_end_matches('\r')).collect();
-        let ghosts = diff
-            .hunks_iter()
+        let unseen: Vec<Hunk> = diff.hunks_iter().filter(|hunk| !seen(hunk)).collect();
+        let mut quiet = vec![false; diff.current.len()];
+        for hunk in diff.hunks_iter().filter(|hunk| seen(hunk)) {
+            quiet[hunk.current.clone()]
+                .iter_mut()
+                .for_each(|q| *q = true);
+        }
+        let ghosts = unseen
+            .iter()
             .filter(|hunk| !hunk.base.is_empty())
             .map(|hunk| {
                 let text = base_lines
@@ -59,7 +68,7 @@ impl Overlay {
             })
             .collect();
         let (folded, folds) = if focus {
-            Self::fold(diff)
+            Self::fold(diff.current.len(), &unseen)
         } else {
             (Vec::new(), BTreeMap::new())
         };
@@ -67,13 +76,13 @@ impl Overlay {
             ghosts,
             folded,
             folds,
+            quiet,
         }
     }
 
-    fn fold(diff: &LineDiff) -> (Vec<bool>, BTreeMap<usize, usize>) {
-        let lines = diff.current.len();
+    fn fold(lines: usize, hunks: &[Hunk]) -> (Vec<bool>, BTreeMap<usize, usize>) {
         let mut keep = vec![false; lines];
-        for hunk in diff.hunks_iter() {
+        for hunk in hunks {
             let start = hunk.current.start.saturating_sub(CONTEXT);
             let end = (hunk.current.end + CONTEXT).min(lines);
             keep[start..end].iter_mut().for_each(|k| *k = true);
@@ -130,11 +139,20 @@ impl DocumentPhantom for LensDocument {
         if line == 0
             && let Some(removed) = overlay.ghosts.get(&0)
         {
-            text.text.push(ghost(0, format!("{removed}\n"), REMOVED_TEXT, Some(REMOVED)));
+            text.text.push(ghost(
+                0,
+                format!("{removed}\n"),
+                REMOVED_TEXT,
+                Some(REMOVED),
+            ));
         }
         if let Some(removed) = overlay.ghosts.get(&(line + 1)) {
-            text.text
-                .push(ghost(end, format!("\n{removed}"), REMOVED_TEXT, Some(REMOVED)));
+            text.text.push(ghost(
+                end,
+                format!("\n{removed}"),
+                REMOVED_TEXT,
+                Some(REMOVED),
+            ));
         }
         if let Some(count) = overlay.folds.get(&(line + 1)) {
             let marker = format!("\n··· {count} unchanged lines ···");
@@ -173,7 +191,11 @@ impl Document for LensDocument {
     fn preedit_phantom(&self, under_line: Option<Color>, line: usize) -> Option<PhantomText> {
         self.inner.preedit_phantom(under_line, line)
     }
-    fn compute_screen_lines(&self, editor: &Editor, base: RwSignal<ScreenLinesBase>) -> ScreenLines {
+    fn compute_screen_lines(
+        &self,
+        editor: &Editor,
+        base: RwSignal<ScreenLinesBase>,
+    ) -> ScreenLines {
         self.inner.compute_screen_lines(editor, base)
     }
     fn run_command(
@@ -265,7 +287,7 @@ impl Styling for LensStyling {
         line: usize,
         layout_line: &mut TextLayoutLine,
     ) {
-        if self.folded(line) {
+        if self.folded(line) || self.overlay.quiet.get(line).copied().unwrap_or(false) {
             return;
         }
         let height = f64::from(self.line_height(edid, line));
@@ -297,8 +319,11 @@ mod tests {
     fn ghosts_sit_before_the_line_they_were_removed_from() {
         let base = "a\nold 1\nold 2\nb\nc";
         let diff = LineDiff::compute(base, "a\nnew\nb\nc\nd");
-        let overlay = Overlay::new(&diff, base, false);
-        assert_eq!(overlay.ghosts.get(&1).map(String::as_str), Some("old 1\nold 2"));
+        let overlay = Overlay::new(&diff, base, false, |_| false);
+        assert_eq!(
+            overlay.ghosts.get(&1).map(String::as_str),
+            Some("old 1\nold 2")
+        );
         assert_eq!(overlay.ghosts.len(), 1);
     }
 
@@ -307,7 +332,7 @@ mod tests {
         let base: String = (0..20).map(|i| format!("{i}\n")).collect();
         let current = base.replace("10\n", "ten\n");
         let diff = LineDiff::compute(&base, &current);
-        let overlay = Overlay::new(&diff, &base, true);
+        let overlay = Overlay::new(&diff, &base, true, |_| false);
         // Lines 7..14 stay: the change at 10 plus three lines either side.
         assert_eq!(overlay.folds.get(&0), Some(&7));
         assert_eq!(overlay.folds.get(&14), Some(&7));

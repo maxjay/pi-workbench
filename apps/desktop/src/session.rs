@@ -88,6 +88,9 @@ impl Model {
     }
 }
 
+/// Takes a workspace snapshot and hands its tree id to the callback.
+pub type SnapshotHook = Box<dyn Fn(Box<dyn FnOnce(Option<String>)>)>;
+
 /// What a session reports back to the workspace.
 pub struct Hooks {
     /// Pi changed files and no tool is running; `true` if files may have
@@ -96,7 +99,7 @@ pub struct Hooks {
     /// A run finished; the session list may have changed.
     pub settled: Box<dyn Fn()>,
     /// Snapshots the workspace before a prompt; the callback gets a tree id.
-    pub snapshot: Box<dyn Fn(Box<dyn FnOnce(Option<String>)>)>,
+    pub snapshot: SnapshotHook,
 }
 
 /// Tools whose effects on disk the workbench cannot predict from their arguments.
@@ -114,64 +117,42 @@ fn tool_target(args: &Value, partial: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A readable view of an edit or write while its arguments stream in.
-fn tool_preview(tool: &str, partial: &str) -> String {
-    let preview = file_preview(partial);
+/// Diff-style lines for an edit's replacements or a write's content.
+fn render_preview(tool: &str, edits: &[(String, String)], content: Option<&str>) -> String {
     let mark = |prefix: char, text: &str| {
         text.lines()
             .map(|line| format!("{prefix} {line}\n"))
             .collect::<String>()
     };
     match tool {
-        "edit" => preview
-            .edits
+        "edit" => edits
             .iter()
             .map(|(old, new)| format!("{}{}", mark('-', old), mark('+', new)))
             .collect::<Vec<_>>()
             .join("···\n"),
-        "write" => mark('+', &preview.content.unwrap_or_default()),
+        "write" => mark('+', content.unwrap_or_default()),
         _ => String::new(),
     }
 }
 
+/// A readable view of an edit or write while its arguments stream in.
+fn tool_preview(tool: &str, partial: &str) -> String {
+    let preview = file_preview(partial);
+    render_preview(tool, &preview.edits, preview.content.as_deref())
+}
+
 /// The same view for complete arguments, as stored in session history.
 fn args_preview(tool: &str, args: &Value) -> String {
-    let mark = |prefix: char, text: &str| {
-        text.lines()
-            .map(|line| {
-                format!(
-                    "{prefix} {line}
-"
-                )
-            })
-            .collect::<String>()
-    };
     let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
-    match tool {
-        "edit" => {
-            // Older sessions stored a single oldText/newText pair at the top level.
-            let edits = match args["edits"].as_array() {
-                Some(edits) => edits.clone(),
-                None => vec![args.clone()],
-            };
-            edits
-                .iter()
-                .map(|e| {
-                    format!(
-                        "{}{}",
-                        mark('-', &text(&e["oldText"])),
-                        mark('+', &text(&e["newText"]))
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(
-                    "···
-",
-                )
-        }
-        "write" => mark('+', &text(&args["content"])),
-        _ => String::new(),
-    }
+    // Older sessions stored a single oldText/newText pair at the top level.
+    let edits: Vec<(String, String)> = match args["edits"].as_array() {
+        Some(edits) => edits
+            .iter()
+            .map(|e| (text(&e["oldText"]), text(&e["newText"])))
+            .collect(),
+        None => vec![(text(&args["oldText"]), text(&args["newText"]))],
+    };
+    render_preview(tool, &edits, args["content"].as_str())
 }
 
 fn is_file_tool(tool: &str) -> bool {
