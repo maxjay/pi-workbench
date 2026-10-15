@@ -259,7 +259,8 @@ pub struct Documents {
     status: RwSignal<String>,
     /// While Pi works, saves wait so they cannot race its writes; the edits
     /// stay in the buffer and are merged with Pi's.
-    held: Cell<bool>,
+    /// Sessions currently running; saves wait until none are.
+    held: Cell<usize>,
     deferred: RefCell<Vec<PathBuf>>,
     /// Only the newest sync applies; an older read may predate a later write.
     sync_generation: Cell<u64>,
@@ -272,19 +273,23 @@ impl Documents {
             root,
             status,
             items: RwSignal::new(Vec::new()),
-            held: Cell::new(false),
+            held: Cell::new(0),
             deferred: RefCell::new(Vec::new()),
             sync_generation: Cell::new(0),
         })
     }
 
     pub fn hold_saves(&self) {
-        self.held.set(true);
+        self.held.set(self.held.get() + 1);
     }
 
-    /// Held saves run after the next sync has merged Pi's final changes.
-    pub fn release_saves(&self) {
-        self.held.set(false);
+    /// When the last run ends, merges what Pi wrote and then runs held saves.
+    /// This also covers a session closed mid-run, which never settles.
+    pub fn release_saves(self: &Rc<Self>) {
+        self.held.set(self.held.get().saturating_sub(1));
+        if self.held.get() == 0 {
+            self.sync_from_disk("Pi");
+        }
     }
 
     fn flush_deferred(self: &Rc<Self>) {
@@ -330,7 +335,7 @@ impl Documents {
     }
 
     pub fn save(self: &Rc<Self>, doc: Rc<OpenDocument>) {
-        if self.held.get() {
+        if self.held.get() > 0 {
             let mut deferred = self.deferred.borrow_mut();
             if !deferred.contains(&doc.path) {
                 deferred.push(doc.path.clone());
@@ -462,7 +467,7 @@ impl Documents {
             self.status
                 .set(format!("{source} updated {}{marked}", updated.join(", ")));
         }
-        if !self.held.get() {
+        if self.held.get() == 0 {
             self.flush_deferred();
         }
     }

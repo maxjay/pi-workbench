@@ -1,9 +1,10 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
-mod agent;
 mod diff;
 mod editor;
 mod explorer;
 mod overlays;
+mod rail;
+mod session;
 
 use crate::{
     commands::{self, Command},
@@ -42,9 +43,22 @@ const REMOVED_TEXT: Color = Color::from_rgb8(236, 135, 135);
 const CODE_FONT: &str =
     "'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
 const CODE_SIZE: usize = 14;
+/// Floem's editor background, which its style API does not let us change.
+const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
+
+/// Editor colours from the app palette, shared by every editor.
+fn editor_colors(style: floem::views::EditorCustomStyle) -> floem::views::EditorCustomStyle {
+    floem::views::editor::text::default_dark_color(style)
+        .cursor_color(ACCENT)
+        .selection_color(ACCENT.with_alpha(0.25))
+        .current_line_color(Color::from_rgb8(46, 51, 61))
+        .gutter_current_color(Color::from_rgb8(46, 51, 61))
+        .gutter_dim_color(Color::from_rgb8(84, 94, 110))
+        .indent_guide_color(BORDER)
+}
 
 /// Editor styling shared by every code view.
 fn code_styling() -> floem::views::editor::text::SimpleStyling {
@@ -100,7 +114,6 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         .into_owned();
     let layout = state.layout();
     let comparing = state.changes.current();
-    let agent_open = state.agent.visible();
     Stack::horizontal((
         Label::new("π").style(|s| {
             s.color(ACCENT)
@@ -127,8 +140,7 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
             comparing.with(Option::is_some)
         }),
         separator(),
-        command_button(state.clone(), "Commands", Command::Palette),
-        toggle_button(state, "Pi", Command::Agent, move || agent_open.get()),
+        command_button(state, "Commands", Command::Palette),
     ))
     .style(|s| {
         s.width_full()
@@ -212,6 +224,8 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         floem::close_window(window)
     });
     state.restore();
+    state.sessions.refresh_recent();
+    state.sessions.create();
     let layout = state.layout();
     let status = state.status();
     let focused = state.focused();
@@ -245,7 +259,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             },
         )
     });
-    let pi_working = state.agent.working();
+    let (dot_sessions, label_sessions) = (state.sessions.clone(), state.sessions.clone());
     let footer = Stack::horizontal((
         Label::derived(move || status.get()).style(|s| {
             s.color(MUTED)
@@ -254,17 +268,18 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 .text_ellipsis()
         }),
         Empty::new().style(move |s| {
+            let status = dot_sessions.active().map(|s| s.status());
             s.size(7, 7)
                 .border_radius(4)
-                .background(if pi_working.get() { WARN } else { ACCENT })
+                .background(status.map_or(MUTED, session::status_color))
         }),
         Label::derived(move || {
-            if pi_working.get() {
-                "Pi working"
-            } else {
-                "Pi ready"
-            }
-            .to_string()
+            label_sessions
+                .active()
+                .map_or("No session".into(), |session| {
+                    let model = session.model().get().map(|m| m.name).unwrap_or_default();
+                    format!("Pi {}  {model}", session::status_label(session.status()))
+                })
         })
         .style(|s| s.color(MUTED)),
         Label::derived(move || format!("Pane {}  ·  UTF-8", focused.get().index() + 1))
@@ -285,7 +300,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     Stack::new((
         Stack::vertical((
             toolbar(state.clone()),
-            Stack::horizontal((body, agent::agent_panel(state.clone())))
+            Stack::horizontal((rail::rail(state.clone()), body))
                 .style(|s| s.size_full().min_width(0).min_height(0)),
             footer,
         ))

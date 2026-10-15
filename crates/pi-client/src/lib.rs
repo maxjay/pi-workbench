@@ -7,9 +7,10 @@
 
 pub mod events;
 pub mod preview;
+pub mod sessions;
 mod tree;
 
-pub use events::Event;
+pub use events::{Ask, AskKind, Event};
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -69,6 +70,14 @@ fn resolve(program: &str) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// A reply to an extension's question.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Value(String),
+    Confirmed(bool),
+    Cancelled,
+}
+
 pub struct PiProcess {
     child: Option<Child>,
     tree: Option<Tree>,
@@ -79,15 +88,19 @@ pub struct PiProcess {
 impl PiProcess {
     /// `on_event` runs on a background thread, in stream order, and receives
     /// `Event::Exited` last.
+    /// `session` resumes a session file from Pi's store; `None` starts a new one.
     pub fn spawn(
         launch: &Launch,
         cwd: &Path,
+        session: Option<&Path>,
         on_event: impl Fn(Event) + Send + 'static,
     ) -> Result<Self> {
         let mut command = Command::new(resolve(&launch.program));
+        command.args(["--mode", "rpc"]).args(&launch.args);
+        if let Some(session) = session {
+            command.arg("--session").arg(session);
+        }
         command
-            .args(["--mode", "rpc"])
-            .args(&launch.args)
             .envs(launch.env.iter().map(|(k, v)| (k, v)))
             .current_dir(cwd)
             .stdin(Stdio::piped())
@@ -159,6 +172,37 @@ impl PiProcess {
 
     pub fn abort(&mut self) -> Result<()> {
         self.send(json!({ "type": "abort" }))
+    }
+
+    /// Delivered after the current tool calls, before the next model call.
+    pub fn steer(&mut self, message: &str) -> Result<()> {
+        self.send(json!({ "type": "steer", "message": message }))
+    }
+
+    /// Delivered once the run would otherwise finish.
+    pub fn follow_up(&mut self, message: &str) -> Result<()> {
+        self.send(json!({ "type": "follow_up", "message": message }))
+    }
+
+    /// Commands answered by a `response` event carrying the same name.
+    pub fn request(&mut self, command: &str) -> Result<()> {
+        self.send(json!({ "type": command }))
+    }
+
+    pub fn set_model(&mut self, provider: &str, id: &str) -> Result<()> {
+        self.send(json!({ "type": "set_model", "provider": provider, "modelId": id }))
+    }
+
+    pub fn answer(&mut self, id: &str, answer: Answer) -> Result<()> {
+        let mut response = json!({ "type": "extension_ui_response", "id": id });
+        match answer {
+            Answer::Value(value) => response["value"] = json!(value),
+            Answer::Confirmed(confirmed) => response["confirmed"] = json!(confirmed),
+            Answer::Cancelled => response["cancelled"] = json!(true),
+        }
+        let stdin = self.stdin.as_mut().context("Pi has stopped")?;
+        writeln!(stdin, "{response}")?;
+        stdin.flush().context("Pi has stopped")
     }
 }
 

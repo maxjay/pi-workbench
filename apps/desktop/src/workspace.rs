@@ -1,5 +1,5 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{agent::Agent, changes::Changes, documents::Documents, explorer::Explorer};
+use crate::{changes::Changes, documents::Documents, explorer::Explorer, sessions::Sessions};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
 use floem::reactive::{ReadSignal, Scope};
@@ -53,7 +53,9 @@ pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
     pub changes: Rc<Changes>,
-    pub agent: Rc<Agent>,
+    pub sessions: Rc<Sessions>,
+    /// The primary pane shows the active session's conversation instead of a file.
+    conversation: RwSignal<bool>,
     scope: Scope,
     active: [RwSignal<Option<PathBuf>>; 2],
     requested: [RwSignal<Option<PathBuf>>; 2],
@@ -88,7 +90,7 @@ impl Workbench {
         let documents = Documents::new(Scope::current(), root.clone(), status);
         let explorer = Explorer::new(Scope::current(), root.clone(), status);
         let (synced, tree) = (documents.clone(), explorer.clone());
-        let agent = Agent::new(
+        let sessions = Sessions::new(
             Scope::current(),
             root.clone(),
             integrations.pi,
@@ -100,12 +102,14 @@ impl Workbench {
                     tree.refresh();
                 }
             },
+            status,
         );
         Rc::new(Self {
             documents,
             explorer,
             changes: Changes::new(Scope::current(), integrations.baseline, status),
-            agent,
+            sessions,
+            conversation: RwSignal::new(true),
             scope: Scope::current(),
             active: [RwSignal::new(None), RwSignal::new(None)],
             requested: [RwSignal::new(None), RwSignal::new(None)],
@@ -133,6 +137,14 @@ impl Workbench {
     }
     pub fn focus_pane(&self, pane: Pane) {
         self.focused.set(pane);
+    }
+    pub fn conversation(&self) -> ReadSignal<bool> {
+        self.conversation.read_only()
+    }
+    pub fn show_conversation(&self) {
+        self.changes.close();
+        self.conversation.set(true);
+        self.focused.set(Pane::Primary);
     }
     pub fn layout(&self) -> ReadSignal<Layout> {
         self.layout.read_only()
@@ -221,6 +233,9 @@ impl Workbench {
     pub fn open(self: &Rc<Self>, path: PathBuf, pane: Pane) {
         // Opening from the explorer returns to the panes so the file is visible.
         self.changes.close();
+        if pane == Pane::Primary {
+            self.conversation.set(false);
+        }
         self.requested[pane.index()].set(Some(path.clone()));
         if self.documents.get(&path).is_some() {
             self.active[pane.index()].set(Some(path));
@@ -276,6 +291,9 @@ impl Workbench {
 
     pub fn select_document(&self, pane: Pane, path: PathBuf) {
         if self.documents.get(&path).is_some() {
+            if pane == Pane::Primary {
+                self.conversation.set(false);
+            }
             self.requested[pane.index()].set(Some(path.clone()));
             self.active[pane.index()].set(Some(path));
             self.focused.set(pane);
@@ -283,9 +301,22 @@ impl Workbench {
     }
 
     fn active_path(&self) -> Option<PathBuf> {
+        let pane = self.focused.get_untracked();
+        if pane == Pane::Primary && self.conversation.get_untracked() {
+            return self.changes.path();
+        }
         self.changes
             .path()
-            .or_else(|| self.active(self.focused.get_untracked()).get_untracked())
+            .or_else(|| self.active(pane).get_untracked())
+    }
+
+    /// Opens a file next to the conversation, turning on the second pane.
+    pub fn open_beside(self: &Rc<Self>, path: PathBuf) {
+        if !self.layout.get_untracked().split {
+            self.layout.update(|layout| layout.split = true);
+        }
+        self.open(path, Pane::Secondary);
+        self.focused.set(Pane::Secondary);
     }
 
     pub fn toggle_changes(&self) {
@@ -553,6 +584,8 @@ mod tests {
             let second = state.root.join("second.rs");
             state.documents.insert(first.clone(), "first".into());
             state.documents.insert(second.clone(), "second".into());
+            // The second pane starts hidden; show it, then hide it again.
+            state.toggle_split();
             state.select_document(Pane::Primary, first);
             state.select_document(Pane::Secondary, second.clone());
             state.toggle_split();

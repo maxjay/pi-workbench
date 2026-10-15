@@ -11,8 +11,14 @@ pub enum Command {
     Reload,
     Split,
     Changes,
-    Agent,
-    StopAgent,
+    Conversation,
+    StopSession,
+    NewSession,
+    CloseSession,
+    NextSession,
+    PreviousSession,
+    /// Ctrl+1..9 bring the nth open session to the front.
+    Session(u8),
     Explorer,
     MoveExplorer,
     Refresh,
@@ -31,8 +37,21 @@ pub const COMMANDS: &[Command] = &[
     Command::Reload,
     Command::Split,
     Command::Changes,
-    Command::Agent,
-    Command::StopAgent,
+    Command::Conversation,
+    Command::StopSession,
+    Command::NewSession,
+    Command::CloseSession,
+    Command::NextSession,
+    Command::PreviousSession,
+    Command::Session(1),
+    Command::Session(2),
+    Command::Session(3),
+    Command::Session(4),
+    Command::Session(5),
+    Command::Session(6),
+    Command::Session(7),
+    Command::Session(8),
+    Command::Session(9),
     Command::Explorer,
     Command::MoveExplorer,
     Command::Refresh,
@@ -42,6 +61,18 @@ pub const COMMANDS: &[Command] = &[
 impl Command {
     fn details(self) -> (&'static str, Option<Shortcut>) {
         let primary = |key| Some(Shortcut { key, shift: false });
+        const SESSIONS: [&str; 9] = [
+            "Go to session 1",
+            "Go to session 2",
+            "Go to session 3",
+            "Go to session 4",
+            "Go to session 5",
+            "Go to session 6",
+            "Go to session 7",
+            "Go to session 8",
+            "Go to session 9",
+        ];
+        const DIGITS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         match self {
             Self::Palette => (
                 "Toggle command palette",
@@ -64,8 +95,22 @@ impl Command {
                     shift: true,
                 }),
             ),
-            Self::Agent => ("Toggle Pi panel", primary("j")),
-            Self::StopAgent => ("Stop Pi", None),
+            Self::Conversation => ("Show conversation", primary("j")),
+            Self::StopSession => ("Stop Pi in this session", None),
+            Self::NewSession => ("New Pi session", primary("n")),
+            Self::CloseSession => ("Close session", None),
+            Self::NextSession => ("Next session", primary("tab")),
+            Self::PreviousSession => (
+                "Previous session",
+                Some(Shortcut {
+                    key: "tab",
+                    shift: true,
+                }),
+            ),
+            Self::Session(n) => {
+                let index = usize::from(n.clamp(1, 9)) - 1;
+                (SESSIONS[index], primary(DIGITS[index]))
+            }
             Self::Explorer => ("Toggle explorer", primary("b")),
             Self::MoveExplorer => ("Move explorer to opposite side", None),
             Self::Refresh => ("Refresh expanded folders", None),
@@ -93,8 +138,24 @@ pub fn execute(state: &Workbench, command: Command) {
         Command::Reload => state.reload_active(),
         Command::Split => state.toggle_split(),
         Command::Changes => state.toggle_changes(),
-        Command::Agent => state.agent.toggle(),
-        Command::StopAgent => state.agent.stop(),
+        Command::Conversation => state.show_conversation(),
+        Command::StopSession => {
+            if let Some(session) = state.sessions.active_untracked() {
+                session.stop();
+            }
+        }
+        Command::NewSession => {
+            state.sessions.create();
+            state.show_conversation();
+        }
+        Command::CloseSession => {
+            if let Some(session) = state.sessions.active_untracked() {
+                state.sessions.close(session.key);
+            }
+        }
+        Command::NextSession => state.sessions.cycle(true),
+        Command::PreviousSession => state.sessions.cycle(false),
+        Command::Session(n) => state.sessions.select_index(usize::from(n) - 1),
         Command::Explorer => state.toggle_explorer(),
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
@@ -121,23 +182,35 @@ fn primary_modifier() -> Modifiers {
 
 impl Shortcut {
     fn modifiers(self) -> Modifiers {
-        primary_modifier()
-            | if self.shift {
-                Modifiers::SHIFT
-            } else {
-                Modifiers::empty()
-            }
+        // Cmd+Tab is the macOS app switcher, so session cycling uses Ctrl everywhere.
+        let base = if self.key == "tab" {
+            Modifiers::CONTROL
+        } else {
+            primary_modifier()
+        };
+        base | if self.shift {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::empty()
+        }
     }
 
     fn matches(self, key: &Key, modifiers: Modifiers) -> bool {
         // Ignore lock keys, but do not consume unrelated Ctrl+Alt/Shift combinations.
         let relevant =
             modifiers & (Modifiers::CONTROL | Modifiers::META | Modifiers::ALT | Modifiers::SHIFT);
-        matches!(key, Key::Character(key) if key.eq_ignore_ascii_case(self.key))
-            && relevant == self.modifiers()
+        let key_matches = match key {
+            Key::Named(NamedKey::Tab) => self.key == "tab",
+            Key::Character(key) => key.eq_ignore_ascii_case(self.key),
+            _ => false,
+        };
+        key_matches && relevant == self.modifiers()
     }
 
     fn label(self) -> String {
+        if self.key == "tab" {
+            return format!("Ctrl+{}Tab", if self.shift { "Shift+" } else { "" });
+        }
         format!(
             "Ctrl/Cmd+{}{}",
             if self.shift { "Shift+" } else { "" },
@@ -162,13 +235,12 @@ mod tests {
     fn shortcuts_use_the_registry_and_reject_extra_modifiers() {
         for command in COMMANDS {
             if let Some(binding) = command.shortcut() {
-                assert_eq!(
-                    for_key(
-                        &Key::Character(binding.key.to_uppercase()),
-                        binding.modifiers()
-                    ),
-                    Some(*command)
-                );
+                let key = if binding.key == "tab" {
+                    Key::Named(NamedKey::Tab)
+                } else {
+                    Key::Character(binding.key.to_uppercase())
+                };
+                assert_eq!(for_key(&key, binding.modifiers()), Some(*command));
             }
         }
         assert_eq!(
