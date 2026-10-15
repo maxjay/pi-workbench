@@ -674,6 +674,43 @@ impl Workbench {
             .set("Reverted the change; undo brings it back.".into());
     }
 
+    /// Stages the change under the cursor, as `git add -p` would one hunk:
+    /// only the lines it covers go to the index, as the editor has them.
+    pub fn stage_change(&self) {
+        let Some((path, comparison, index)) = self.change_at_cursor("stage it") else {
+            return;
+        };
+        let Some(doc) = self.documents.get(&path) else {
+            return;
+        };
+        let lines = comparison.hunks[index].0.current.clone();
+        let text = doc.text().text().to_string();
+        let status = self.status;
+        let finish =
+            create_ext_action(self.scope, move |result: anyhow::Result<()>| match result {
+                Ok(()) => status.set(
+                    "Staged the change as the editor shows it; the file keeps your other edits."
+                        .into(),
+                ),
+                Err(err) => status.set(format!("Stage: {err:#}")),
+            });
+        let root = self.root.clone();
+        std::thread::spawn(move || {
+            let stage = || -> anyhow::Result<()> {
+                use anyhow::Context;
+                let repo = workbench_core::git::Repo::discover(&root)?
+                    .context("This folder is not in a git repository")?;
+                let entry = repo
+                    .staged_text(&path)?
+                    .context("The file is not tracked yet; add it from the terminal")?;
+                let next = workbench_core::diff::LineDiff::apply_lines(&entry.text, &text, lines);
+                anyhow::ensure!(next != entry.text, "That change is already staged");
+                repo.stage_text(&path, &entry, &next)
+            };
+            finish(stage())
+        });
+    }
+
     /// Puts the change under the cursor into the active session's composer.
     pub fn ask_about_change(&self) {
         let Some((path, comparison, index)) = self.change_at_cursor("ask Pi about it") else {

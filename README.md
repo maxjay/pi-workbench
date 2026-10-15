@@ -70,7 +70,7 @@ There is no diff screen. One setting, **Changes since …** in the status bar, d
 - **session start** and **Pi's last turn**: the workspace is snapshotted before each prompt, so you can see exactly what a session, or its latest turn, did.
 - **last commit.**
 
-In the explorer, changed files are bright with their line counts and folders show how many changed files they hold; **Changed** collapses the tree to just those files. In an editor, changed lines carry a bar, removed lines appear as red ghost lines where they were, and **Focus** fades everything more than three lines from a change. The bar over the change under the cursor can revert it (undoable), drop it into the composer to ask Pi, or mark it seen so it goes quiet; Alt+Down moves to the next change and on into the next changed file.
+In the explorer, changed files are bright with their line counts and folders show how many changed files they hold; **Changed** collapses the tree to just those files. In an editor, changed lines carry a bar, removed lines appear as red ghost lines where they were, and **Focus** fades everything more than three lines from a change. The bar over the change under the cursor can revert it (undoable), stage just those lines (as `git add -p` would that hunk), drop it into the composer to ask Pi, or mark it seen so it goes quiet; Alt+Down moves to the next change and on into the next changed file.
 
 The lens reads git without running the repository's filters or hooks, and the workspace is watched, so changes from a terminal or formatter are folded into open files and the lens like Pi's.
 
