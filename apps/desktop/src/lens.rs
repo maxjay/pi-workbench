@@ -45,23 +45,115 @@ impl Since {
     ];
 }
 
+/// A diff together with the baseline and the text revision it came from, so
+/// actions on a hunk never mix one version's line numbers with another's text.
+pub struct Comparison {
+    pub diff: LineDiff,
+    base: Arc<Option<String>>,
+    revision: u64,
+    /// Every hunk with the key that marks it seen.
+    pub hunks: Vec<(Hunk, u64)>,
+}
+
+impl Comparison {
+    fn new(path: &Path, base: Arc<Option<String>>, text: &str, revision: u64) -> Self {
+        let diff = match base.as_ref() {
+            Some(base) => LineDiff::compute(base, text),
+            None => LineDiff::all_added(text),
+        };
+        let base_lines = lines(base.as_deref().unwrap_or_default());
+        let current_lines = lines(text);
+        // Identical hunks in one file are told apart by how many came before.
+        let mut repeats: HashMap<u64, u64> = HashMap::new();
+        let hunks = diff
+            .hunks_iter()
+            .map(|hunk| {
+                let removed = base_lines.get(hunk.base.clone()).unwrap_or_default();
+                let added = current_lines.get(hunk.current.clone()).unwrap_or_default();
+                let mut hasher = DefaultHasher::new();
+                path.hash(&mut hasher);
+                removed.hash(&mut hasher);
+                added.hash(&mut hasher);
+                let content = hasher.finish();
+                let count = repeats.entry(content).or_default();
+                *count += 1;
+                let mut hasher = DefaultHasher::new();
+                (content, *count).hash(&mut hasher);
+                (hunk, hasher.finish())
+            })
+            .collect();
+        Self {
+            diff,
+            base,
+            revision,
+            hunks,
+        }
+    }
+
+    pub fn base_text(&self) -> &str {
+        self.base.as_deref().unwrap_or_default()
+    }
+
+    /// The baseline lines a hunk replaced, without line endings.
+    pub fn removed(&self, hunk: &Hunk) -> Vec<&str> {
+        lines(self.base_text())
+            .get(hunk.base.clone())
+            .unwrap_or_default()
+            .to_vec()
+    }
+
+    /// The editor line a hunk sits on; a removal after the last line sits on it.
+    pub fn line_of(&self, hunk: &Hunk) -> usize {
+        hunk.current
+            .start
+            .min(self.diff.current.len().saturating_sub(1))
+    }
+
+    /// The hunk covering `line`, by index.
+    pub fn at_line(&self, line: usize) -> Option<usize> {
+        self.hunks.iter().position(|(hunk, _)| {
+            hunk.current.contains(&line) || (hunk.current.is_empty() && self.line_of(hunk) == line)
+        })
+    }
+}
+
+fn lines(text: &str) -> Vec<&str> {
+    text.split('\n').map(|l| l.trim_end_matches('\r')).collect()
+}
+
 /// One open file under the lens.
 pub struct FileLens {
     pub path: PathBuf,
     text: Rc<TextDocument>,
-    /// Baseline text for the current revision; `None` inside means the file is new.
+    revision: ReadSignal<u64>,
+    /// Baseline text; `None` inside means the file is new there.
     base: RefCell<Option<Arc<Option<String>>>>,
-    diff: RwSignal<Option<Rc<LineDiff>>>,
+    comparison: RwSignal<Option<Rc<Comparison>>>,
     generation: Cell<u64>,
+    /// Owns the effect that follows edits, so closing the file frees it.
+    scope: Scope,
 }
 
 impl FileLens {
-    pub fn diff(&self) -> ReadSignal<Option<Rc<LineDiff>>> {
-        self.diff.read_only()
+    /// Tracked: the latest comparison, possibly a few edits old.
+    pub fn comparison(&self) -> ReadSignal<Option<Rc<Comparison>>> {
+        self.comparison.read_only()
     }
-    pub fn base_text(&self) -> Option<Arc<Option<String>>> {
-        self.base.borrow().clone()
+
+    /// The comparison, only if it matches the text as it is now.
+    pub fn current(&self) -> Option<Rc<Comparison>> {
+        self.comparison
+            .get_untracked()
+            .filter(|c| c.revision == self.revision.get_untracked())
     }
+}
+
+/// What one background refresh found.
+struct Refreshed {
+    head: Option<String>,
+    branch_base: Option<Base>,
+    changes: Option<anyhow::Result<Vec<FileChange>>>,
+    bases: Vec<(PathBuf, anyhow::Result<Option<String>>)>,
 }
 
 pub struct Lens {
@@ -82,13 +174,9 @@ pub struct Lens {
     changed_only: RwSignal<bool>,
     seen: RwSignal<HashSet<u64>>,
     changes_generation: Cell<u64>,
-}
-
-fn hunk_key(path: &Path, hunk_text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    hunk_text.hash(&mut hasher);
-    hasher.finish()
+    /// One refresh runs at a time; another request runs once it ends.
+    refreshing: Cell<bool>,
+    again: Cell<bool>,
 }
 
 impl Lens {
@@ -109,6 +197,8 @@ impl Lens {
             changed_only: RwSignal::new(false),
             seen: RwSignal::new(HashSet::new()),
             changes_generation: Cell::new(0),
+            refreshing: Cell::new(false),
+            again: Cell::new(false),
         })
     }
 
@@ -235,53 +325,119 @@ impl Lens {
         std::thread::spawn(move || finish(repo.snapshot().ok()));
     }
 
-    /// Recomputes the changed files and every open file's baseline.
+    /// Re-reads HEAD and the base branch, then recomputes the changed files
+    /// and every open file's baseline, off the UI thread.
     pub fn refresh(self: &Rc<Self>) {
         let Some(repo) = self.repo.borrow().clone() else {
             return;
         };
-        let rev = self.rev_untracked();
+        if self.refreshing.replace(true) {
+            self.again.set(true);
+            return;
+        }
         let generation = self.changes_generation.get() + 1;
         self.changes_generation.set(generation);
-        for file in self.files.borrow().values() {
-            *file.base.borrow_mut() = None;
+        let since = self.since.get_untracked();
+        let turns = self.turns.get_untracked();
+        let files: Vec<(PathBuf, Option<PathBuf>)> = self
+            .files
+            .borrow()
+            .values()
+            .map(|file| (file.path.clone(), self.relative(&file.path)))
+            .collect();
+        let lens = self.clone();
+        let finish = create_ext_action(self.scope, move |found: Refreshed| {
+            lens.refreshing.set(false);
+            lens.apply(generation, found);
+            if lens.again.replace(false) {
+                lens.refresh();
+            }
+        });
+        std::thread::spawn(move || {
+            let head = repo.head().ok().flatten();
+            let branch_base = repo.default_base().ok().flatten();
+            let rev = match since {
+                Since::Branch => branch_base.as_ref().map(|b| Rev::Commit(b.commit.clone())),
+                Since::Head => head.clone().map(Rev::Commit),
+                Since::SessionStart => turns.first().cloned().map(Rev::Tree),
+                Since::LastTurn => turns.last().cloned().map(Rev::Tree),
+            };
+            let changes = rev.as_ref().map(|rev| repo.changes(rev));
+            let bases = match &rev {
+                Some(rev) => files
+                    .into_iter()
+                    .filter_map(|(path, relative)| Some((path, repo.read(rev, &relative?))))
+                    .collect(),
+                None => Vec::new(),
+            };
+            finish(Refreshed {
+                head,
+                branch_base,
+                changes,
+                bases,
+            })
+        });
+    }
+
+    fn apply(self: &Rc<Self>, generation: u64, found: Refreshed) {
+        if self.head.with_untracked(|h| *h != found.head) {
+            self.head.set(found.head);
         }
-        let Some(rev) = rev else {
+        if self.branch_base.with_untracked(|b| *b != found.branch_base) {
+            self.branch_base.set(found.branch_base);
+        }
+        if self.changes_generation.get() != generation {
+            return;
+        }
+        let Some(changes) = found.changes else {
+            // Nothing to compare with yet, such as a session that has not run.
             self.changes.set(Vec::new());
             for file in self.files.borrow().values() {
-                file.diff.set(None);
+                *file.base.borrow_mut() = None;
+                file.generation.set(file.generation.get() + 1);
+                file.comparison.set(None);
             }
             return;
         };
-        let lens = self.clone();
-        let finish = create_ext_action(
-            self.scope,
-            move |result: anyhow::Result<Vec<FileChange>>| {
-                if lens.changes_generation.get() != generation {
-                    return;
+        match changes {
+            Ok(changes) => {
+                // Workspace paths use `canonicalize` form; git reports plain ones.
+                // The repository may hold more than this workspace shows.
+                let changes: Vec<FileChange> = changes
+                    .into_iter()
+                    .map(|mut change| {
+                        change.path = self.workspace_path(&change.path);
+                        change
+                    })
+                    .filter(|change| change.path.starts_with(&self.root))
+                    .collect();
+                if self.changes.with_untracked(|c| *c != changes) {
+                    self.changes.set(changes);
                 }
-                match result {
-                    Ok(changes) => {
-                        // Workspace paths use `canonicalize` form; git reports plain ones.
-                        let changes = changes
-                            .into_iter()
-                            .map(|mut change| {
-                                change.path = lens.workspace_path(&change.path);
-                                change
-                            })
-                            .collect();
-                        lens.changes.set(changes)
-                    }
-                    Err(err) => lens.status.set(format!("Changes: {err:#}")),
-                }
-            },
-        );
-        let changes_rev = rev.clone();
-        let changes_repo = repo.clone();
-        std::thread::spawn(move || finish(changes_repo.changes(&changes_rev)));
-        let files: Vec<_> = self.files.borrow().values().cloned().collect();
-        for file in files {
-            self.load_base(&file, &repo, &rev);
+            }
+            Err(err) => self.status.set(format!("Changes: {err:#}")),
+        }
+        for (path, base) in found.bases {
+            if let Some(file) = self.file(&path) {
+                self.set_base(&file, base);
+            }
+        }
+    }
+
+    fn set_base(self: &Rc<Self>, file: &Rc<FileLens>, base: anyhow::Result<Option<String>>) {
+        match base {
+            Ok(base) => {
+                *file.base.borrow_mut() = Some(Arc::new(base));
+                self.rediff(file);
+            }
+            // Unreadable is not the same as new: show no marks rather than
+            // offer to revert the whole file.
+            Err(err) => {
+                *file.base.borrow_mut() = None;
+                file.generation.set(file.generation.get() + 1);
+                file.comparison.set(None);
+                self.status.set(format!("Changes: {err:#}"));
+            }
         }
     }
 
@@ -296,14 +452,13 @@ impl Lens {
         let generation = self.changes_generation.get();
         let lens = self.clone();
         let target = file.clone();
-        let finish = create_ext_action(self.scope, move |base: Option<String>| {
+        let finish = create_ext_action(self.scope, move |base| {
             if lens.changes_generation.get() == generation {
-                *target.base.borrow_mut() = Some(Arc::new(base));
-                lens.rediff(&target);
+                lens.set_base(&target, base);
             }
         });
         let (repo, rev) = (repo.clone(), rev.clone());
-        std::thread::spawn(move || finish(repo.read(&rev, &relative).ok().flatten()));
+        std::thread::spawn(move || finish(repo.read(&rev, &relative)));
     }
 
     /// Starts tracking an open file; its diff follows edits.
@@ -316,30 +471,35 @@ impl Lens {
         if let Some(file) = self.files.borrow().get(path) {
             return file.clone();
         }
+        let scope = self.scope.create_child();
         let file = self.scope.enter(|| {
             Rc::new(FileLens {
                 path: path.to_path_buf(),
                 text: text.clone(),
+                revision,
                 base: RefCell::new(None),
-                diff: RwSignal::new(None),
+                comparison: RwSignal::new(None),
                 generation: Cell::new(0),
+                scope,
             })
         });
         self.files
             .borrow_mut()
             .insert(path.to_path_buf(), file.clone());
-        let (lens, target) = (self.clone(), file.clone());
+        // Weak, so the effect does not keep a closed file alive.
+        let (lens, target) = (Rc::downgrade(self), Rc::downgrade(&file));
         let pending = Rc::new(Cell::new(0u64));
-        self.scope.enter(|| {
+        scope.enter(|| {
             Effect::new(move |_| {
                 revision.track();
                 let current = pending.get() + 1;
                 pending.set(current);
-                let (lens, target, pending, text) =
-                    (lens.clone(), target.clone(), pending.clone(), text.clone());
+                let (lens, target, pending) = (lens.clone(), target.clone(), pending.clone());
                 exec_after(REFRESH_DELAY, move |_| {
-                    if pending.get() == current {
-                        lens.rediff_with(&target, text.text().to_string());
+                    if pending.get() == current
+                        && let (Some(lens), Some(target)) = (lens.upgrade(), target.upgrade())
+                    {
+                        lens.rediff(&target);
                     }
                 });
             })
@@ -351,7 +511,9 @@ impl Lens {
     }
 
     pub fn forget(&self, path: &Path) {
-        self.files.borrow_mut().remove(path);
+        if let Some(file) = self.files.borrow_mut().remove(path) {
+            file.scope.dispose();
+        }
     }
 
     pub fn file(&self, path: &Path) -> Option<Rc<FileLens>> {
@@ -359,49 +521,55 @@ impl Lens {
     }
 
     fn rediff(self: &Rc<Self>, file: &Rc<FileLens>) {
-        self.rediff_with(file, file.text.text().to_string());
-    }
-
-    fn rediff_with(self: &Rc<Self>, file: &Rc<FileLens>, text: String) {
-        let Some(base) = file.base_text() else { return };
+        let Some(base) = file.base.borrow().clone() else {
+            return;
+        };
+        let text = file.text.text().to_string();
+        let revision = file.revision.get_untracked();
         let generation = file.generation.get() + 1;
         file.generation.set(generation);
         let target = file.clone();
-        let finish = create_ext_action(self.scope, move |diff: LineDiff| {
+        let finish = create_ext_action(self.scope, move |comparison: Comparison| {
             if target.generation.get() == generation {
-                target.diff.set(Some(Rc::new(diff)));
+                target.comparison.set(Some(Rc::new(comparison)));
             }
         });
-        std::thread::spawn(move || {
-            finish(match base.as_ref() {
-                Some(base) => LineDiff::compute(base, &text),
-                None => LineDiff::all_added(&text),
-            })
-        });
-    }
-
-    /// Identifies a hunk by its content, so "seen" survives unrelated edits.
-    pub fn hunk_key(&self, file: &FileLens, hunk: &Hunk, current: &str) -> u64 {
-        let lines: Vec<&str> = current.split('\n').collect();
-        let text = lines
-            .get(hunk.current.clone())
-            .unwrap_or_default()
-            .join("\n");
-        let base = file
-            .base_text()
-            .and_then(|b| (*b).clone())
-            .unwrap_or_default();
-        let base_lines: Vec<&str> = base.split('\n').collect();
-        let removed = base_lines
-            .get(hunk.base.clone())
-            .unwrap_or_default()
-            .join("\n");
-        hunk_key(&file.path, &format!("{removed}\u{0}{text}"))
+        let path = file.path.clone();
+        std::thread::spawn(move || finish(Comparison::new(&path, base, &text, revision)));
     }
 
     pub fn mark_seen(&self, key: u64) {
         self.seen.update(|seen| {
             seen.insert(key);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compare(base: &str, text: &str) -> Comparison {
+        Comparison::new(Path::new("a.rs"), Arc::new(Some(base.into())), text, 0)
+    }
+
+    #[test]
+    fn identical_changes_in_one_file_have_their_own_keys() {
+        let c = compare("a\nx\nb\nx\nc\n", "a\ny\nb\ny\nc\n");
+        assert_eq!(c.hunks.len(), 2);
+        assert_ne!(c.hunks[0].1, c.hunks[1].1);
+        assert_eq!(c.removed(&c.hunks[1].0), ["x"]);
+        // The same edit computed again keeps its keys.
+        let again = compare("a\nx\nb\nx\nc\n", "a\ny\nb\ny\nc\n");
+        assert_eq!(c.hunks, again.hunks);
+    }
+
+    #[test]
+    fn a_removal_after_the_last_line_sits_on_the_last_line() {
+        let c = compare("a\nb\nc", "a\nb");
+        let (hunk, _) = &c.hunks[0];
+        let last = c.diff.current.len() - 1;
+        assert_eq!(c.line_of(hunk), last);
+        assert_eq!(c.at_line(last), Some(0));
     }
 }

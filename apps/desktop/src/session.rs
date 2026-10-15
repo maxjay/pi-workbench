@@ -463,8 +463,12 @@ impl Session {
         self.documents.hold_saves();
         self.holding.set(true);
         // Snapshot first, so "since this turn" includes nothing Pi did.
-        let session = self.clone();
+        // Weak, so closing the session during the snapshot does not start Pi.
+        let session = Rc::downgrade(self);
         (self.hooks.snapshot)(Box::new(move |tree| {
+            let Some(session) = session.upgrade() else {
+                return;
+            };
             if let Some(tree) = tree {
                 session.turns.update(|turns| turns.push(tree));
             }

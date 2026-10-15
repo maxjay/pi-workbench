@@ -60,7 +60,10 @@ impl OpenDocument {
             let text = Rc::new(TextDocument::new(scope, content.clone()));
             text.add_on_update(move |_| {
                 revision.update(|r| *r += 1);
-                incoming.set(None);
+                // Setting notifies even when unchanged, which would restyle every keystroke.
+                if incoming.with_untracked(Option::is_some) {
+                    incoming.set(None);
+                }
             });
             Rc::new(Self {
                 scope,

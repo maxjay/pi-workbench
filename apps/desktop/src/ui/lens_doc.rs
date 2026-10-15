@@ -1,7 +1,7 @@
 //! The changes lens inside an editor: removed lines appear as ghost lines in
 //! place, changed lines get a bar and a tint, and focus mode dims the rest.
 use super::{ACCENT, ADDED, MUTED, REMOVED, REMOVED_TEXT};
-use crate::syntax::Lines;
+use crate::{lens::Comparison, syntax::Lines};
 use floem::views::editor::core::xi_rope::Rope;
 use floem::{
     peniko::Color,
@@ -30,7 +30,7 @@ use std::{
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
-use workbench_core::diff::{Hunk, LineChange, LineDiff};
+use workbench_core::diff::{LineChange, LineDiff};
 
 /// Lines kept bright around each change when focusing.
 const CONTEXT: usize = 3;
@@ -47,12 +47,17 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    pub fn new(diff: &LineDiff, base: &str, focus: bool, seen: impl Fn(&Hunk) -> bool) -> Self {
+    /// `seen` says, by position, which of the diff's hunks are marked seen.
+    pub fn new(diff: &LineDiff, base: &str, focus: bool, seen: impl Fn(usize) -> bool) -> Self {
         let base_lines: Vec<&str> = base.split('\n').map(|l| l.trim_end_matches('\r')).collect();
-        let unseen: Vec<Hunk> = diff.hunks_iter().filter(|hunk| !seen(hunk)).collect();
+        let mut unseen = Vec::new();
         let lines = diff.current.len();
         let mut quiet = vec![false; lines];
-        for hunk in diff.hunks_iter().filter(|hunk| seen(hunk)) {
+        for (index, hunk) in diff.hunks_iter().enumerate() {
+            if !seen(index) {
+                unseen.push(hunk);
+                continue;
+            }
             quiet[hunk.current.clone()]
                 .iter_mut()
                 .for_each(|q| *q = true);
@@ -117,12 +122,15 @@ impl DocumentPhantom for LensDocument {
     fn phantom_text(&self, edid: EditorId, styling: &EditorStyle, line: usize) -> PhantomTextLine {
         let mut text = self.inner.phantom_text(edid, styling, line);
         let overlay = self.overlay.get_untracked();
-        if line == 0
-            && let Some(removed) = overlay.ghosts.get(&0)
-        {
+        // Ghosts go before the line they were removed from: trailing the line
+        // above would overlap the next line once the editor wraps.
+        if let Some(removed) = overlay.ghosts.get(&line) {
             text.text.push(ghost(0, format!("{removed}\n")));
         }
-        if let Some(removed) = overlay.ghosts.get(&(line + 1)) {
+        // Lines removed from the end have no line after them to sit before.
+        if line == self.inner.rope_text().last_line()
+            && let Some(removed) = overlay.ghosts.get(&(line + 1))
+        {
             let end = self.inner.rope_text().line_end_col(line, true);
             text.text.push(ghost(end, format!("\n{removed}")));
         }
@@ -190,7 +198,7 @@ pub struct LensStyling {
     id: u64,
     code: SimpleStyling,
     /// Lines changed against the lens baseline.
-    lens: Option<Rc<LineDiff>>,
+    lens: Option<Rc<Comparison>>,
     /// Lines Pi just changed; drawn stronger until the next edit.
     incoming: Option<Rc<LineDiff>>,
     overlay: Rc<Overlay>,
@@ -202,7 +210,7 @@ pub struct LensStyling {
 impl LensStyling {
     pub fn new(
         code: SimpleStyling,
-        lens: Option<Rc<LineDiff>>,
+        lens: Option<Rc<Comparison>>,
         incoming: Option<Rc<LineDiff>>,
         overlay: Rc<Overlay>,
         syntax: Option<Lines>,
@@ -225,9 +233,8 @@ impl LensStyling {
     }
 }
 
-fn added(diff: &Option<Rc<LineDiff>>, line: usize) -> bool {
-    diff.as_ref()
-        .and_then(|d| d.current.get(line))
+fn added(diff: Option<&LineDiff>, line: usize) -> bool {
+    diff.and_then(|d| d.current.get(line))
         .is_some_and(|c| *c == LineChange::Added)
 }
 
@@ -287,19 +294,39 @@ impl Styling for LensStyling {
         if Self::flag(&self.overlay.quiet, line) {
             return;
         }
-        let height = f64::from(self.line_height(edid, line));
+        let row = f64::from(self.line_height(edid, line));
+        // Ghost text shares the line's layout: mark only the rows of the line's
+        // own text, which can wrap, between ghosts before and after it.
+        let text = &layout_line.text;
+        let before = self.overlay.ghosts.get(&line).map_or(0, |g| g.len() + 1);
+        let after = self
+            .overlay
+            .ghosts
+            .get(&(line + 1))
+            .filter(|_| layout_line.phantom_text.text.iter().any(|p| p.col > 0))
+            .map_or(0, |g| g.len() + 1);
+        let own = before..text.text().len().saturating_sub(after).max(before + 1);
+        let rows: Vec<usize> = (0..text.visual_line_count())
+            .filter(|&n| {
+                text.visual_line_text_range(n)
+                    .is_some_and(|r| r.start < own.end && r.end.max(r.start + 1) > own.start)
+            })
+            .collect();
+        let first = rows.first().copied().unwrap_or(0);
+        let count = rows.len().max(1);
+        let (y, height) = (first as f64 * row, count as f64 * row);
         let mark = |width: Option<f64>, color: Color| LineExtraStyle {
             x: 0.0,
-            y: 0.0,
+            y,
             width,
             height,
             bg_color: Some(color),
             under_line: None,
             wave_line: None,
         };
-        if added(&self.incoming, line) {
+        if added(self.incoming.as_deref(), line) {
             layout_line.extra_style.push(mark(None, ADDED));
-        } else if added(&self.lens, line) {
+        } else if added(self.lens.as_ref().map(|c| &c.diff), line) {
             layout_line
                 .extra_style
                 .push(mark(None, ADDED.with_alpha(0.08)));
@@ -332,7 +359,7 @@ mod tests {
             .replace("\n2\n", "\ntwo\n");
         let diff = LineDiff::compute(&base, &current);
         // The change at line 2 is seen, so only line 10 keeps lines bright.
-        let overlay = Overlay::new(&diff, &base, true, |hunk| hunk.current.start == 2);
+        let overlay = Overlay::new(&diff, &base, true, |index| index == 0);
         assert!(overlay.dimmed[2] && overlay.dimmed[6]);
         assert!(!overlay.dimmed[7] && !overlay.dimmed[10] && !overlay.dimmed[13]);
         assert!(overlay.dimmed[14]);

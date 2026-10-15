@@ -183,25 +183,19 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         });
         let focus = lens.focus().get();
         let seen = lens.seen().get();
-        let (diff, incoming, view, spans, text) = match &doc {
+        let (comparison, incoming, view, spans, text) = match &doc {
             Some(doc) => {
-                let file = lens.file(doc.path());
-                let diff = file.as_ref().and_then(|f| f.diff().get());
-                let view = match (&diff, &file) {
-                    (Some(diff), Some(file)) => {
-                        let base = file
-                            .base_text()
-                            .and_then(|b| (*b).clone())
-                            .unwrap_or_default();
-                        let text = doc.text().text().to_string();
-                        Overlay::new(diff, &base, focus, |hunk| {
-                            seen.contains(&lens.hunk_key(file, hunk, &text))
-                        })
-                    }
-                    _ => Overlay::default(),
+                let comparison = lens
+                    .file(doc.path())
+                    .and_then(|file| file.comparison().get());
+                let view = match &comparison {
+                    Some(c) => Overlay::new(&c.diff, c.base_text(), focus, |index| {
+                        seen.contains(&c.hunks[index].1)
+                    }),
+                    None => Overlay::default(),
                 };
                 let spans = syntax.track(doc.path(), doc.text(), doc.revision()).get();
-                (diff, doc.incoming().get(), view, spans, doc.text())
+                (comparison, doc.incoming().get(), view, spans, doc.text())
             }
             None => (None, None, Overlay::default(), None, blank.clone()),
         };
@@ -209,7 +203,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         overlay.set(view.clone());
         styled.update_styling(Rc::new(LensStyling::new(
             super::code_styling(),
-            diff,
+            comparison,
             incoming,
             view,
             spans,
@@ -239,17 +233,11 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         let ready = jump_state
             .lens
             .file(&request.path)
-            .is_some_and(|file| file.diff().get().is_some());
+            .is_some_and(|file| file.comparison().get().is_some());
         let line = match request.to {
             JumpTo::Line(line) => Some(line),
-            JumpTo::FirstChange if ready => jump_state
-                .hunks(&request.path, false)
-                .first()
-                .map(|hunk| hunk.current.start),
-            JumpTo::LastChange if ready => jump_state
-                .hunks(&request.path, false)
-                .last()
-                .map(|hunk| hunk.current.start),
+            JumpTo::FirstChange if ready => jump_state.change_lines(&request.path).first().copied(),
+            JumpTo::LastChange if ready => jump_state.change_lines(&request.path).last().copied(),
             _ => return,
         };
         jump.set(None);
@@ -346,18 +334,13 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
 fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     let active = state.active(pane);
     let cursor = state.cursor_line(pane);
-    let (lens, seen) = (state.lens.clone(), state.lens.seen());
-    let find_state = state.clone();
+    let lens = state.lens.clone();
     let position = move || {
         let path = active.get()?;
-        lens.file(&path)?.diff().track();
-        seen.track();
+        let comparison = lens.file(&path)?.comparison().get()?;
         let line = cursor.get();
-        let hunks = find_state.hunks(&path, true);
-        let at = hunks.iter().position(|hunk| {
-            hunk.current.contains(&line) || (hunk.current.is_empty() && hunk.current.start == line)
-        })?;
-        Some((at + 1, hunks.len()))
+        let at = comparison.at_line(line)?;
+        Some((at + 1, comparison.hunks.len()))
     };
     let shown = position.clone();
     let action = |title: &'static str, command: Command| {
