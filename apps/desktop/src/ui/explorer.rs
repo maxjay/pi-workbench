@@ -1,13 +1,36 @@
-use super::{BORDER, MUTED, PANEL, TEXT, command_button};
+//! The explorer, read through the changes lens: changed files stand out with
+//! their line counts, the rest fade, and the tree can collapse to just the changes.
+use super::{
+    ACCENT, ADDED_TEXT, BORDER, CODE_FONT, MUTED, PANEL, REMOVED_TEXT, TEXT, command_button,
+};
 use crate::{commands::Command, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
+use workbench_core::git::{FileChange, FileStatus};
 
-pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
+fn counts(change: &FileChange) -> String {
+    if change.binary {
+        return "binary".into();
+    }
+    match change.status {
+        FileStatus::Added if change.removed == 0 => format!("+{}", change.added),
+        FileStatus::Deleted => format!("−{}", change.removed),
+        _ => format!("+{} −{}", change.added, change.removed),
+    }
+}
+
+fn status_color(status: FileStatus) -> Color {
+    match status {
+        FileStatus::Added => ADDED_TEXT,
+        FileStatus::Deleted => REMOVED_TEXT,
+        FileStatus::Modified => ACCENT,
+    }
+}
+
+fn tree(state: Rc<Workbench>) -> impl IntoView {
     let rows = state.clone();
     let make_row = state.clone();
-    let layout = state.layout();
-    let files = virtual_stack(
+    virtual_stack(
         move || {
             rows.explorer
                 .rows()
@@ -18,36 +41,76 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
         move |row| {
             let action_state = make_row.clone();
             let render_state = make_row.clone();
+            let changes = make_row.lens.changes();
             let path = row.entry.path;
-            let render_path = path.clone();
+            let (render_path, change_path) = (path.clone(), path.clone());
             let title = path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
             let directory = row.entry.directory;
-            Label::derived(move || {
-                let marker = if directory {
-                    if render_state.explorer.is_expanded(&render_path) {
-                        "− "
+            // A file's own change, or how many changed files a folder holds.
+            let change = move || {
+                changes.with(|changes| {
+                    if directory {
+                        let inside = changes
+                            .iter()
+                            .filter(|c| c.path.starts_with(&change_path))
+                            .count();
+                        (inside > 0).then(|| (format!("{inside}"), ACCENT))
                     } else {
-                        "+ "
+                        changes
+                            .iter()
+                            .find(|c| c.path == change_path)
+                            .map(|c| (counts(c), status_color(c.status)))
                     }
-                } else {
-                    "  "
-                };
-                format!("{marker}{title}")
-            })
+                })
+            };
+            let (label_change, count_change, color_change) =
+                (change.clone(), change.clone(), change);
+            Stack::horizontal((
+                Label::derived(move || {
+                    let marker = if directory {
+                        if render_state.explorer.is_expanded(&render_path) {
+                            "− "
+                        } else {
+                            "+ "
+                        }
+                    } else {
+                        "  "
+                    };
+                    format!("{marker}{title}")
+                })
+                .style(move |s| {
+                    let changed = label_change().is_some();
+                    s.flex_grow(1.0_f32).min_width(0).text_ellipsis().color(
+                        if changed || directory {
+                            TEXT
+                        } else {
+                            MUTED.with_alpha(0.75)
+                        },
+                    )
+                }),
+                Label::derived(move || count_change().map(|(c, _)| c).unwrap_or_default()).style(
+                    move |s| {
+                        let color = color_change().map(|(_, color)| color).unwrap_or(MUTED);
+                        s.font_size(11)
+                            .font_family(CODE_FONT.to_string())
+                            .color(color)
+                            .flex_shrink(0.0_f32)
+                    },
+                ),
+            ))
             .style(move |s| {
                 s.height(28)
                     .width_full()
-                    .padding_left((12 + row.depth * 14) as f64)
-                    .padding_right(8)
+                    .gap(6)
                     .items_center()
-                    .text_ellipsis()
+                    .padding_left((12 + row.depth * 14) as f64)
+                    .padding_right(10)
                     .cursor(CursorStyle::Pointer)
                     .hover(|s| s.background(BORDER))
-                    .color(if directory { TEXT } else { MUTED })
             })
             .on_event_stop(el::Click, move |_, _| {
                 if directory {
@@ -60,10 +123,107 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
     )
     .style(|s| s.flex_col().width_full())
     .scroll()
+    .style(|s| s.size_full().min_height(0))
+}
+
+/// Every changed file as a flat list, by path.
+fn changed_files(state: Rc<Workbench>) -> impl IntoView {
+    let changes = state.lens.changes();
+    let root = state.root().to_path_buf();
+    let open_state = state.clone();
+    Stack::vertical((
+        Label::new("Nothing has changed").style(move |s| {
+            s.color(MUTED)
+                .padding(14)
+                .apply_if(!changes.with(Vec::is_empty), |s| s.hide())
+        }),
+        dyn_stack(
+            move || changes.get(),
+            // Keyed by the whole change, so new counts rebuild the row.
+            |change| {
+                (
+                    change.path.clone(),
+                    change.added,
+                    change.removed,
+                    change.binary,
+                )
+            },
+            move |change: FileChange| {
+                let state = open_state.clone();
+                let relative = change
+                    .path
+                    .strip_prefix(&root)
+                    .unwrap_or(&change.path)
+                    .display()
+                    .to_string();
+                let (name, folder) = match relative.rsplit_once(['/', '\\']) {
+                    Some((folder, name)) => (name.to_string(), folder.to_string()),
+                    None => (relative.clone(), String::new()),
+                };
+                let path: PathBuf = change.path.clone();
+                let deleted = change.status == FileStatus::Deleted;
+                Stack::horizontal((
+                    Label::new(name).style(move |s| {
+                        s.color(TEXT)
+                            .flex_shrink(0.0_f32)
+                            .apply_if(deleted, |s| s.color(REMOVED_TEXT))
+                    }),
+                    Label::new(folder).style(|s| {
+                        s.color(MUTED)
+                            .font_size(11)
+                            .flex_grow(1.0_f32)
+                            .min_width(0)
+                            .text_ellipsis()
+                    }),
+                    Label::new(counts(&change)).style(move |s| {
+                        s.font_size(11)
+                            .font_family(CODE_FONT.to_string())
+                            .color(status_color(change.status))
+                            .flex_shrink(0.0_f32)
+                    }),
+                ))
+                .style(|s| {
+                    s.height(28)
+                        .width_full()
+                        .gap(8)
+                        .items_center()
+                        .padding_horiz(12)
+                        .cursor(CursorStyle::Pointer)
+                        .hover(|s| s.background(BORDER))
+                })
+                .on_event_stop(el::Click, move |_, _| {
+                    if !deleted {
+                        state.open(path.clone(), state.focused().get_untracked());
+                    }
+                })
+            },
+        )
+        .style(|s| s.flex_col().width_full()),
+    ))
+    .style(|s| s.width_full())
+    .scroll()
+    .style(|s| s.size_full().min_height(0))
+}
+
+pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
+    let layout = state.layout();
+    let changed_only = state.lens.changed_only();
+    let files = Stack::new((
+        tree(state.clone()).style(move |s| s.apply_if(changed_only.get(), |s| s.hide())),
+        changed_files(state.clone()).style(move |s| s.apply_if(!changed_only.get(), |s| s.hide())),
+    ))
     .style(|s| s.size_full().min_height(0));
     Stack::vertical((
         Stack::horizontal((
-            Label::new("FILES").style(|s| s.color(MUTED).font_size(11).flex_grow(1.0_f32)),
+            Label::derived(move || {
+                if changed_only.get() {
+                    "CHANGED"
+                } else {
+                    "FILES"
+                }
+                .to_string()
+            })
+            .style(|s| s.color(MUTED).font_size(11).flex_grow(1.0_f32)),
             command_button(state.clone(), "↔", Command::MoveExplorer),
             command_button(state, "Refresh", Command::Refresh),
         ))

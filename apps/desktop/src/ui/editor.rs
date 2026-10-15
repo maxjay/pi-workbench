@@ -1,11 +1,21 @@
-use super::{ACCENT, BG, BORDER, CAPTURE, MUTED, PANEL};
+use super::{
+    ACCENT, BG, BORDER, CAPTURE, MUTED, PANEL, TEXT,
+    lens_doc::{LensDocument, LensStyling, Overlay},
+};
 use crate::{
+    commands::{self, Command},
     documents::OpenDocument,
-    workspace::{Pane, Workbench},
+    workspace::{JumpTo, Pane, Workbench},
 };
 use floem::reactive::Scope;
 use floem::{
-    prelude::*, reactive::Effect, style::CursorStyle, views::editor::text_document::TextDocument,
+    prelude::*,
+    reactive::Effect,
+    style::CursorStyle,
+    views::editor::{
+        core::{cursor::CursorAffinity, selection::Selection},
+        text_document::TextDocument,
+    },
 };
 use std::rc::Rc;
 
@@ -109,22 +119,11 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         .editor_style(|s| s.scroll_beyond_last_line(false))
         .style(|s| s.size_full().min_width(0).min_height(0));
     let handle = editor.editor().clone();
-    let styled = editor.editor().clone();
-    // Lines Pi just changed stay highlighted until the next edit.
-    Effect::new(move |_| {
-        let path = active.get();
-        let incoming = docs.with(|docs| {
-            docs.iter()
-                .find(|doc| Some(doc.path()) == path.as_ref())
-                .and_then(|doc| doc.incoming().get())
-        });
-        styled.update_styling(match incoming {
-            Some(diff) => super::diff::incoming_styling(diff),
-            None => Rc::new(super::code_styling()),
-        });
-    });
+    // This pane's view of the lens: ghost lines and folds for the file it shows.
+    let overlay = RwSignal::new(Rc::new(Overlay::default()));
     let empty = Rc::new(TextDocument::new(Scope::current(), ""));
     let held_document = std::cell::RefCell::new(None::<Rc<OpenDocument>>);
+    let (bind_handle, bind_lens) = (handle.clone(), state.lens.clone());
     Effect::new(move |_| {
         let path = active.get();
         let documents = docs.get();
@@ -138,21 +137,88 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     .as_ref()
                     .is_none_or(|held| !Rc::ptr_eq(held, doc));
                 if changed {
-                    handle.cursor.update(|cursor| {
-                        cursor.set_insert(floem::views::editor::core::selection::Selection::caret(
-                            0,
-                            floem::views::editor::core::cursor::CursorAffinity::Forward,
-                        ))
+                    bind_lens.track(doc.path(), doc.text(), doc.revision());
+                    bind_handle.cursor.update(|cursor| {
+                        cursor.set_insert(Selection::caret(0, CursorAffinity::Forward))
                     });
-                    handle.update_doc(doc.text(), None);
-                    handle.scroll_to.set(Some(floem::kurbo::Vec2::ZERO));
+                    let lensed = LensDocument::new(doc.text(), overlay);
+                    bind_handle.update_doc(Rc::new(lensed), None);
+                    bind_handle.scroll_to.set(Some(floem::kurbo::Vec2::ZERO));
                     *held_document.borrow_mut() = Some(doc.clone());
                 }
             } else {
-                handle.update_doc(empty.clone(), None);
+                bind_handle.update_doc(empty.clone(), None);
                 *held_document.borrow_mut() = None;
             }
         });
+    });
+    // Restyle when the lens diff, focus, seen changes, or Pi's latest edit change.
+    let (styled, lens) = (handle.clone(), state.lens.clone());
+    Effect::new(move |_| {
+        let path = active.get();
+        let doc = docs.with(|docs| {
+            docs.iter()
+                .find(|doc| Some(doc.path()) == path.as_ref())
+                .cloned()
+        });
+        let focus = lens.focus().get();
+        let seen = lens.seen().get();
+        let (comparison, incoming, view) = match &doc {
+            Some(doc) => {
+                let comparison = lens
+                    .file(doc.path())
+                    .and_then(|file| file.comparison().get());
+                let view = match &comparison {
+                    Some(c) => Overlay::new(&c.diff, c.base_text(), focus, |index| {
+                        seen.contains(&c.hunks[index].1)
+                    }),
+                    None => Overlay::default(),
+                };
+                (comparison, doc.incoming().get(), view)
+            }
+            None => (None, None, Overlay::default()),
+        };
+        let view = Rc::new(view);
+        overlay.set(view.clone());
+        styled.update_styling(Rc::new(LensStyling::new(
+            super::code_styling(),
+            comparison,
+            incoming,
+            view,
+        )));
+    });
+    // Keep the workspace informed of the cursor line, for change navigation.
+    let (cursor_handle, cursor_line) = (handle.clone(), state.cursor_line(pane));
+    Effect::new(move |_| {
+        let offset = cursor_handle.cursor.with(|cursor| cursor.offset());
+        cursor_line.set(cursor_handle.line_of_offset(offset));
+    });
+    // Carry out jumps once the file is showing and its diff is ready.
+    let (jump_handle, jump_state) = (handle.clone(), state.clone());
+    let jump = state.jump();
+    Effect::new(move |_| {
+        let Some(request) = jump.get() else { return };
+        if request.pane != pane || active.get().as_ref() != Some(&request.path) {
+            return;
+        }
+        let ready = jump_state
+            .lens
+            .file(&request.path)
+            .is_some_and(|file| file.comparison().get().is_some());
+        let line = match request.to {
+            JumpTo::Line(line) => Some(line),
+            JumpTo::FirstChange if ready => jump_state.change_lines(&request.path).first().copied(),
+            JumpTo::LastChange if ready => jump_state.change_lines(&request.path).last().copied(),
+            _ => return,
+        };
+        jump.set(None);
+        if let Some(line) = line {
+            let offset = jump_handle.offset_of_line(line);
+            jump_handle.cursor.update(|cursor| {
+                cursor.set_insert(Selection::caret(offset, CursorAffinity::Forward))
+            });
+            jump_handle.center_window();
+        }
     });
     let empty_hint = Label::new(
         "Select a file to begin\n\nBoth panes can share the same document.",
@@ -166,7 +232,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             .apply_if(active.get().is_some(), |s| s.hide())
     });
     let editor = editor.style(move |s| s.apply_if(active.get().is_none(), |s| s.hide()));
-    let files = Stack::new((editor, empty_hint)).style(move |s| {
+    let files = Stack::new((editor, empty_hint, change_bar(state.clone(), pane))).style(move |s| {
         s.size_full()
             .min_height(0)
             .min_width(0)
@@ -232,5 +298,60 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     })
     .on_event_cont_with_config(el::PointerDown, CAPTURE, move |_, _| {
         focus_state.focus_pane(pane)
+    })
+}
+
+/// Floats over the change under the cursor with what can be done to it.
+fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
+    let active = state.active(pane);
+    let cursor = state.cursor_line(pane);
+    let lens = state.lens.clone();
+    let position = move || {
+        let path = active.get()?;
+        let comparison = lens.file(&path)?.comparison().get()?;
+        let line = cursor.get();
+        let at = comparison.at_line(line)?;
+        Some((at + 1, comparison.hunks.len()))
+    };
+    let shown = position.clone();
+    let action = |title: &'static str, command: Command| {
+        let state = state.clone();
+        Label::new(title)
+            .style(|s| {
+                s.color(TEXT)
+                    .font_size(11)
+                    .padding_horiz(8)
+                    .padding_vert(3)
+                    .border_radius(5)
+                    .cursor(CursorStyle::Pointer)
+                    .hover(|s| s.background(BORDER))
+            })
+            .on_event_stop(el::Click, move |_, _| commands::execute(&state, command))
+    };
+    Stack::horizontal((
+        Label::derived(move || {
+            position()
+                .map(|(at, of)| format!("Change {at} of {of}"))
+                .unwrap_or_default()
+        })
+        .style(|s| s.color(MUTED).font_size(11).padding_horiz(6)),
+        action("Revert", Command::RevertChange),
+        action("Ask Pi", Command::AskAboutChange),
+        action("Seen", Command::MarkChangeSeen),
+        action("Next ↓", Command::NextChange),
+    ))
+    .style(move |s| {
+        s.absolute()
+            .inset_top(8)
+            .inset_right(18)
+            .items_center()
+            .gap(2)
+            .padding(3)
+            .border(1)
+            .border_color(BORDER)
+            .border_radius(7)
+            .background(PANEL)
+            .z_index(5)
+            .apply_if(shown().is_none(), |s| s.hide())
     })
 }

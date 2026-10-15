@@ -88,6 +88,9 @@ impl Model {
     }
 }
 
+/// Takes a workspace snapshot and hands its tree id to the callback.
+pub type SnapshotHook = Box<dyn Fn(Box<dyn FnOnce(Option<String>)>)>;
+
 /// What a session reports back to the workspace.
 pub struct Hooks {
     /// Pi changed files and no tool is running; `true` if files may have
@@ -95,6 +98,8 @@ pub struct Hooks {
     pub files_changed: Box<dyn Fn(bool)>,
     /// A run finished; the session list may have changed.
     pub settled: Box<dyn Fn()>,
+    /// Snapshots the workspace before a prompt; the callback gets a tree id.
+    pub snapshot: SnapshotHook,
 }
 
 /// Tools whose effects on disk the workbench cannot predict from their arguments.
@@ -112,64 +117,42 @@ fn tool_target(args: &Value, partial: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A readable view of an edit or write while its arguments stream in.
-fn tool_preview(tool: &str, partial: &str) -> String {
-    let preview = file_preview(partial);
+/// Diff-style lines for an edit's replacements or a write's content.
+fn render_preview(tool: &str, edits: &[(String, String)], content: Option<&str>) -> String {
     let mark = |prefix: char, text: &str| {
         text.lines()
             .map(|line| format!("{prefix} {line}\n"))
             .collect::<String>()
     };
     match tool {
-        "edit" => preview
-            .edits
+        "edit" => edits
             .iter()
             .map(|(old, new)| format!("{}{}", mark('-', old), mark('+', new)))
             .collect::<Vec<_>>()
             .join("···\n"),
-        "write" => mark('+', &preview.content.unwrap_or_default()),
+        "write" => mark('+', content.unwrap_or_default()),
         _ => String::new(),
     }
 }
 
+/// A readable view of an edit or write while its arguments stream in.
+fn tool_preview(tool: &str, partial: &str) -> String {
+    let preview = file_preview(partial);
+    render_preview(tool, &preview.edits, preview.content.as_deref())
+}
+
 /// The same view for complete arguments, as stored in session history.
 fn args_preview(tool: &str, args: &Value) -> String {
-    let mark = |prefix: char, text: &str| {
-        text.lines()
-            .map(|line| {
-                format!(
-                    "{prefix} {line}
-"
-                )
-            })
-            .collect::<String>()
-    };
     let text = |value: &Value| value.as_str().unwrap_or_default().to_string();
-    match tool {
-        "edit" => {
-            // Older sessions stored a single oldText/newText pair at the top level.
-            let edits = match args["edits"].as_array() {
-                Some(edits) => edits.clone(),
-                None => vec![args.clone()],
-            };
-            edits
-                .iter()
-                .map(|e| {
-                    format!(
-                        "{}{}",
-                        mark('-', &text(&e["oldText"])),
-                        mark('+', &text(&e["newText"]))
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(
-                    "···
-",
-                )
-        }
-        "write" => mark('+', &text(&args["content"])),
-        _ => String::new(),
-    }
+    // Older sessions stored a single oldText/newText pair at the top level.
+    let edits: Vec<(String, String)> = match args["edits"].as_array() {
+        Some(edits) => edits
+            .iter()
+            .map(|e| (text(&e["oldText"]), text(&e["newText"])))
+            .collect(),
+        None => vec![(text(&args["oldText"]), text(&args["newText"]))],
+    };
+    render_preview(tool, &edits, args["content"].as_str())
 }
 
 fn is_file_tool(tool: &str) -> bool {
@@ -224,6 +207,8 @@ pub struct Session {
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
+    /// Workspace snapshots taken before each prompt in this window, oldest first.
+    turns: RwSignal<Vec<String>>,
     /// The composer's text, kept per session.
     pub draft: Rc<TextDocument>,
     /// Pi runs tools in parallel; reading files while one is still writing
@@ -275,6 +260,7 @@ impl Session {
                 model: RwSignal::new(None),
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
+                turns: RwSignal::new(Vec::new()),
                 draft: Rc::new(TextDocument::new(scope, "")),
                 running_tools: Cell::new(0),
                 tree_changed: Cell::new(false),
@@ -332,6 +318,9 @@ impl Session {
     }
     pub fn stats(&self) -> ReadSignal<String> {
         self.stats.read_only()
+    }
+    pub fn turns(&self) -> ReadSignal<Vec<String>> {
+        self.turns.read_only()
     }
 
     /// Tracked: what the rail and status bar show.
@@ -473,6 +462,21 @@ impl Session {
         // the edits are merged with Pi's instead.
         self.documents.hold_saves();
         self.holding.set(true);
+        // Snapshot first, so "since this turn" includes nothing Pi did.
+        // Weak, so closing the session during the snapshot does not start Pi.
+        let session = Rc::downgrade(self);
+        (self.hooks.snapshot)(Box::new(move |tree| {
+            let Some(session) = session.upgrade() else {
+                return;
+            };
+            if let Some(tree) = tree {
+                session.turns.update(|turns| turns.push(tree));
+            }
+            session.send_prompt(text);
+        }));
+    }
+
+    fn send_prompt(&self, text: String) {
         let result = self.start().and_then(|()| {
             self.process
                 .borrow_mut()
@@ -826,6 +830,7 @@ mod tests {
             let hooks = Rc::new(Hooks {
                 files_changed: Box::new(move |tree| log.borrow_mut().push(tree)),
                 settled: Box::new(|| {}),
+                snapshot: Box::new(|done| done(None)),
             });
             let session = Session::new(
                 scope,

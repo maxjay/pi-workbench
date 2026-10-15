@@ -1,13 +1,14 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
-mod diff;
 mod editor;
 mod explorer;
+mod lens_doc;
 mod overlays;
 mod rail;
 mod session;
 
 use crate::{
     commands::{self, Command},
+    lens::Since,
     workspace::{Integrations, Pane, Workbench},
 };
 use editor::pane;
@@ -21,8 +22,7 @@ use floem::{
 };
 use overlays::{command_palette, confirmation};
 use pi_client::Launch;
-use std::{path::PathBuf, rc::Rc, sync::Arc};
-use workbench_core::baseline::GitHead;
+use std::{path::PathBuf, rc::Rc};
 
 const BG: Color = Color::from_rgb8(21, 24, 30);
 const PANEL: Color = Color::from_rgb8(28, 32, 40);
@@ -113,7 +113,7 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         .to_string_lossy()
         .into_owned();
     let layout = state.layout();
-    let comparing = state.changes.current();
+    let (changed_only, focus) = (state.lens.changed_only(), state.lens.focus());
     Stack::horizontal((
         Label::new("π").style(|s| {
             s.color(ACCENT)
@@ -136,9 +136,10 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         toggle_button(state.clone(), "Split", Command::Split, move || {
             layout.with(|l| l.split)
         }),
-        toggle_button(state.clone(), "Changes", Command::Changes, move || {
-            comparing.with(Option::is_some)
+        toggle_button(state.clone(), "Changed", Command::ChangedOnly, move || {
+            changed_only.get()
         }),
+        toggle_button(state.clone(), "Focus", Command::Focus, move || focus.get()),
         separator(),
         command_button(state, "Commands", Command::Palette),
     ))
@@ -217,7 +218,6 @@ fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl In
 
 pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
     let integrations = Integrations {
-        baseline: Arc::new(GitHead),
         pi: Launch::from_env(),
     };
     let state = Workbench::new(root, layout_path, integrations, move || {
@@ -226,29 +226,38 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     state.restore();
     state.sessions.refresh_recent();
     state.sessions.create();
+    state.lens.start();
+    let (synced, changed, tree) = (
+        state.documents.clone(),
+        state.lens.clone(),
+        state.explorer.clone(),
+    );
+    // Changes from outside (a terminal, a formatter) fold in like Pi's.
+    if let Some(watcher) =
+        crate::watcher::watch(floem::reactive::Scope::current(), state.root(), move || {
+            synced.sync_from_disk("disk");
+            changed.refresh();
+            tree.refresh();
+        })
+    {
+        state.keep(watcher);
+    }
     let layout = state.layout();
     let status = state.status();
     let focused = state.focused();
     let width = RwSignal::new(1280.0);
     let close_state = state.clone();
     let keyboard_state = state.clone();
-    let comparing = state.changes.current();
     let editors = Stack::horizontal((
         pane(state.clone(), Pane::Primary),
         divider(state.clone(), false, width),
         pane(state.clone(), Pane::Secondary),
     ))
-    .style(move |s| {
-        s.size_full()
-            .min_width(0)
-            .min_height(0)
-            .apply_if(comparing.with(Option::is_some), |s| s.hide())
-    });
+    .style(move |s| s.size_full().min_width(0).min_height(0));
     let body = Stack::horizontal((
         explorer(state.clone()),
         divider(state.clone(), true, width),
         editors,
-        diff::changes(state.clone()),
     ))
     .style(move |s| {
         s.size_full().min_width(0).min_height(0).flex_direction(
@@ -260,7 +269,34 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         )
     });
     let (dot_sessions, label_sessions) = (state.sessions.clone(), state.sessions.clone());
+    let lens_open = RwSignal::new(false);
+    let (summary_lens, menu_state) = (state.lens.clone(), state.clone());
+    let lens_summary = Label::derived(move || {
+        let label = summary_lens.label(summary_lens.since().get());
+        summary_lens.changes().with(|changes| {
+            let added: usize = changes.iter().map(|c| c.added).sum();
+            let removed: usize = changes.iter().map(|c| c.removed).sum();
+            match changes.len() {
+                0 => format!("No changes since {label}"),
+                1 => format!("Changes since {label}  ·  1 file  +{added} −{removed}"),
+                n => format!("Changes since {label}  ·  {n} files  +{added} −{removed}"),
+            }
+        })
+    })
+    .style(|s| {
+        s.color(ACCENT)
+            .padding_horiz(8)
+            .padding_vert(2)
+            .border_radius(5)
+            .cursor(floem::style::CursorStyle::Pointer)
+            .hover(|s| s.background(BORDER))
+            .flex_shrink(0.0_f32)
+    })
+    .on_event_stop(el::Click, move |_, _| {
+        lens_open.update(|open| *open = !*open)
+    });
     let footer = Stack::horizontal((
+        lens_summary,
         Label::derived(move || status.get()).style(|s| {
             s.color(MUTED)
                 .flex_grow(1.0_f32)
@@ -305,6 +341,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             footer,
         ))
         .style(|s| s.size_full()),
+        lens_menu(menu_state, lens_open),
         command_palette(state.clone()),
         confirmation(state),
     ))
@@ -326,5 +363,56 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             return EventPropagation::Stop;
         }
         EventPropagation::Continue
+    })
+}
+
+/// What the changes lens compares against, chosen from the status bar.
+fn lens_menu(state: Rc<Workbench>, open: RwSignal<bool>) -> impl IntoView {
+    let since = state.lens.since();
+    let items = Since::ALL.map(|choice| {
+        let (label_state, pick_state) = (state.clone(), state.clone());
+        Label::derived(move || {
+            let mark = if since.get() == choice {
+                "●  "
+            } else {
+                "    "
+            };
+            format!("{mark}{}", label_state.lens.label(choice))
+        })
+        .style(|s| {
+            s.width_full()
+                .padding_horiz(12)
+                .padding_vert(7)
+                .color(TEXT)
+                .cursor(floem::style::CursorStyle::Pointer)
+                .hover(|s| s.background(BORDER))
+        })
+        .on_event_stop(el::Click, move |_, _| {
+            pick_state.lens.set_since(choice);
+            open.set(false);
+        })
+        .into_any()
+    });
+    Stack::vertical((
+        Label::new("Compare everything with").style(|s| {
+            s.color(MUTED)
+                .font_size(11)
+                .padding_horiz(12)
+                .padding_vert(6)
+        }),
+        Stack::vertical_from_iter(items).style(|s| s.width_full()),
+    ))
+    .style(move |s| {
+        s.absolute()
+            .inset_bottom(32)
+            .inset_left(12)
+            .width(260)
+            .padding_vert(4)
+            .background(PANEL)
+            .border(1)
+            .border_color(BORDER)
+            .border_radius(8)
+            .z_index(20)
+            .apply_if(!open.get(), |s| s.hide())
     })
 }

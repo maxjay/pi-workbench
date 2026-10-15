@@ -1,22 +1,48 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{changes::Changes, documents::Documents, explorer::Explorer, sessions::Sessions};
+use crate::{
+    documents::Documents,
+    explorer::Explorer,
+    lens::{Comparison, Lens},
+    sessions::Sessions,
+};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
-use floem::reactive::{ReadSignal, Scope};
+use floem::reactive::{Effect, ReadSignal, Scope};
+use floem::views::editor::{
+    core::{
+        buffer::rope_text::RopeText, cursor::CursorAffinity, editor::EditType, selection::Selection,
+    },
+    text::Document,
+    text_document::TextDocument,
+};
 use pi_client::Launch;
 use std::{
     cell::RefCell,
     collections::HashSet,
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
 };
 use workbench_core::{
-    MAX_OPEN_DOCUMENTS,
-    baseline::BaselineSource,
-    files,
+    MAX_OPEN_DOCUMENTS, files,
+    git::FileStatus,
     layout::{self, Layout},
 };
+
+/// Where a pane's cursor should go once its file and diff are ready.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JumpTo {
+    Line(usize),
+    FirstChange,
+    LastChange,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Jump {
+    pub pane: Pane,
+    pub path: PathBuf,
+    pub to: JumpTo,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pane {
@@ -42,17 +68,15 @@ pub enum Confirm {
     Reload(PathBuf),
 }
 
-/// External services the workbench uses. Swap these to change what
-/// diffs compare against or how Pi is started.
+/// External services the workbench uses.
 pub struct Integrations {
-    pub baseline: Arc<dyn BaselineSource>,
     pub pi: Launch,
 }
 
 pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
-    pub changes: Rc<Changes>,
+    pub lens: Rc<Lens>,
     pub sessions: Rc<Sessions>,
     /// The primary pane shows the active session's conversation instead of a file.
     conversation: RwSignal<bool>,
@@ -68,6 +92,11 @@ pub struct Workbench {
     status: RwSignal<String>,
     confirm: RwSignal<Option<Confirm>>,
     palette: RwSignal<bool>,
+    /// Each pane's cursor line, kept by the pane for change navigation.
+    cursor_line: [RwSignal<usize>; 2],
+    jump: RwSignal<Option<Jump>>,
+    /// Things that must live as long as the window, such as the file watcher.
+    kept: RefCell<Vec<Box<dyn std::any::Any>>>,
     close_window: Box<dyn Fn()>,
 }
 
@@ -89,7 +118,9 @@ impl Workbench {
         let status = RwSignal::new(message);
         let documents = Documents::new(Scope::current(), root.clone(), status);
         let explorer = Explorer::new(Scope::current(), root.clone(), status);
-        let (synced, tree) = (documents.clone(), explorer.clone());
+        let lens = Lens::new(Scope::current(), root.clone(), status);
+        let (synced, tree, changed) = (documents.clone(), explorer.clone(), lens.clone());
+        let snapshots = lens.clone();
         let sessions = Sessions::new(
             Scope::current(),
             root.clone(),
@@ -98,16 +129,27 @@ impl Workbench {
             move |tree_changed| {
                 // Pi wrote to disk; fold its changes into open buffers.
                 synced.sync_from_disk("Pi");
+                changed.refresh();
                 if tree_changed {
                     tree.refresh();
                 }
             },
+            move |done| snapshots.snapshot(done),
             status,
         );
+        // "Since session start" and "since Pi's last turn" follow the front session.
+        let (turns_lens, turns_sessions) = (lens.clone(), sessions.clone());
+        Effect::new(move |_| {
+            let turns = turns_sessions
+                .active()
+                .map(|session| session.turns().get())
+                .unwrap_or_default();
+            turns_lens.set_turns(turns);
+        });
         Rc::new(Self {
             documents,
             explorer,
-            changes: Changes::new(Scope::current(), integrations.baseline, status),
+            lens,
             sessions,
             conversation: RwSignal::new(true),
             scope: Scope::current(),
@@ -122,6 +164,9 @@ impl Workbench {
             layout: RwSignal::new(layout),
             confirm: RwSignal::new(None),
             palette: RwSignal::new(false),
+            cursor_line: [RwSignal::new(0), RwSignal::new(0)],
+            jump: RwSignal::new(None),
+            kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
         })
     }
@@ -142,7 +187,6 @@ impl Workbench {
         self.conversation.read_only()
     }
     pub fn show_conversation(&self) {
-        self.changes.close();
         self.conversation.set(true);
         self.focused.set(Pane::Primary);
     }
@@ -231,8 +275,8 @@ impl Workbench {
     }
 
     pub fn open(self: &Rc<Self>, path: PathBuf, pane: Pane) {
-        // Opening from the explorer returns to the panes so the file is visible.
-        self.changes.close();
+        // Pi and git spell paths differently; one file must have one document.
+        let path = path.canonicalize().unwrap_or(path);
         if pane == Pane::Primary {
             self.conversation.set(false);
         }
@@ -285,11 +329,23 @@ impl Workbench {
                 }
                 self.status.set("Ready".into());
             }
-            Err(err) => self.status.set(err),
+            Err(err) => {
+                // A jump into a file that never opened must not fire later.
+                if self
+                    .jump
+                    .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
+                {
+                    self.jump.set(None);
+                }
+                self.status.set(err)
+            }
         }
     }
 
     pub fn select_document(&self, pane: Pane, path: PathBuf) {
+        if self.jump.with_untracked(Option::is_some) {
+            self.jump.set(None);
+        }
         if self.documents.get(&path).is_some() {
             if pane == Pane::Primary {
                 self.conversation.set(false);
@@ -300,14 +356,187 @@ impl Workbench {
         }
     }
 
-    fn active_path(&self) -> Option<PathBuf> {
+    pub fn active_path(&self) -> Option<PathBuf> {
         let pane = self.focused.get_untracked();
         if pane == Pane::Primary && self.conversation.get_untracked() {
-            return self.changes.path();
+            return None;
         }
-        self.changes
-            .path()
-            .or_else(|| self.active(pane).get_untracked())
+        self.active(pane).get_untracked()
+    }
+
+    pub fn keep(&self, value: impl std::any::Any) {
+        self.kept.borrow_mut().push(Box::new(value));
+    }
+
+    pub fn cursor_line(&self, pane: Pane) -> RwSignal<usize> {
+        self.cursor_line[pane.index()]
+    }
+    pub fn jump(&self) -> RwSignal<Option<Jump>> {
+        self.jump
+    }
+
+    /// The file in the focused pane, unless the conversation covers it.
+    fn focused_file(&self) -> Option<(Pane, PathBuf)> {
+        let pane = self.focused.get_untracked();
+        if pane == Pane::Primary && self.conversation.get_untracked() {
+            return None;
+        }
+        self.active(pane).get_untracked().map(|path| (pane, path))
+    }
+
+    /// The lines of an open file's unseen changes, in order.
+    pub fn change_lines(&self, path: &Path) -> Vec<usize> {
+        let Some(comparison) = self
+            .lens
+            .file(path)
+            .and_then(|file| file.comparison().get_untracked())
+        else {
+            return Vec::new();
+        };
+        let seen = self.lens.seen().get_untracked();
+        comparison
+            .hunks
+            .iter()
+            .filter(|(_, key)| !seen.contains(key))
+            .map(|(hunk, _)| comparison.line_of(hunk))
+            .collect()
+    }
+
+    /// The change under the cursor of the focused pane, compared against the
+    /// text as it is now. Reports why when there is none.
+    fn change_at_cursor(&self, action: &str) -> Option<(PathBuf, Rc<Comparison>, usize)> {
+        let found = self.focused_file().and_then(|(pane, path)| {
+            let file = self.lens.file(&path)?;
+            let line = self.cursor_line[pane.index()].get_untracked();
+            let Some(comparison) = file.current() else {
+                return Some(Err(()));
+            };
+            let index = comparison.at_line(line)?;
+            Some(Ok((path, comparison, index)))
+        });
+        match found {
+            Some(Ok(found)) => Some(found),
+            Some(Err(())) => {
+                self.status
+                    .set("Still comparing the latest edit; try again in a moment.".into());
+                None
+            }
+            None => {
+                self.status
+                    .set(format!("Put the cursor on a change to {action}."));
+                None
+            }
+        }
+    }
+
+    /// Moves to the next unseen change, continuing into the next changed file.
+    pub fn next_change(self: &Rc<Self>, forward: bool) {
+        if let Some((pane, path)) = self.focused_file() {
+            let line = self.cursor_line[pane.index()].get_untracked();
+            let lines = self.change_lines(&path);
+            let target = if forward {
+                lines.iter().find(|l| **l > line)
+            } else {
+                lines.iter().rev().find(|l| **l < line)
+            };
+            if let Some(&target) = target {
+                self.jump.set(Some(Jump {
+                    pane,
+                    path,
+                    to: JumpTo::Line(target),
+                }));
+                return;
+            }
+        }
+        let files: Vec<PathBuf> = self.lens.changes().with_untracked(|changes| {
+            changes
+                .iter()
+                .filter(|c| c.status != FileStatus::Deleted && !c.binary)
+                .map(|c| c.path.clone())
+                .collect()
+        });
+        if files.is_empty() {
+            let label = self.lens.label(self.lens.since().get_untracked());
+            self.status.set(format!("No changes since {label}"));
+            return;
+        }
+        let current = self.focused_file().map(|(_, path)| path);
+        let at = current.and_then(|path| files.iter().position(|f| *f == path));
+        let next = match (at, forward) {
+            (Some(i), true) => (i + 1) % files.len(),
+            (Some(i), false) => (i + files.len() - 1) % files.len(),
+            (None, true) => 0,
+            (None, false) => files.len() - 1,
+        };
+        let pane = self.focused.get_untracked();
+        let path = files[next].clone();
+        self.open(path.clone(), pane);
+        self.focused.set(pane);
+        self.jump.set(Some(Jump {
+            pane,
+            path,
+            to: if forward {
+                JumpTo::FirstChange
+            } else {
+                JumpTo::LastChange
+            },
+        }));
+    }
+
+    /// Puts the baseline's lines back in place of the change under the cursor.
+    pub fn revert_change(&self) {
+        let Some((path, comparison, index)) = self.change_at_cursor("revert it") else {
+            return;
+        };
+        let Some(doc) = self.documents.get(&path) else {
+            return;
+        };
+        let hunk = &comparison.hunks[index].0;
+        replace_lines(&doc.text(), hunk.current.clone(), &comparison.removed(hunk));
+        self.status
+            .set("Reverted the change; undo brings it back.".into());
+    }
+
+    /// Puts the change under the cursor into the active session's composer.
+    pub fn ask_about_change(&self) {
+        let Some((path, comparison, index)) = self.change_at_cursor("ask Pi about it") else {
+            return;
+        };
+        let hunk = comparison.hunks[index].0.clone();
+        let Some(doc) = self.documents.get(&path) else {
+            return;
+        };
+        let text = doc.text().text().to_string();
+        let lines: Vec<&str> = text.split('\n').map(|l| l.trim_end_matches('\r')).collect();
+        let code = lines
+            .get(hunk.current.clone())
+            .unwrap_or_default()
+            .join("\n");
+        let name = path.strip_prefix(&self.root).unwrap_or(&path).display();
+        let question = format!(
+            "About this change in `{name}` (lines {}-{}):\n```\n{code}\n```\n",
+            hunk.current.start + 1,
+            hunk.current.end.max(hunk.current.start + 1),
+        );
+        let session = self
+            .sessions
+            .active_untracked()
+            .unwrap_or_else(|| self.sessions.create());
+        let len = session.draft.text().len();
+        session.draft.edit_single(
+            Selection::caret(len, CursorAffinity::Forward),
+            &question,
+            EditType::InsertChars,
+        );
+        self.show_conversation();
+    }
+
+    pub fn mark_change_seen(self: &Rc<Self>) {
+        let Some((_, comparison, index)) = self.change_at_cursor("mark it seen") else {
+            return;
+        };
+        self.lens.mark_seen(comparison.hunks[index].1);
+        self.next_change(true);
     }
 
     /// Opens a file next to the conversation, turning on the second pane.
@@ -317,16 +546,6 @@ impl Workbench {
         }
         self.open(path, Pane::Secondary);
         self.focused.set(Pane::Secondary);
-    }
-
-    pub fn toggle_changes(&self) {
-        if self.changes.active() {
-            self.changes.close();
-        } else if let Some(doc) = self.active_path().and_then(|p| self.documents.get(&p)) {
-            self.changes.show(doc);
-        } else {
-            self.status.set("Open a file to see its changes.".into());
-        }
     }
 
     pub fn save_active(&self) {
@@ -358,7 +577,7 @@ impl Workbench {
     }
 
     fn remove_file(&self, path: &Path) {
-        self.changes.forget(path);
+        self.lens.forget(path);
         self.documents.remove(path);
         let fallback = self
             .documents
@@ -485,6 +704,33 @@ impl Workbench {
     }
 }
 
+/// Replaces whole lines, keeping the buffer's line ending; one undoable edit.
+fn replace_lines(text: &TextDocument, lines: Range<usize>, replacement: &[&str]) {
+    let rope = text.rope_text();
+    let total = rope.num_lines();
+    let start = rope.offset_of_line(lines.start.min(total.saturating_sub(1)));
+    let at_end = lines.end >= total;
+    let end = if at_end {
+        rope.len()
+    } else {
+        rope.offset_of_line(lines.end)
+    };
+    let newline = if text.text().to_string().contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut new = replacement.join(newline);
+    if !replacement.is_empty() && !at_end {
+        new.push_str(newline);
+    }
+    text.edit_single(
+        Selection::region(start, end, CursorAffinity::Backward),
+        &new,
+        EditType::Other,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,7 +750,6 @@ mod tests {
                 dir.path().to_path_buf(),
                 dir.path().join("layout.json"),
                 Integrations {
-                    baseline: Arc::new(crate::changes::tests::Fixed(Some("base"))),
                     pi: Launch::default(),
                 },
                 move || on_close.set(true),
@@ -696,27 +941,6 @@ mod tests {
             let restored = layout::load(&state.layout_path).unwrap();
             assert_eq!(restored.open_files, vec![PathBuf::from("test.rs")]);
             assert_eq!(restored.active[0], Some("test.rs".into()));
-        });
-    }
-
-    #[test]
-    fn changes_need_an_open_file_and_close_with_their_document() {
-        with_workspace(|state, _| {
-            state.toggle_changes();
-            assert!(state.status().get().contains("Open a file"));
-            assert!(!state.changes.active());
-
-            let path = state.root.join("test.rs");
-            state.documents.insert(path.clone(), "text".into());
-            state.select_document(Pane::Primary, path.clone());
-            let doc = state.documents.get(&path).unwrap();
-            state.changes.show_now(doc);
-            assert_eq!(state.changes.path(), Some(path.clone()));
-            state.toggle_changes();
-            assert!(!state.changes.active());
-            state.changes.show_now(state.documents.get(&path).unwrap());
-            state.close_file(path);
-            assert!(!state.changes.active());
         });
     }
 

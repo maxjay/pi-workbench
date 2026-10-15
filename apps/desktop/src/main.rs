@@ -1,11 +1,12 @@
-mod changes;
 mod commands;
 mod documents;
 mod explorer;
+mod lens;
 mod markdown;
 mod session;
 mod sessions;
 mod ui;
+mod watcher;
 mod workspace;
 
 use anyhow::{Context, Result, ensure};

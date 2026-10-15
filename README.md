@@ -12,6 +12,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 
 - **Sessions:** every Pi session is a tab in the sessions rail. Sessions resume from Pi's own store with their history, so the Pi command line and the workbench see the same sessions.
 - **Conversation:** replies render as markdown; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
+- **Changes lens:** everything is read against one baseline you pick in the status bar: where your branch left develop, the start of the session, Pi's last turn, or the last commit. The explorer marks changed files, editors show removed lines as ghost lines in place, and you walk the changes file to file without opening a diff.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
 - File explorer, tabbed editing, a second pane, background saves, and a command palette.
 
@@ -56,6 +57,22 @@ Install Pi (`npm install -g @earendil-works/pi-coding-agent`) and sign in to a p
 
 To pass extra arguments to Pi, set `PI_WORKBENCH_PI_ARGS`, for example `--provider <name> --model <id>`. `PI_WORKBENCH_PI` selects a different `pi` executable.
 
+## The changes lens
+
+![Focus on changes, with a removed line shown in place and the change bar](docs/screenshots/lens-focus.png)
+
+There is no diff screen. One setting, **Changes since …** in the status bar, decides what everything is compared against, and every view reads through it:
+
+- **develop** (or `main`, `master`): where your branch left it, so other people's commits on develop never show up as your changes.
+- **session start** and **Pi's last turn**: the workspace is snapshotted before each prompt, so you can see exactly what a session, or its latest turn, did.
+- **last commit.**
+
+In the explorer, changed files are bright with their line counts and folders show how many changed files they hold; **Changed** collapses the tree to just those files. In an editor, changed lines carry a bar, removed lines appear as red ghost lines where they were, and **Focus** fades everything more than three lines from a change. The bar over the change under the cursor can revert it (undoable), drop it into the composer to ask Pi, or mark it seen so it goes quiet; Alt+Down moves to the next change and on into the next changed file.
+
+The lens reads git without running the repository's filters or hooks, and the workspace is watched, so changes from a terminal or formatter are folded into open files and the lens like Pi's.
+
+![The explorer through the lens](docs/screenshots/lens-explorer.png)
+
 ## Shortcuts
 
 Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere, because Cmd+Tab switches apps on macOS.
@@ -66,12 +83,14 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | Ctrl+Tab, Ctrl+Shift+Tab | Next or previous session |
 | Ctrl/Cmd+1 … 9 | Go to session 1 … 9 |
 | Ctrl/Cmd+J | Show the conversation |
+| Alt+Down, Alt+Up | Next or previous change, across files |
+| Ctrl/Cmd+Shift+H | Focus on changes |
+| Ctrl/Cmd+Shift+G | Show only changed files |
 | Ctrl/Cmd+S | Save file |
 | Ctrl/Cmd+W | Close file |
 | Ctrl/Cmd+Q | Close window |
 | Ctrl/Cmd+B | Toggle explorer |
 | Ctrl/Cmd+\ | Toggle second pane |
-| Ctrl/Cmd+Shift+G | Toggle changes view |
 | Ctrl/Cmd+Shift+P | Command palette |
 | Escape | Dismiss palette or dialog |
 
@@ -83,12 +102,14 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [sessions.rs](apps/desktop/src/sessions.rs) | Open sessions, the active one, and recent sessions from Pi's store |
 | [workspace.rs](apps/desktop/src/workspace.rs) | Opening files, panes, confirmations, layout |
 | [documents.rs](apps/desktop/src/documents.rs) | Buffers, saves, reloads, merging outside changes |
-| [changes.rs](apps/desktop/src/changes.rs) | Comparing a document with a baseline, live diff refresh |
+| [lens.rs](apps/desktop/src/lens.rs) | The changes lens: baseline, changed files, per-file diffs, seen changes |
+| [watcher.rs](apps/desktop/src/watcher.rs) | Watching the workspace for outside changes |
 | [markdown.rs](apps/desktop/src/markdown.rs) | Reply markdown to timeline blocks |
 | [explorer.rs](apps/desktop/src/explorer.rs) | Directory loading and cache |
 | [commands.rs](apps/desktop/src/commands.rs) | Actions and shortcuts |
 | [ui/](apps/desktop/src/ui) | Views and styling: rail, conversation, panes, changes |
-| [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, baseline sources |
+| [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars and focus inside an editor |
+| [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, read-only git access |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |
 
 To add an action, update `Command`, `COMMANDS`, `Command::details`, and `execute` in `commands.rs`. Keep its behavior in the module that owns the relevant state.
@@ -112,14 +133,11 @@ PI_CODING_AGENT_DIR=/tmp/pi-fake PI_WORKBENCH_PI_ARGS="--provider fake --model f
 
 `PI_CLIENT_LIVE=1 cargo test -p pi-client` runs the same setup against the installed `pi`.
 
-### Comparison sources
-
-The changes view compares an open document with a [`BaselineSource`](crates/workbench-core/src/baseline.rs). The built-in `GitHead` source reads the committed file as a raw blob; it never runs the repository's filter commands, and line-ending differences are ignored when diffing. To compare with something else, implement the trait and set it in the `Integrations` passed to `Workbench::new` (see [ui/mod.rs](apps/desktop/src/ui/mod.rs)). Sources run off the UI thread and return `None` for files that are new.
-
 ## Current limitations
 
 - UTF-8 files only; 4 MiB per file, 64 open documents
-- No syntax highlighting, LSP, terminal, or file watching yet; changes Pi makes to files that are not open appear when you open them
+- No syntax highlighting, LSP, or terminal yet
+- Focus fades unchanged lines rather than folding them; the editor needs equal line heights
 - Tab changes reset cursor and scroll position
 - Sessions share one checkout; two sessions editing the same lines will conflict
 - Workspace layouts are saved on normal close; unsaved edits have no crash recovery

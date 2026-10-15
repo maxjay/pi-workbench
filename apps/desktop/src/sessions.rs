@@ -34,6 +34,7 @@ impl Sessions {
         launch: Launch,
         documents: Rc<Documents>,
         files_changed: impl Fn(bool) + 'static,
+        snapshot: impl Fn(Box<dyn FnOnce(Option<String>)>) + 'static,
         status: RwSignal<String>,
     ) -> Rc<Self> {
         let recent = RwSignal::new(Vec::new());
@@ -43,6 +44,7 @@ impl Sessions {
                 scope,
                 hooks: Rc::new(Hooks {
                     files_changed: Box::new(files_changed),
+                    snapshot: Box::new(snapshot),
                     settled: Box::new(move || {
                         if let Some(sessions) = this.upgrade() {
                             sessions.refresh_recent();
@@ -225,6 +227,7 @@ mod tests {
                 Launch::default(),
                 documents,
                 |_| {},
+                |done| done(None),
                 status,
             );
             test(sessions);
