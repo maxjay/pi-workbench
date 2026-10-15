@@ -688,7 +688,10 @@ impl Workbench {
         let status = self.status;
         let finish =
             create_ext_action(self.scope, move |result: anyhow::Result<()>| match result {
-                Ok(()) => status.set("Staged the change; the file keeps your other edits.".into()),
+                Ok(()) => status.set(
+                    "Staged the change as the editor shows it; the file keeps your other edits."
+                        .into(),
+                ),
                 Err(err) => status.set(format!("Stage: {err:#}")),
             });
         let root = self.root.clone();
@@ -697,12 +700,12 @@ impl Workbench {
                 use anyhow::Context;
                 let repo = workbench_core::git::Repo::discover(&root)?
                     .context("This folder is not in a git repository")?;
-                let (mode, staged) = repo
+                let entry = repo
                     .staged_text(&path)?
                     .context("The file is not tracked yet; add it from the terminal")?;
-                let next = workbench_core::diff::LineDiff::apply_lines(&staged, &text, lines);
-                anyhow::ensure!(next != staged, "That change is already staged");
-                repo.stage_text(&path, &mode, &next)
+                let next = workbench_core::diff::LineDiff::apply_lines(&entry.text, &text, lines);
+                anyhow::ensure!(next != entry.text, "That change is already staged");
+                repo.stage_text(&path, &entry, &next)
             };
             finish(stage())
         });

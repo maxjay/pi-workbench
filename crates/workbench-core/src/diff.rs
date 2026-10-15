@@ -1,5 +1,5 @@
 //! Line diffs between a baseline and the current text, independent of the renderer.
-use similar::{Algorithm, DiffTag, capture_diff_slices_deadline};
+use similar::{Algorithm, DiffTag, capture_diff_slices, capture_diff_slices_deadline};
 use std::{
     ops::Range,
     time::{Duration, Instant},
@@ -137,38 +137,69 @@ impl LineDiff {
     }
 
     /// `base` with only the changes that touch `lines` of `current` taken from
-    /// `current`, keeping `base`'s line endings. Used to stage part of a file.
+    /// `current`. Untouched lines of `base` are kept byte for byte; lines taken
+    /// from `current` get `base`'s usual line ending. Used to stage part of a file.
     pub fn apply_lines(base: &str, current: &str, lines: Range<usize>) -> String {
-        let diff = LineDiff::compute(base, current);
-        let ending = if base.contains("\r\n") { "\r\n" } else { "\n" };
-        let split = |text: &str| -> Vec<String> {
-            text.split('\n')
-                .map(|l| l.trim_end_matches('\r').to_owned())
-                .collect()
-        };
-        let (old, new) = (split(base), split(current));
-        let touches = |hunk: &Hunk| {
-            if hunk.current.is_empty() || lines.is_empty() {
-                // A removal, or a selection of no lines, touches by position.
-                (lines.start..=lines.end).contains(&hunk.current.start)
-                    || (hunk.current.start..=hunk.current.end).contains(&lines.start)
+        let (old, new) = (pieces(base), pieces(current));
+        let crlf = old.iter().filter(|(_, end)| *end == "\r\n").count();
+        let lf = old.iter().filter(|(_, end)| *end == "\n").count();
+        let ending = if crlf > lf { "\r\n" } else { "\n" };
+        let (old_text, new_text): (Vec<&str>, Vec<&str>) = (
+            old.iter().map(|(line, _)| *line).collect(),
+            new.iter().map(|(line, _)| *line).collect(),
+        );
+        // Operation by operation, not hunk by hunk: neighbouring changes that a
+        // hunk would merge stay apart, so only what `lines` covers is taken.
+        let ops = capture_diff_slices(Algorithm::Myers, &old_text, &new_text);
+        let touches = |range: Range<usize>| {
+            if range.is_empty() {
+                // A removal sits between lines; it belongs to a selection
+                // that starts there or covers it.
+                if lines.is_empty() {
+                    range.start == lines.start
+                } else {
+                    lines.start <= range.start && range.start < lines.end
+                }
+            } else if lines.is_empty() {
+                false
             } else {
-                hunk.current.start < lines.end && lines.start < hunk.current.end
+                range.start < lines.end && lines.start < range.end
             }
         };
-        let mut out: Vec<String> = Vec::new();
-        let mut at = 0;
-        for hunk in diff.hunks_iter() {
-            out.extend_from_slice(&old[at..hunk.base.start]);
-            if touches(&hunk) {
-                out.extend_from_slice(&new[hunk.current.clone()]);
-            } else {
-                out.extend_from_slice(&old[hunk.base.clone()]);
+        let mut out = String::with_capacity(base.len());
+        let keep = |out: &mut String, range: Range<usize>| {
+            for (line, end) in &old[range] {
+                out.push_str(line);
+                out.push_str(end);
             }
-            at = hunk.base.end;
+        };
+        let take = |out: &mut String, range: Range<usize>| {
+            for (line, end) in &new[range] {
+                out.push_str(line);
+                // The end of the file keeps having, or not having, a newline.
+                out.push_str(if end.is_empty() { "" } else { ending });
+            }
+        };
+        for op in ops {
+            let (old_range, new_range) = (op.old_range(), op.new_range());
+            match op.tag() {
+                DiffTag::Equal => keep(&mut out, old_range),
+                // Line-for-line replacements are decided line by line, since
+                // neighbouring edits arrive as one replacement.
+                DiffTag::Replace if old_range.len() == new_range.len() => {
+                    for (old_line, new_line) in old_range.zip(new_range) {
+                        if touches(new_line..new_line + 1) {
+                            take(&mut out, new_line..new_line + 1);
+                        } else {
+                            keep(&mut out, old_line..old_line + 1);
+                        }
+                    }
+                }
+                _ if touches(new_range.clone()) => take(&mut out, new_range),
+                _ => keep(&mut out, old_range),
+            }
         }
-        out.extend_from_slice(&old[at..]);
-        out.join(ending)
+        out
     }
 
     /// The baseline line `current_line` is a copy of, if it is unchanged.
@@ -202,10 +233,55 @@ impl LineDiff {
     }
 }
 
+/// Each line of `text` with its own ending, plus an empty last line after
+/// a final newline, so indices match [`LineDiff`]'s lines.
+fn pieces(text: &str) -> Vec<(&str, &str)> {
+    let mut pieces: Vec<(&str, &str)> = text
+        .split_inclusive('\n')
+        .map(|piece| {
+            let line = piece.trim_end_matches('\n');
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            (line, &piece[line.len()..])
+        })
+        .collect();
+    if text.is_empty() || text.ends_with('\n') {
+        pieces.push(("", ""));
+    }
+    pieces
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use LineChange::*;
+
+    #[test]
+    fn applying_lines_keeps_mixed_endings_and_separate_neighbours() {
+        // One CRLF line in an LF file stays the only one.
+        let base = "a\nb\r\nc\nd\n";
+        assert_eq!(
+            LineDiff::apply_lines(base, "a\nb\nc\nD\n", 3..4),
+            "a\nb\r\nc\nD\n"
+        );
+        // Adjacent changes are taken apart: only line 2 is selected.
+        assert_eq!(
+            LineDiff::apply_lines("l1\nl2\nl3\n", "l1\nL2\nL3\n", 2..3),
+            "l1\nl2\nL3\n"
+        );
+        // A removal elsewhere is left alone.
+        assert_eq!(
+            LineDiff::apply_lines("a\nb\nc\nd\ne\n", "a\nB\nc\ne\n", 1..2),
+            "a\nB\nc\nd\ne\n"
+        );
+        // A removal is taken when selected by its position.
+        assert_eq!(
+            LineDiff::apply_lines("a\nb\nc\nd\ne\n", "a\nB\nc\ne\n", 3..3),
+            "a\nb\nc\ne\n"
+        );
+        // The end of the file keeps its missing newline.
+        assert_eq!(LineDiff::apply_lines("a\nb", "a\nB", 1..2), "a\nB");
+        assert_eq!(LineDiff::apply_lines("a\n", "a\nb", 1..2), "a\nb");
+    }
 
     #[test]
     fn applying_lines_takes_only_the_touched_changes() {

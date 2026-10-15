@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+/// Writing the index must not be cut short: that would leave it locked.
+const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Checking out a whole working tree can take minutes on a large repository.
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -74,6 +77,14 @@ pub struct Base {
     /// As found, such as "develop" or "origin/develop".
     pub branch: String,
     pub commit: String,
+}
+
+/// One file's entry in the index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub mode: String,
+    pub id: String,
+    pub text: String,
 }
 
 /// The author of each line of a committed file.
@@ -511,41 +522,62 @@ impl Repo {
             .then(|| String::from_utf8_lossy(line(&output.stdout)).into_owned()))
     }
 
-    /// The staged version of a file and its mode, if the index has it.
-    pub fn staged_text(&self, path: &Path) -> Result<Option<(String, String)>> {
+    /// The staged version of a file, if the index has it. A file in the
+    /// middle of a merge conflict is refused: staging would resolve it.
+    pub fn staged_text(&self, path: &Path) -> Result<Option<IndexEntry>> {
         let relative = self.relative(path)?;
         let output = self.git(&["ls-files", "-z", "--stage", "--", &relative])?;
-        let Some(record) = fields(&output).next() else {
+        let mut entries = Vec::new();
+        for record in fields(&output) {
+            // "<mode> <id> <stage>\t<path>"
+            let tab = record
+                .iter()
+                .position(|&byte| byte == b'\t')
+                .context("Unexpected git ls-files output")?;
+            if record[tab + 1..] != *relative.as_bytes() {
+                continue;
+            }
+            let meta = String::from_utf8_lossy(&record[..tab]).into_owned();
+            let mut meta = meta.split(' ').map(str::to_owned);
+            let (Some(mode), Some(id), Some(stage)) = (meta.next(), meta.next(), meta.next())
+            else {
+                bail!("Unexpected git ls-files output");
+            };
+            entries.push((mode, id, stage));
+        }
+        let Some((mode, id, stage)) = entries.first().cloned() else {
             return Ok(None);
         };
-        let meta = String::from_utf8_lossy(record);
-        let mut meta = meta.split([' ', '\t']);
-        let (Some(mode), Some(id)) = (meta.next(), meta.next()) else {
-            bail!("Unexpected git ls-files output");
-        };
-        let text = files::decode_text(self.git(&["cat-file", "blob", id])?)?;
-        Ok(Some((mode.to_owned(), text)))
+        ensure!(
+            entries.len() == 1 && stage == "0",
+            "The file has a merge conflict; resolve it first"
+        );
+        let text = files::decode_text(self.git(&["cat-file", "blob", &id])?)?;
+        Ok(Some(IndexEntry { mode, id, text }))
     }
 
-    /// Stages `text` as the file's content, leaving the working tree alone.
-    /// Files that git transforms when staging (filters such as LFS, or
-    /// working-tree encodings) are refused: their staged form is not the text.
-    pub fn stage_text(&self, path: &Path, mode: &str, text: &str) -> Result<()> {
+    /// Stages `text` as the file's content in place of `was`, leaving the
+    /// working tree alone. Files that git transforms when staging (filters
+    /// such as LFS, `ident`, working-tree encodings) are refused: their staged
+    /// form is not the text.
+    pub fn stage_text(&self, path: &Path, was: &IndexEntry, text: &str) -> Result<()> {
         let relative = self.relative(path)?;
         ensure!(
-            matches!(mode, "100644" | "100755"),
+            matches!(was.mode.as_str(), "100644" | "100755"),
             "Only regular files can be staged here"
         );
         let attributes = self.git(&[
             "check-attr",
             "filter",
+            "ident",
             "working-tree-encoding",
             "--",
             &relative,
         ])?;
-        let transformed = String::from_utf8_lossy(&attributes)
-            .lines()
-            .any(|line| !line.ends_with(": unspecified"));
+        let transformed = String::from_utf8_lossy(&attributes).lines().any(|line| {
+            let value = line.rsplit(": ").next().unwrap_or_default();
+            !matches!(value, "unspecified" | "unset")
+        });
         ensure!(
             !transformed,
             "Git transforms this file when staging; stage it from the terminal"
@@ -558,8 +590,28 @@ impl Repo {
             Some(text.as_bytes().to_vec()),
         )?)?;
         let id = String::from_utf8_lossy(line(&id)).into_owned();
-        let entry = format!("{mode},{id},{relative}");
-        self.git(&["update-index", "--cacheinfo", &entry])?;
+        // Someone may have staged the file meanwhile; do not overwrite that.
+        let now = self.staged_text(path)?;
+        ensure!(
+            now.as_ref().is_some_and(|now| now.id == was.id),
+            "The file was staged meanwhile; try again"
+        );
+        let entry = format!("{},{id},{relative}", was.mode);
+        // Killing git mid-write would leave index.lock behind, so it gets time.
+        let updated = run_for(
+            command(&self.root, &["update-index", "--cacheinfo", &entry]),
+            None,
+            INDEX_TIMEOUT,
+            "git",
+        )?;
+        if !updated.status.success() {
+            let error = String::from_utf8_lossy(&updated.stderr);
+            ensure!(
+                !error.contains("index.lock"),
+                "Another git command is using the index; try again when it finishes"
+            );
+            bail!("git: {}", error.trim());
+        }
         Ok(())
     }
 
@@ -828,6 +880,8 @@ fn command(directory: &Path, args: &[&str]) -> Command {
             "protocol.allow=never",
         ])
         .env("GIT_NO_LAZY_FETCH", "1")
+        // Paths are file names, never patterns: `[id].tsx` is not a glob.
+        .env("GIT_LITERAL_PATHSPECS", "1")
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -1234,27 +1288,62 @@ mod tests {
     fn staging_text_changes_only_the_index() {
         let (_dir, root) = init();
         write(&root, "a.txt", "one\ntwo\n");
+        write(&root, "a1.txt", "other\n");
+        write(&root, "a[1].txt", "literal\n");
         commit(&root, "base");
         write(&root, "a.txt", "one\nTWO\nthree\n");
         let repo = open(&root);
         let path = root.join("a.txt");
-        let (mode, text) = repo.staged_text(&path).unwrap().unwrap();
-        assert_eq!((mode.as_str(), text.as_str()), ("100644", "one\ntwo\n"));
-        repo.stage_text(&path, &mode, "one\nTWO\n").unwrap();
-        assert_eq!(repo.staged_text(&path).unwrap().unwrap().1, "one\nTWO\n");
+        let entry = repo.staged_text(&path).unwrap().unwrap();
+        assert_eq!(
+            (entry.mode.as_str(), entry.text.as_str()),
+            ("100644", "one\ntwo\n")
+        );
+        repo.stage_text(&path, &entry, "one\nTWO\n").unwrap();
+        assert_eq!(repo.staged_text(&path).unwrap().unwrap().text, "one\nTWO\n");
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "one\nTWO\nthree\n",
             "the working tree is untouched"
         );
+        // The entry is stale now, so staging over it is refused.
+        assert!(repo.stage_text(&path, &entry, "x\n").is_err());
         assert_eq!(repo.staged_text(&root.join("new.txt")).unwrap(), None);
+        // Brackets are part of the name, not a pattern.
+        let literal = repo.staged_text(&root.join("a[1].txt")).unwrap().unwrap();
+        assert_eq!(literal.text, "literal\n");
         write(&root, ".gitattributes", "*.lfs filter=lfs\n");
         write(&root, "b.lfs", "x\n");
         run(&root, &["add", "b.lfs", ".gitattributes"]);
-        assert!(
-            repo.stage_text(&root.join("b.lfs"), "100644", "y\n")
-                .is_err()
-        );
+        let lfs = repo.staged_text(&root.join("b.lfs")).unwrap().unwrap();
+        assert!(repo.stage_text(&root.join("b.lfs"), &lfs, "y\n").is_err());
+    }
+
+    #[test]
+    fn staging_refuses_a_conflicted_file() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "base\n");
+        commit(&root, "base");
+        run(&root, &["checkout", "-q", "-b", "other"]);
+        write(&root, "a.txt", "theirs\n");
+        commit(&root, "theirs");
+        run(&root, &["checkout", "-q", "main"]);
+        write(&root, "a.txt", "ours\n");
+        commit(&root, "ours");
+        let merge = git(
+            &root,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@t",
+                "merge",
+                "other",
+            ],
+        )
+        .unwrap();
+        assert!(!merge.status.success());
+        assert!(open(&root).staged_text(&root.join("a.txt")).is_err());
     }
 
     #[test]
