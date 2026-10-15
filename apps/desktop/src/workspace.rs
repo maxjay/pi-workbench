@@ -140,6 +140,7 @@ pub struct Workbench {
     terminal: RwSignal<Option<Rc<crate::terminal::Terminal>>>,
     terminal_visible: RwSignal<bool>,
     terminal_focused: RwSignal<bool>,
+    terminal_failed: std::cell::Cell<bool>,
     /// Each pane's cursor line, kept by the pane for change navigation.
     cursor_line: [RwSignal<usize>; 2],
     cursor_col: [RwSignal<usize>; 2],
@@ -218,6 +219,7 @@ impl Workbench {
             terminal: RwSignal::new(None),
             terminal_visible: RwSignal::new(false),
             terminal_focused: RwSignal::new(false),
+            terminal_failed: std::cell::Cell::new(false),
             cursor_line: [RwSignal::new(0), RwSignal::new(0)],
             cursor_col: [RwSignal::new(0), RwSignal::new(0)],
             jump: RwSignal::new(None),
@@ -429,8 +431,13 @@ impl Workbench {
     pub fn toggle_terminal(&self) {
         let shown = !self.terminal_visible.get_untracked();
         self.terminal_visible.set(shown);
-        if !shown {
+        if shown {
+            // A shell that failed to start gets another try each opening.
+            self.terminal_failed.set(false);
+        } else if self.terminal_focused.get_untracked() {
+            // Typing must not go on into a shell nobody can see.
             self.set_terminal_focused(false);
+            floem::action::clear_focus();
         }
     }
 
@@ -440,9 +447,15 @@ impl Workbench {
             terminal.resize(columns, lines);
             return;
         }
+        if self.terminal_failed.get() {
+            return;
+        }
         match crate::terminal::Terminal::start(self.scope, &self.root, columns, lines) {
             Ok(terminal) => self.terminal.set(Some(terminal)),
-            Err(err) => self.status.set(format!("Terminal: {err:#}")),
+            Err(err) => {
+                self.terminal_failed.set(true);
+                self.status.set(format!("Terminal: {err:#}"));
+            }
         }
     }
 

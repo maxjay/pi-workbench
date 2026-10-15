@@ -73,7 +73,10 @@ impl Dimensions for Size {
 /// A run of cells drawn the same way.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
+    /// Bytes of the row's text.
     pub range: Range<usize>,
+    /// Screen cells, which differ from characters for wide ones.
+    pub columns: Range<usize>,
     pub color: Color,
     pub background: Option<Color>,
     pub bold: bool,
@@ -129,7 +132,7 @@ impl Terminal {
             columns: columns.max(2),
             lines: lines.max(1),
         };
-        let trigger = ExtSendTrigger::new();
+        let trigger = scope.enter(ExtSendTrigger::new);
         let listener = Listener {
             trigger,
             pending: Arc::default(),
@@ -303,8 +306,15 @@ fn snapshot(term: &Term<Listener>) -> Screen {
         };
         let start = row.text.len();
         row.text.push(ch);
+        let column = indexed.point.column.0;
+        let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        };
         let span = Span {
             range: start..row.text.len(),
+            columns: column..column + width,
             color: fg,
             background: bg,
             bold: cell.flags.contains(Flags::BOLD),
@@ -329,15 +339,28 @@ fn snapshot(term: &Term<Listener>) -> Screen {
                     ) =>
             {
                 last.range.end = span.range.end;
+                last.columns.end = span.columns.end;
             }
             _ => row.spans.push(span),
         }
     }
     for row in &mut rows {
-        let trimmed = row.text.trim_end().len();
+        // Trailing blanks go, unless they are coloured, as status bars are.
+        let keep = row
+            .spans
+            .iter()
+            .filter(|span| span.background.is_some())
+            .map(|span| span.range.end)
+            .max()
+            .unwrap_or(0);
+        let trimmed = row.text.trim_end().len().max(keep);
         row.text.truncate(trimmed);
         row.spans.retain_mut(|span| {
-            span.range.end = span.range.end.min(trimmed);
+            if span.range.end > trimmed {
+                let cut = span.range.end - trimmed;
+                span.range.end = trimmed;
+                span.columns.end = span.columns.end.saturating_sub(cut);
+            }
             span.range.start < span.range.end
         });
     }
@@ -495,7 +518,7 @@ pub fn key_bytes(key: &Key, modifiers: Modifiers, app_cursor: bool) -> Option<Ve
                     '\\' | '4' => '\x1c',
                     ']' | '5' => '\x1d',
                     '^' | '6' => '\x1e',
-                    '_' | '-' | '7' => '\x1f',
+                    '_' | '-' | '/' | '7' => '\x1f',
                     '?' | '8' => '\x7f',
                     _ => return None,
                 };
@@ -506,8 +529,9 @@ pub fn key_bytes(key: &Key, modifiers: Modifiers, app_cursor: bool) -> Option<Ve
         }
     };
     let mut bytes = Vec::new();
-    // Alt sends Escape first, as xterm's metaSendsEscape does.
-    if alt && matches!(key, Key::Character(_)) {
+    // Alt sends Escape first, as xterm's metaSendsEscape does; arrows and
+    // the like carry it in their own modifier parameter instead.
+    if alt && !text.starts_with('\x1b') {
         bytes.push(0x1b);
     }
     bytes.extend(text.into_bytes());
@@ -537,6 +561,15 @@ mod tests {
             b"\x1b[1;5D"
         );
         assert_eq!(bytes(Key::Named(NamedKey::Backspace), none, false), b"\x7f");
+        assert_eq!(
+            bytes(Key::Named(NamedKey::Backspace), Modifiers::ALT, false),
+            b"\x1b\x7f"
+        );
+        assert_eq!(
+            bytes(Key::Named(NamedKey::ArrowUp), Modifiers::ALT, false),
+            b"\x1b[1;3A"
+        );
+        assert_eq!(bytes(Key::Character("/".into()), ctrl, false), [0x1f]);
         assert_eq!(key_bytes(&Key::Named(NamedKey::Shift), none, false), None);
     }
 

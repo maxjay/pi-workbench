@@ -42,7 +42,7 @@ impl Default for Launch {
 }
 
 impl Launch {
-    /// `PI_WORKBENCH_PI` overrides the program; `PI_WORKBENCH_PI_ARGS` adds
+    /// `PI_WORKBENCH_PI` overrides the program; `PI_WORKBENCH_PI_ARGS` sets the
     /// whitespace-separated arguments, such as `--provider x --model y`.
     pub fn from_env() -> Self {
         Self::from_settings(None, &[])

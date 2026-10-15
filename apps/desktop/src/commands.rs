@@ -127,6 +127,38 @@ const fn alt(key: &'static str) -> Option<Shortcut> {
     })
 }
 
+fn named_key(key: &str) -> Option<NamedKey> {
+    Some(match key {
+        "tab" => NamedKey::Tab,
+        "down" => NamedKey::ArrowDown,
+        "up" => NamedKey::ArrowUp,
+        "left" => NamedKey::ArrowLeft,
+        "right" => NamedKey::ArrowRight,
+        "enter" => NamedKey::Enter,
+        "escape" | "esc" => NamedKey::Escape,
+        "delete" | "del" => NamedKey::Delete,
+        "backspace" => NamedKey::Backspace,
+        "insert" => NamedKey::Insert,
+        "home" => NamedKey::Home,
+        "end" => NamedKey::End,
+        "pageup" => NamedKey::PageUp,
+        "pagedown" => NamedKey::PageDown,
+        "f1" => NamedKey::F1,
+        "f2" => NamedKey::F2,
+        "f3" => NamedKey::F3,
+        "f4" => NamedKey::F4,
+        "f5" => NamedKey::F5,
+        "f6" => NamedKey::F6,
+        "f7" => NamedKey::F7,
+        "f8" => NamedKey::F8,
+        "f9" => NamedKey::F9,
+        "f10" => NamedKey::F10,
+        "f11" => NamedKey::F11,
+        "f12" => NamedKey::F12,
+        _ => return None,
+    })
+}
+
 /// The settings file's name for a command, such as "QuickOpen" or "Session(2)".
 fn setting_name(command: Command) -> String {
     format!("{command:?}")
@@ -137,7 +169,15 @@ fn setting_name(command: Command) -> String {
 fn configured(text: &str) -> Option<Shortcut> {
     use std::{collections::HashSet, sync::Mutex};
     static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
-    let keys = workbench_core::settings::parse_keys(text)?;
+    let mut keys = workbench_core::settings::parse_keys(text)?;
+    if keys.key == "space" {
+        keys.key = " ".into();
+    }
+    // A key must be one character or a key name this app knows.
+    let named = named_key(&keys.key).is_some();
+    if !named && keys.key.chars().count() != 1 {
+        return None;
+    }
     let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
     let names = names.get_or_insert_with(HashSet::new);
     let key = match names.get(keys.key.as_str()) {
@@ -221,9 +261,11 @@ impl Command {
         self.shortcut_in(&crate::settings::get().keys)
     }
 
+    /// `""` removes the shortcut; one that cannot be read keeps the default.
     fn shortcut_in(self, keys: &std::collections::BTreeMap<String, String>) -> Option<Shortcut> {
         match keys.get(&setting_name(self)) {
-            Some(text) => configured(text),
+            Some(text) if text.trim().is_empty() => None,
+            Some(text) => configured(text).or(self.details().1),
             None => self.details().1,
         }
     }
@@ -310,31 +352,7 @@ impl Shortcut {
     }
 
     fn named(self) -> Option<NamedKey> {
-        Some(match self.key {
-            "tab" => NamedKey::Tab,
-            "down" => NamedKey::ArrowDown,
-            "up" => NamedKey::ArrowUp,
-            "left" => NamedKey::ArrowLeft,
-            "right" => NamedKey::ArrowRight,
-            "enter" => NamedKey::Enter,
-            "home" => NamedKey::Home,
-            "end" => NamedKey::End,
-            "pageup" => NamedKey::PageUp,
-            "pagedown" => NamedKey::PageDown,
-            "f1" => NamedKey::F1,
-            "f2" => NamedKey::F2,
-            "f3" => NamedKey::F3,
-            "f4" => NamedKey::F4,
-            "f5" => NamedKey::F5,
-            "f6" => NamedKey::F6,
-            "f7" => NamedKey::F7,
-            "f8" => NamedKey::F8,
-            "f9" => NamedKey::F9,
-            "f10" => NamedKey::F10,
-            "f11" => NamedKey::F11,
-            "f12" => NamedKey::F12,
-            _ => return None,
-        })
+        named_key(self.key)
     }
 
     fn matches(self, key: &Key, modifiers: Modifiers) -> bool {
@@ -380,18 +398,65 @@ impl Shortcut {
     }
 }
 
+/// Shortcuts from the settings file win over built-in ones they collide with.
 pub fn for_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
     let settings = crate::settings::get();
-    COMMANDS.iter().copied().find(|command| {
+    let overridden = |command: &Command| settings.keys.contains_key(&setting_name(*command));
+    let matching = |command: &Command| {
         command
             .shortcut_in(&settings.keys)
             .is_some_and(|binding| binding.matches(key, modifiers))
-    })
+    };
+    let commands = || COMMANDS.iter().copied();
+    commands()
+        .filter(overridden)
+        .find(matching)
+        .or_else(|| commands().filter(|c| !overridden(c)).find(matching))
+}
+
+/// Problems with the settings file's shortcuts, to report rather than ignore.
+pub fn check_keys(keys: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    let problems: Vec<String> = keys
+        .iter()
+        .filter_map(|(name, text)| {
+            let known = COMMANDS.iter().any(|c| setting_name(*c) == *name);
+            if !known {
+                Some(format!("no command named {name:?}"))
+            } else if !text.trim().is_empty() && configured(text).is_none() {
+                Some(format!("cannot read the shortcut {text:?} for {name}"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    (!problems.is_empty()).then(|| problems.join("; "))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_shortcuts_win_and_bad_ones_are_reported() {
+        use std::collections::BTreeMap;
+        let keys = BTreeMap::from([
+            ("Terminal".to_owned(), "ctrl+j".to_owned()),
+            ("QuickOpen".to_owned(), "ctr+o".to_owned()),
+            ("Nope".to_owned(), "ctrl+k".to_owned()),
+            ("Save".to_owned(), String::new()),
+        ]);
+        assert_eq!(Command::QuickOpen.shortcut_in(&keys), ctrl("p"));
+        assert_eq!(Command::Save.shortcut_in(&keys), None);
+        assert_eq!(
+            Command::Terminal.shortcut_in(&keys).map(Shortcut::label),
+            Some("Ctrl/Cmd+J".to_owned())
+        );
+        let report = check_keys(&keys).unwrap();
+        assert!(report.contains("\"Nope\"") && report.contains("ctr+o"));
+        assert!(!report.contains("Save"));
+        assert!(configured("ctrl+space").is_some() && configured("alt+esc").is_some());
+        assert!(configured("ctrl+banana").is_none());
+    }
 
     #[test]
     fn shortcuts_use_the_registry_and_reject_extra_modifiers() {

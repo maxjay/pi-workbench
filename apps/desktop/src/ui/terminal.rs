@@ -72,12 +72,10 @@ fn backgrounds(screen: &Screen, font: &Font) -> Vec<(f64, f64, f64, Color)> {
             let Some(color) = span.background else {
                 continue;
             };
-            let start = row.text[..span.range.start].chars().count();
-            let count = row.text[span.range.clone()].chars().count();
             boxes.push((
-                start as f64 * font.cell_width,
+                span.columns.start as f64 * font.cell_width,
                 line as f64 * font.line_height,
-                count as f64 * font.cell_width,
+                span.columns.len() as f64 * font.cell_width,
                 color,
             ));
         }
@@ -175,9 +173,16 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
     // Starts the shell, and keeps its size in step with the panel.
     let size_state = state.clone();
     let resize = move || {
-        let Some(size) = body_id.get_size() else {
+        // Hidden, the panel has no size; the shell keeps its last one.
+        let Some(size) = body_id
+            .get_size()
+            .filter(|s| s.width > 0.0 && s.height > 0.0)
+        else {
             return;
         };
+        if !size_state.terminal_visible().get_untracked() {
+            return;
+        }
         let columns = ((size.width - 2.0 * PADDING) / cell_width).floor().max(2.0) as usize;
         let lines = ((size.height - 2.0 * PADDING) / line_height)
             .floor()
@@ -223,6 +228,13 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             EventPropagation::Stop
         })
         .on_event(el::KeyDown, move |cx, event| {
+            // Floem also offers unhandled shortcut keys to every view that
+            // listens, focused or not; only a focused, visible shell takes them.
+            if !key_state.terminal_visible().get_untracked()
+                || !key_state.terminal_focused().get_untracked()
+            {
+                return EventPropagation::Continue;
+            }
             let Some(terminal) = key_state.terminal().get_untracked() else {
                 return EventPropagation::Continue;
             };
@@ -234,12 +246,17 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             }
             let ctrl_shift = Modifiers::CONTROL | Modifiers::SHIFT;
             if event.modifiers.contains(ctrl_shift)
-                && matches!(&event.key, Key::Character(c) if c.eq_ignore_ascii_case("v"))
+                && let Key::Character(c) = &event.key
             {
-                if let Ok(text) = floem::Clipboard::get_contents() {
+                if c.eq_ignore_ascii_case("v")
+                    && let Ok(text) = floem::Clipboard::get_contents()
+                {
                     terminal.paste(&text);
                 }
-                return EventPropagation::Stop;
+                // Ctrl+Shift+C is copy in terminals, never an interrupt.
+                if c.eq_ignore_ascii_case("v") || c.eq_ignore_ascii_case("c") {
+                    return EventPropagation::Stop;
+                }
             }
             match key_bytes(&event.key, event.modifiers, terminal.app_cursor()) {
                 Some(bytes) => {

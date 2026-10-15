@@ -21,7 +21,7 @@ fn modified() -> Option<SystemTime> {
 }
 
 /// The settings, re-read if the file changed since last time. A broken file
-/// keeps the last good settings, and the error is returned once.
+/// keeps the last good settings, and its error is returned until it changes.
 pub fn current() -> (Arc<Settings>, Option<String>) {
     // Tests use the defaults, not whatever file the machine has.
     if cfg!(test) {
@@ -34,9 +34,10 @@ pub fn current() -> (Arc<Settings>, Option<String>) {
         let previous = current.as_ref().map(|l| l.settings.clone());
         *current = Some(match settings::load() {
             Ok(settings) => Loaded {
+                error: crate::commands::check_keys(&settings.keys)
+                    .map(|e| format!("Settings: {e}")),
                 settings: Arc::new(settings),
                 modified: stamp,
-                error: None,
             },
             Err(err) => Loaded {
                 settings: previous.unwrap_or_default(),
@@ -45,8 +46,17 @@ pub fn current() -> (Arc<Settings>, Option<String>) {
             },
         });
     }
-    let loaded = current.as_mut().expect("loaded above");
-    (loaded.settings.clone(), loaded.error.take())
+    // The error stays until the file changes, so every window can report it.
+    let loaded = current.as_ref().expect("loaded above");
+    (loaded.settings.clone(), loaded.error.clone())
+}
+
+/// Whether `path` is the settings file, in the canonical form opened paths have.
+pub fn is_file(path: &std::path::Path) -> bool {
+    settings::path()
+        .ok()
+        .map(|p| p.canonicalize().unwrap_or(p))
+        .is_some_and(|p| p == path)
 }
 
 pub fn get() -> Arc<Settings> {

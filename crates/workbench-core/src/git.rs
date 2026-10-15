@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+/// Checking out a whole working tree can take minutes on a large repository.
+const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// A hung git (a lock, a network filesystem) must not leave the view loading forever.
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -156,7 +159,11 @@ impl Repo {
         match preferred.map(str::trim).filter(|b| !b.is_empty()) {
             Some(branch) => {
                 ensure!(!branch.starts_with('-'), "Invalid branch name {branch:?}");
-                self.merge_base(branch)
+                // A misspelt setting falls back to the usual branches.
+                match self.merge_base(branch)? {
+                    Some(base) => Ok(Some(base)),
+                    None => self.default_base(),
+                }
             }
             None => self.default_base(),
         }
@@ -399,11 +406,45 @@ impl Repo {
             !branch.starts_with('-') && !branch.is_empty(),
             "Invalid branch name {branch:?}"
         );
+        // A checkout runs the content filters a repository's own config
+        // names; filters from the user's global config are theirs to trust.
+        let local = git(
+            &self.root,
+            &[
+                "config",
+                "--local",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\.",
+            ],
+        )?;
+        ensure!(
+            local.stdout.trim_ascii().is_empty(),
+            "This repository's own config defines content filters; create the worktree from a terminal"
+        );
         let target = plain_path(path);
         let target = target
             .to_str()
             .context("Worktree path is not valid UTF-8")?;
-        self.git(&["worktree", "add", "-q", "-b", branch, "--", target, "HEAD"])?;
+        // A large checkout takes far longer than a query.
+        let added = run_for(
+            command(
+                &self.root,
+                &["worktree", "add", "-q", "-b", branch, "--", target, "HEAD"],
+            ),
+            None,
+            WORKTREE_TIMEOUT,
+            "git",
+        )
+        .and_then(succeeded);
+        if let Err(err) = added {
+            // Leave nothing half made behind.
+            let _ = git(&self.root, &["worktree", "remove", "--force", "--", target]);
+            let _ = git(&self.root, &["worktree", "prune"]);
+            let _ = git(&self.root, &["branch", "-D", "--", branch]);
+            let _ = fs::remove_dir_all(path);
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -1131,6 +1172,10 @@ mod tests {
             repo.add_worktree(&elsewhere.path().join("x"), "-x")
                 .is_err()
         );
+        run(&root, &["config", "filter.evil.smudge", "evil"]);
+        let refused = elsewhere.path().join("pi-3");
+        assert!(repo.add_worktree(&refused, "pi/3").is_err());
+        assert!(!refused.exists());
     }
 
     #[test]

@@ -356,6 +356,12 @@ impl Documents {
         let documents = self.clone();
         let finish = create_ext_action(self.scope, move |(snapshot, result)| {
             match doc.finish_save(snapshot, result) {
+                Ok(()) if crate::settings::is_file(&doc.path) => {
+                    status.set(match crate::settings::current().1 {
+                        Some(err) => err,
+                        None => "Saved settings; fonts and shortcuts apply to new windows".into(),
+                    })
+                }
                 Ok(()) => status.set(format!(
                     "Saved {}",
                     doc.path.strip_prefix(&root).unwrap_or(&doc.path).display()
