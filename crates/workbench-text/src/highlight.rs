@@ -132,19 +132,34 @@ impl Highlighter {
     /// One span list per editor line, so a trailing newline yields a final empty line.
     /// Lines that are too long, or that the grammar fails on, stay plain.
     pub fn highlight(&self, language: Language, text: &str) -> Vec<Vec<Span>> {
+        self.highlight_until(language, text, || false)
+            .unwrap_or_default()
+    }
+
+    /// Like [`Self::highlight`], but gives up with `None` once `stop` returns true;
+    /// it is checked every few lines.
+    pub fn highlight_until(
+        &self,
+        language: Language,
+        text: &str,
+        stop: impl Fn() -> bool,
+    ) -> Option<Vec<Vec<Span>>> {
         let lines: Vec<&str> = text
             .split('\n')
             .map(|line| line.strip_suffix('\r').unwrap_or(line))
             .collect();
         let mut spans = vec![Vec::new(); lines.len()];
         if text.len() > MAX_HIGHLIGHT_BYTES {
-            return spans;
+            return Some(spans);
         }
         let syntaxes = self.syntaxes();
         let mut state = ParseState::new(&syntaxes.syntaxes()[language.0]);
         let mut stack = ScopeStack::new();
         let mut buffer = String::new();
-        for (line, out) in lines.iter().zip(&mut spans) {
+        for (index, (line, out)) in lines.iter().zip(&mut spans).enumerate() {
+            if index % 64 == 0 && stop() {
+                return None;
+            }
             // Skipping keeps the parser's state, so a skipped line only loses its own colour.
             if line.len() > MAX_LINE_BYTES {
                 continue;
@@ -165,7 +180,7 @@ impl Highlighter {
             }
             self.push(out, start..line.len(), &stack);
         }
-        spans
+        Some(spans)
     }
 
     /// Adds a coloured range, merging it into the previous span when contiguous.
@@ -225,6 +240,20 @@ mod tests {
             .iter()
             .find(|span| span.start <= start && start + needle.len() <= span.end)
             .map_or(Token::Plain, |span| span.token)
+    }
+
+    #[test]
+    fn highlighting_stops_when_asked() {
+        let text = "fn a() {}\n".repeat(200);
+        assert!(
+            highlighter()
+                .highlight_until(rust(), &text, || true)
+                .is_none()
+        );
+        let full = highlighter()
+            .highlight_until(rust(), &text, || false)
+            .unwrap();
+        assert_eq!(full, highlighter().highlight(rust(), &text));
     }
 
     #[test]

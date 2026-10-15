@@ -5,7 +5,7 @@ use floem::{
     event::EventPropagation,
     ext_event::create_ext_action,
     prelude::*,
-    reactive::{Effect, Scope},
+    reactive::{Effect, Memo, Scope},
     style::CursorStyle,
     views::{PlaceholderTextClass, TextInput},
 };
@@ -72,26 +72,38 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
     let searched = RwSignal::new(String::new());
     let matcher = Rc::new(RefCell::new(FileMatcher::new()));
     let scope = Scope::current();
+    // Bumped on every opening and search, so late background results from an
+    // earlier one are dropped.
+    let generation = Rc::new(std::cell::Cell::new(0u64));
 
     // Opening lists files off the UI thread, so names are ready to match.
     let root = state.root().to_path_buf();
+    let open_generation = generation.clone();
     Effect::new(move |_| {
-        let Some(current) = mode.get() else { return };
+        let current = mode.get();
+        open_generation.set(open_generation.get() + 1);
         query.set(String::new());
         selected.set(0);
         hits.set(Vec::new());
+        files.set(Vec::new());
         searched.set(String::new());
         message.set(String::new());
-        if current == Finder::Files {
-            let finish = create_ext_action(scope, move |list| files.set(list));
+        if current == Some(Finder::Files) {
+            let (check, expected) = (open_generation.clone(), open_generation.get());
+            let finish = create_ext_action(scope, move |list| {
+                if check.get() == expected {
+                    files.set(list)
+                }
+            });
             let root = root.clone();
             std::thread::spawn(move || finish(list_files(&root, FILE_LIMIT)));
         }
     });
 
-    let items = {
+    // Ranked once per change, for both the list and the keys.
+    let items = Memo::new({
         let matcher = matcher.clone();
-        move || -> Vec<Item> {
+        move |_| -> Vec<Item> {
             match mode.get() {
                 Some(Finder::Files) => {
                     let text = query.get();
@@ -132,7 +144,7 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
                 None => Vec::new(),
             }
         }
-    };
+    });
 
     let choose: Rc<dyn Fn(Item)> = {
         let state = state.clone();
@@ -141,7 +153,8 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
             state.dismiss_finder();
             match item.line {
                 Some(line) => state.open_at(path, line),
-                None => state.open_at(path, 0),
+                // A file opened by name keeps where it was left.
+                None => state.open(path, state.focused().get_untracked()),
             }
         })
     };
@@ -155,10 +168,13 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
             }
             searched.set(text.clone());
             message.set("Searching…".into());
+            generation.set(generation.get() + 1);
+            let (check, expected) = (generation.clone(), generation.get());
             let finish =
                 create_ext_action(
                     scope,
                     move |result: anyhow::Result<Vec<Hit>>| match result {
+                        _ if check.get() != expected => {}
                         Ok(found) => {
                             message.set(match found.len() {
                                 0 => "No matches".into(),
@@ -207,11 +223,10 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
         selected.set(0);
     });
 
-    let keys_items = items.clone();
     let keys_choose = choose.clone();
     let list_choose = choose.clone();
     let list = dyn_stack(
-        move || items().into_iter().enumerate().collect::<Vec<_>>(),
+        move || items.get().into_iter().enumerate().collect::<Vec<_>>(),
         |(index, item)| (*index, item.clone()),
         move |(index, item)| row(item, index, selected, list_choose.clone()),
     )
@@ -252,7 +267,7 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
             .apply_if(mode.get().is_none(), |s| s.hide())
     })
     .on_event_with_config(el::KeyDown, CAPTURE, move |_, event| {
-        let count = keys_items().len();
+        let count = items.with_untracked(Vec::len);
         match &event.key {
             Key::Named(NamedKey::ArrowDown) => {
                 selected.update(|s| *s = (*s + 1).min(count.saturating_sub(1)));
@@ -266,7 +281,9 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
                 let stale = query.with_untracked(|q| searched.with_untracked(|s| q != s));
                 if mode.get_untracked() == Some(Finder::Search) && stale {
                     run_search();
-                } else if let Some(item) = keys_items().into_iter().nth(selected.get_untracked()) {
+                } else if let Some(item) =
+                    items.with_untracked(|items| items.get(selected.get_untracked()).cloned())
+                {
                     keys_choose(item);
                 }
                 EventPropagation::Stop

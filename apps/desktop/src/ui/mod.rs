@@ -388,6 +388,11 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             return EventPropagation::Continue;
         }
         if let Some(command) = commands::for_key(&event.key, event.modifiers) {
+            // While the finder has the keyboard, only finder keys apply.
+            let finding = keyboard_state.finder().get_untracked().is_some();
+            if finding && !matches!(command, Command::QuickOpen | Command::FindInFiles) {
+                return EventPropagation::Continue;
+            }
             commands::execute(&keyboard_state, command);
             cx.prevent_default();
             return EventPropagation::Stop;

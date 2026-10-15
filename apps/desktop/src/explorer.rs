@@ -67,7 +67,7 @@ impl Explorer {
         });
         std::thread::spawn(move || {
             // Hide what .gitignore and friends hide, as git and the lens do.
-            let visible = workbench_text::index::visible_children(&path);
+            let visible = workbench_text::index::visible_children(&root, &path);
             finish(
                 files::list_directory(&root, &path)
                     .map(|entries| {

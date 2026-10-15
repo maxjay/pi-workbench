@@ -13,7 +13,7 @@ use floem::{
     reactive::Effect,
     style::CursorStyle,
     views::editor::{
-        core::{cursor::CursorAffinity, selection::Selection},
+        core::{buffer::rope_text::RopeText, cursor::CursorAffinity, selection::Selection},
         text::Document,
         text_document::TextDocument,
     },
@@ -124,14 +124,18 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     let overlay = RwSignal::new(Rc::new(Overlay::default()));
     let empty = Rc::new(TextDocument::new(Scope::current(), ""));
     let held_document = std::cell::RefCell::new(None::<Rc<OpenDocument>>);
-    // Where each file was left in this pane: cursor offset and scroll position.
+    // Where each file was left in this pane: cursor line and character, and
+    // scroll position. Lines survive edits made meanwhile better than offsets.
     let positions =
-        std::cell::RefCell::new(std::collections::HashMap::<PathBuf, (usize, f64)>::new());
+        std::cell::RefCell::new(std::collections::HashMap::<PathBuf, (usize, usize, f64)>::new());
     let (bind_handle, bind_lens) = (handle.clone(), state.lens.clone());
     Effect::new(move |_| {
         let path = active.get();
         let documents = docs.get();
         Effect::untrack(|| {
+            positions
+                .borrow_mut()
+                .retain(|path, _| documents.iter().any(|doc| doc.path() == path));
             if let Some(doc) = documents
                 .iter()
                 .find(|doc| Some(doc.path()) == path.as_ref())
@@ -143,20 +147,21 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                 if changed {
                     if let Some(previous) = held_document.borrow().as_ref() {
                         let offset = bind_handle.cursor.with_untracked(|c| c.offset());
+                        let (line, column) = line_and_column(&previous.text().rope_text(), offset);
                         let top = bind_handle.viewport.get_untracked().y0;
                         positions
                             .borrow_mut()
-                            .insert(previous.path().clone(), (offset, top));
+                            .insert(previous.path().clone(), (line, column, top));
                     }
                     bind_lens.track(doc.path(), doc.text(), doc.revision());
-                    let (offset, top) = positions
+                    let (line, column, top) = positions
                         .borrow()
                         .get(doc.path())
                         .copied()
                         .unwrap_or_default();
                     let lensed = LensDocument::new(doc.text(), overlay);
                     bind_handle.update_doc(Rc::new(lensed), None);
-                    let offset = offset.min(doc.text().text().len());
+                    let offset = offset_of(&doc.text().rope_text(), line, column);
                     bind_handle.cursor.update(|cursor| {
                         cursor.set_insert(Selection::caret(offset, CursorAffinity::Forward))
                     });
@@ -218,9 +223,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     );
     Effect::new(move |_| {
         let offset = cursor_handle.cursor.with(|cursor| cursor.offset());
-        let line = cursor_handle.line_of_offset(offset);
+        let (line, column) = line_and_column(&cursor_handle.doc().rope_text(), offset);
         cursor_line.set(line);
-        cursor_col.set(offset - cursor_handle.offset_of_line(line));
+        cursor_col.set(column);
     });
     // Carry out jumps once the file is showing and its diff is ready.
     let (jump_handle, jump_state) = (handle.clone(), state.clone());
@@ -328,6 +333,28 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     .on_event_cont_with_config(el::PointerDown, CAPTURE, move |_, _| {
         focus_state.focus_pane(pane)
     })
+}
+
+/// The line of `offset` and its column in characters.
+fn line_and_column(text: &impl RopeText, offset: usize) -> (usize, usize) {
+    let offset = offset.min(text.len());
+    let line = text.line_of_offset(offset);
+    let start = text.offset_of_line(line);
+    (line, text.slice_to_cow(start..offset).chars().count())
+}
+
+/// The offset of a line and character column, clamped to the text and kept
+/// on a character boundary.
+fn offset_of(text: &impl RopeText, line: usize, column: usize) -> usize {
+    let line = line.min(text.last_line());
+    let start = text.offset_of_line(line);
+    let content = text.line_content(line);
+    let content = content.trim_end_matches(['\n', '\r']);
+    start
+        + content
+            .char_indices()
+            .nth(column)
+            .map_or(content.len(), |(index, _)| index)
 }
 
 /// Floats over the change under the cursor with what can be done to it.

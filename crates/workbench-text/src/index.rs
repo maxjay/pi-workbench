@@ -10,38 +10,56 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Respects ignore files and shows hidden files, but never enters generated directories.
-fn builder(root: &Path) -> WalkBuilder {
+/// Respects ignore files and shows hidden files, but never enters generated
+/// directories. `enter` can narrow the walk further.
+fn builder(
+    root: &Path,
+    enter: impl Fn(&ignore::DirEntry) -> bool + Send + Sync + 'static,
+) -> WalkBuilder {
+    // Inside a repository git's rules apply, up to its root and no further.
+    // Outside one, a stray ignore file in a parent folder (such as a home
+    // directory ignoring everything) must not hide the workspace, so only
+    // the workspace's own ignore files count.
+    let repository = root.ancestors().any(|dir| dir.join(".git").exists());
     let mut builder = WalkBuilder::new(root);
     builder
         .hidden(false)
-        // Ignore files apply even before `git init`.
-        .require_git(false)
+        .require_git(repository)
+        .parents(repository)
         .sort_by_file_name(|a, b| a.cmp(b))
-        .filter_entry(|entry| {
-            !(entry.file_type().is_some_and(|ty| ty.is_dir())
+        .filter_entry(move |entry| {
+            let generated = entry.file_type().is_some_and(|ty| ty.is_dir())
                 && matches!(
                     entry.file_name().to_str(),
                     Some(".git" | "target" | "node_modules")
-                ))
+                );
+            !generated && enter(entry)
         });
     builder
 }
 
 pub(crate) fn walk(root: &Path) -> Walk {
-    builder(root).build()
+    builder(root, |_| true).build()
 }
 
-/// The direct children of `dir` that ignore files (including those in parent
-/// folders) leave visible, as full paths in the same form as `dir`.
-pub fn visible_children(dir: &Path) -> HashSet<PathBuf> {
-    builder(dir)
-        .max_depth(Some(1))
-        .build()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.depth() == 1)
-        .map(ignore::DirEntry::into_path)
-        .collect()
+/// The direct children of `dir`, a folder inside the workspace `root`, that
+/// ignore files leave visible, as full paths in the same form as `dir`.
+pub fn visible_children(root: &Path, dir: &Path) -> HashSet<PathBuf> {
+    let Ok(relative) = dir.strip_prefix(root) else {
+        return HashSet::new();
+    };
+    let depth = relative.components().count() + 1;
+    // Walk down from the root so every ignore file on the way applies.
+    let target = dir.to_path_buf();
+    builder(root, move |entry| {
+        target.starts_with(entry.path()) || entry.path().parent() == Some(&target)
+    })
+    .max_depth(Some(depth))
+    .build()
+    .filter_map(Result::ok)
+    .filter(|entry| entry.depth() == depth && entry.path().parent() == Some(dir))
+    .map(ignore::DirEntry::into_path)
+    .collect()
 }
 
 /// Files under `root`, relative to it and sorted. Walking stops after `limit` files.
@@ -135,12 +153,24 @@ build/
         std::fs::create_dir_all(root.join("src/build")).unwrap();
         std::fs::write(root.join("src/a.rs"), "").unwrap();
         std::fs::write(root.join("src/debug.log"), "").unwrap();
-        let visible = visible_children(&root.join("src"));
+        let visible = visible_children(root, &root.join("src"));
         assert!(visible.contains(&root.join("src/a.rs")));
         assert!(!visible.contains(&root.join("src/debug.log")));
         assert!(!visible.contains(&root.join("src/build")));
     }
     use std::fs;
+
+    #[test]
+    fn ignore_files_above_the_workspace_do_not_hide_it() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "*\n").unwrap();
+        let root = dir.path().join("project");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        assert_eq!(list_files(&root, 10), [Path::new("src").join("main.rs")]);
+        assert!(visible_children(&root, &root.join("src")).contains(&root.join("src/main.rs")));
+    }
 
     fn workspace() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

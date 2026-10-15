@@ -270,17 +270,21 @@ impl Styling for LensStyling {
         };
         // Spans come from an earlier snapshot; never let one run past the line.
         let length = self.text.rope_text().line_end_col(line, true);
+        // Floem styles the line with its phantom text already inserted, so
+        // spans move past a ghost placed before the line.
+        let shift = self.overlay.ghosts.get(&line).map_or(0, |g| g.len() + 1);
         for span in spans {
             let end = span.end.min(length);
             if span.start >= end {
                 continue;
             }
+            let (start, end) = (span.start + shift, end + shift);
             if let Some((color, italic)) = super::token_style(span.token) {
                 let mut style = default.clone().color(color);
                 if italic {
                     style = style.font_style(floem::text::FontStyle::Italic);
                 }
-                attrs.add_span(span.start..end, style);
+                attrs.add_span(start..end, style);
             }
         }
     }

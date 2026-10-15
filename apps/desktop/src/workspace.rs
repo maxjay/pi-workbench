@@ -318,6 +318,7 @@ impl Workbench {
             self.status.set(format!(
                 "Close a file before opening more ({MAX_OPEN_DOCUMENTS}-document limit)."
             ));
+            self.drop_jump(&path);
             return;
         }
         self.pending.borrow_mut().insert(path.clone());
@@ -333,6 +334,16 @@ impl Workbench {
                     .map_err(|e| e.to_string()),
             );
         });
+    }
+
+    /// A jump into a file that never opened must not fire later.
+    fn drop_jump(&self, path: &Path) {
+        if self
+            .jump
+            .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
+        {
+            self.jump.set(None);
+        }
     }
 
     fn finish_open(&self, path: PathBuf, result: Result<String, String>) {
@@ -354,13 +365,7 @@ impl Workbench {
                 self.status.set("Ready".into());
             }
             Err(err) => {
-                // A jump into a file that never opened must not fire later.
-                if self
-                    .jump
-                    .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
-                {
-                    self.jump.set(None);
-                }
+                self.drop_jump(&path);
                 self.status.set(err)
             }
         }
