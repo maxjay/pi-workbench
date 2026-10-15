@@ -8,10 +8,7 @@ use floem::{
     prelude::*,
     reactive::Effect,
     style::CursorStyle,
-    views::editor::{
-        text::{SimpleStyling, default_dark_color},
-        text_document::TextDocument,
-    },
+    views::editor::{text::default_dark_color, text_document::TextDocument},
 };
 use std::rc::Rc;
 
@@ -85,11 +82,25 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     });
 
     let editor = text_editor("")
-        .styling(SimpleStyling::new())
+        .styling(super::code_styling())
         .editor_style(default_dark_color)
         .editor_style(|s| s.scroll_beyond_last_line(false))
         .style(|s| s.size_full().min_width(0).min_height(0));
     let handle = editor.editor().clone();
+    let styled = editor.editor().clone();
+    // Lines Pi just changed stay highlighted until the next edit.
+    Effect::new(move |_| {
+        let path = active.get();
+        let incoming = docs.with(|docs| {
+            docs.iter()
+                .find(|doc| Some(doc.path()) == path.as_ref())
+                .and_then(|doc| doc.incoming().get())
+        });
+        styled.update_styling(match incoming {
+            Some(diff) => super::diff::incoming_styling(diff),
+            None => Rc::new(super::code_styling()),
+        });
+    });
     let empty = Rc::new(TextDocument::new(Scope::current(), ""));
     let held_document = std::cell::RefCell::new(None::<Rc<OpenDocument>>);
     Effect::new(move |_| {
@@ -162,7 +173,10 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     ))
     .style(move |s| {
         let config = layout.get();
-        let weight = if pane == Pane::Primary {
+        // Flex weights below 1 leave space unused, so a lone pane takes it all.
+        let weight = if !config.split {
+            1.0
+        } else if pane == Pane::Primary {
             config.split_fraction
         } else {
             1.0 - config.split_fraction

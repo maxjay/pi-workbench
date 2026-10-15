@@ -4,5 +4,6 @@ pub mod baseline;
 pub mod diff;
 pub mod files;
 pub mod layout;
+pub mod merge;
 
 pub const MAX_OPEN_DOCUMENTS: usize = 64;

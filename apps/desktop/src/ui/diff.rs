@@ -4,6 +4,7 @@ use crate::{
     changes::{Comparison, summary},
     workspace::Workbench,
 };
+use floem::text::FamilyOwned;
 use floem::{
     kurbo::Vec2,
     prelude::*,
@@ -14,12 +15,13 @@ use floem::{
             EditorStyle,
             id::EditorId,
             layout::{LineExtraStyle, TextLayoutLine},
-            text::{Styling, WrapMethod, default_dark_color},
+            text::{SimpleStyling, Styling, WrapMethod, default_dark_color},
             text_document::TextDocument,
         },
     },
 };
 use std::{
+    borrow::Cow,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -34,6 +36,7 @@ enum Side {
 /// Default editor styling plus diff line backgrounds.
 struct DiffStyling {
     id: u64,
+    code: SimpleStyling,
     diff: Rc<LineDiff>,
     side: Side,
 }
@@ -44,6 +47,7 @@ impl DiffStyling {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            code: super::code_styling(),
             diff,
             side,
         }
@@ -53,6 +57,18 @@ impl DiffStyling {
 impl Styling for DiffStyling {
     fn id(&self) -> u64 {
         self.id
+    }
+
+    fn font_family(&self, edid: EditorId, line: usize) -> Cow<'_, [FamilyOwned]> {
+        self.code.font_family(edid, line)
+    }
+
+    fn font_size(&self, edid: EditorId, line: usize) -> usize {
+        self.code.font_size(edid, line)
+    }
+
+    fn line_height(&self, edid: EditorId, line: usize) -> f32 {
+        self.code.line_height(edid, line)
     }
 
     fn apply_layout_styles(
@@ -81,6 +97,11 @@ impl Styling for DiffStyling {
             wave_line: None,
         });
     }
+}
+
+/// Highlights lines added by an outside change in a normal editor pane.
+pub(super) fn incoming_styling(diff: Rc<LineDiff>) -> Rc<dyn Styling> {
+    Rc::new(DiffStyling::new(diff, Side::Current))
 }
 
 fn side_editor(doc: Rc<TextDocument>, diff: ReadSignal<Rc<LineDiff>>, side: Side) -> TextEditor {
