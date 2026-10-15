@@ -1,6 +1,6 @@
 //! The user's settings file. Every field is optional; a missing or broken
 //! file means the defaults, and the error is reported rather than fatal.
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use std::{collections::BTreeMap, fs, io::ErrorKind, path::PathBuf};
 
@@ -98,45 +98,135 @@ pub fn set_string(key: &str, value: &str) -> Result<()> {
 }
 
 fn with_string(text: &str, key: &str, value: &str) -> Result<String> {
-    let entry = format!("\"{key}\": {}", serde_json::to_string(value)?);
-    let quoted = format!("\"{key}\"");
-    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    let existing = lines.iter().position(|line| {
-        let code = strip_comments(line);
-        let code = code.trim_start();
-        code.starts_with(&quoted) && code[quoted.len()..].trim_start().starts_with(':')
-    });
-    match existing {
-        Some(index) => {
-            let line = &lines[index];
-            let indent = &line[..line.len() - line.trim_start().len()];
-            let comma = if strip_comments(line).trim_end().ends_with(',') {
-                ","
-            } else {
-                ""
-            };
-            lines[index] = format!("{indent}{entry}{comma}");
-        }
+    let encoded = serde_json::to_string(value)?;
+    let before = parse(text).context("The settings file does not parse")?;
+    let (open, members) = members(text).context("The settings file is not a JSON object")?;
+    let changed = match members.iter().find(|(name, _)| name == key) {
+        // Only the value changes: comments, other settings on the line and
+        // line endings stay as they are.
+        Some((_, range)) => format!("{}{encoded}{}", &text[..range.start], &text[range.end..]),
         None => {
-            let open = lines
-                .iter()
-                .position(|line| strip_comments(line).trim() == "{")
-                .context("The settings file does not start with {")?;
-            // The next setting needs a comma after this one, unless there is none.
-            let empty = lines[open + 1..]
-                .iter()
-                .all(|line| matches!(strip_comments(line).trim(), "" | "}"));
-            let comma = if empty { "" } else { "," };
-            lines.insert(open + 1, format!("  {entry}{comma}"));
+            let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+            let comma = if members.is_empty() { "" } else { "," };
+            let entry = format!("{newline}  \"{key}\": {encoded}{comma}");
+            format!("{}{entry}{}", &text[..open], &text[open..])
+        }
+    };
+    // Nothing else may change meaning.
+    let after = parse(&changed).context("The settings file would not parse after the change")?;
+    if key == "theme" {
+        let mut expected = before;
+        expected.theme = Some(value.to_owned());
+        ensure!(
+            after == expected,
+            "Changing {key} would change other settings"
+        );
+    }
+    Ok(changed)
+}
+
+/// A setting's name and where its value is in the file.
+type Member = (String, std::ops::Range<usize>);
+
+/// The top-level members of a JSON object with `//` comments: where to
+/// insert after its opening brace, and each member's name and value span.
+fn members(text: &str) -> Option<(usize, Vec<Member>)> {
+    let bytes = text.as_bytes();
+    let skip = |mut i: usize| {
+        loop {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if bytes[i..].starts_with(b"//") {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            } else {
+                return i;
+            }
+        }
+    };
+    // The end of the string starting at `i`, just past its closing quote.
+    let string_end = |mut i: usize| {
+        i += 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => i += 2,
+                b'"' => return Some(i + 1),
+                _ => i += 1,
+            }
+        }
+        None
+    };
+    let value_end = |mut i: usize| -> Option<usize> {
+        match bytes.get(i)? {
+            b'"' => string_end(i),
+            b'{' | b'[' => {
+                let mut depth = 0usize;
+                while i < bytes.len() {
+                    match bytes[i] {
+                        b'"' => {
+                            i = string_end(i)?;
+                            continue;
+                        }
+                        b'{' | b'[' => depth += 1,
+                        b'}' | b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(i + 1);
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                None
+            }
+            _ => {
+                while i < bytes.len()
+                    && !matches!(bytes[i], b',' | b'}' | b']' | b'/')
+                    && !bytes[i].is_ascii_whitespace()
+                {
+                    i += 1;
+                }
+                Some(i)
+            }
+        }
+    };
+    let mut i = skip(if text.starts_with('\u{feff}') { 3 } else { 0 });
+    if bytes.get(i) != Some(&b'{') {
+        return None;
+    }
+    let open = i + 1;
+    i = open;
+    let mut found = Vec::new();
+    loop {
+        i = skip(i);
+        match bytes.get(i)? {
+            b'}' => return Some((open, found)),
+            b'"' => {}
+            _ => return None,
+        }
+        let end = string_end(i)?;
+        let name: String = serde_json::from_str(&text[i..end]).ok()?;
+        i = skip(end);
+        if bytes.get(i) != Some(&b':') {
+            return None;
+        }
+        let start = skip(i + 1);
+        let end = value_end(start)?;
+        found.push((name, start..end));
+        i = skip(end);
+        if bytes.get(i) == Some(&b',') {
+            i += 1;
         }
     }
-    let joined = lines.join("\n") + "\n";
-    parse(&joined).context("The settings file would not parse after the change")?;
-    Ok(joined)
 }
 
 /// JSON with `//` line comments, which the template uses to explain itself.
 pub fn parse(text: &str) -> Result<Settings> {
+    // Editors on Windows often start UTF-8 files with a byte order mark.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     Ok(serde_json::from_str(&strip_comments(text))?)
 }
 
@@ -228,10 +318,27 @@ mod tests {
         let added = with_string("{\n  \"font_size\": 12\n}\n", "theme", "A \"b\"").unwrap();
         assert_eq!(parse(&added).unwrap().theme.as_deref(), Some("A \"b\""));
         assert_eq!(parse(&added).unwrap().font_size, Some(12.0));
-        let empty = with_string("{}\n", "theme", "x");
-        assert!(empty.is_err(), "a one-line object has no line to add to");
-        let alone = with_string("{\n}\n", "theme", "x").unwrap();
-        assert_eq!(parse(&alone).unwrap().theme.as_deref(), Some("x"));
+        let empty = with_string("{}\n", "theme", "x").unwrap();
+        assert_eq!(parse(&empty).unwrap().theme.as_deref(), Some("x"));
+        // Several settings on one line, a trailing comment and CRLF all stay.
+        let crowded = "{ \"theme\": \"a\", \"font_size\": 12 } // mine\r\n";
+        assert_eq!(
+            with_string(crowded, "theme", "b").unwrap(),
+            "{ \"theme\": \"b\", \"font_size\": 12 } // mine\r\n"
+        );
+        let null = "{\r\n  \"theme\": null, // the default\r\n  \"font_size\": 13\r\n}\r\n";
+        assert_eq!(
+            with_string(null, "theme", "Nord").unwrap(),
+            "{\r\n  \"theme\": \"Nord\", // the default\r\n  \"font_size\": 13\r\n}\r\n"
+        );
+        // "theme" inside another setting or a comment is not the setting.
+        let decoy = "{\n  // \"theme\": \"old\"\n  \"keys\": { \"theme\": \"x\" }\n}\n";
+        let set = with_string(decoy, "theme", "y").unwrap();
+        assert_eq!(parse(&set).unwrap().theme.as_deref(), Some("y"));
+        assert!(set.contains("// \"theme\": \"old\""));
+        assert!(with_string("not json", "theme", "x").is_err());
+        let marked = with_string("\u{feff}{\"theme\": \"a\"}", "theme", "b").unwrap();
+        assert_eq!(marked, "\u{feff}{\"theme\": \"b\"}");
     }
 
     #[test]

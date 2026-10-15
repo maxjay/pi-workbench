@@ -98,7 +98,7 @@ fn toggle_button(
 ) -> impl IntoView {
     button(title, move || commands::execute(&state, command)).style(move |s| {
         s.apply_if(on(), |s| {
-            s.background(color::accent().with_alpha(0.16))
+            s.background(color::highlight())
                 .color(color::accent())
                 .hover(|s| {
                     s.background(color::accent().with_alpha(0.26))

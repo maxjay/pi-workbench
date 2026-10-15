@@ -62,39 +62,42 @@ fn pill(text: impl Fn() -> String + 'static, color: impl Fn() -> Color + 'static
     })
 }
 
-fn rich(inline: &Inline, size: f32, color: Color, bold: bool) -> impl IntoView {
-    let base = Attrs::new().color(color).font_size(size).weight(if bold {
-        FontWeight::BOLD
-    } else {
-        FontWeight::NORMAL
-    });
-    let mut attrs = AttrsList::new(base.clone());
-    for (range, style) in &inline.styles {
-        let span = match style {
-            Style::Strong => base.clone().weight(FontWeight::BOLD),
-            Style::Emphasis => base.clone().font_style(FontStyle::Italic),
-            Style::Code => base
-                .clone()
-                .family(&CODE_FAMILY)
-                .color(color::accent())
-                .font_size(size - 1.0),
-            Style::Link => base.clone().color(color::info()),
-        };
-        attrs.add_span(range.clone(), span);
-    }
-    let text = inline.text.clone();
-    rich_text(text.clone(), attrs.clone(), move || {
-        (text.clone(), attrs.clone())
-    })
-    .style(|s| s.width_full().min_width(0).line_height(1.5))
+/// Styled text whose colours follow the theme: `color` is read each time
+/// the text is laid out.
+fn rich(inline: &Inline, size: f32, color: fn() -> Color, bold: bool) -> impl IntoView {
+    let inline = inline.clone();
+    let attrs = move || {
+        let base = Attrs::new().color(color()).font_size(size).weight(if bold {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        });
+        let mut attrs = AttrsList::new(base.clone());
+        for (range, style) in &inline.styles {
+            let span = match style {
+                Style::Strong => base.clone().weight(FontWeight::BOLD),
+                Style::Emphasis => base.clone().font_style(FontStyle::Italic),
+                Style::Code => base
+                    .clone()
+                    .family(&CODE_FAMILY)
+                    .color(color::accent())
+                    .font_size(size - 1.0),
+                Style::Link => base.clone().color(color::info()),
+            };
+            attrs.add_span(range.clone(), span);
+        }
+        (inline.text.clone(), attrs)
+    };
+    let (text, first) = attrs();
+    rich_text(text, first, attrs).style(|s| s.width_full().min_width(0).line_height(1.5))
 }
 
 fn block_view(block: Block) -> AnyView {
     match block {
-        Block::Heading(inline) => rich(&inline, 15.0, color::text(), true)
+        Block::Heading(inline) => rich(&inline, 15.0, color::text, true)
             .style(|s| s.padding_top(4))
             .into_any(),
-        Block::Paragraph(inline) => rich(&inline, 13.0, color::text(), false).into_any(),
+        Block::Paragraph(inline) => rich(&inline, 13.0, color::text, false).into_any(),
         Block::Item {
             depth,
             marker,
@@ -102,11 +105,11 @@ fn block_view(block: Block) -> AnyView {
         } => Stack::horizontal((
             Label::new(marker)
                 .style(|s| s.color(color::muted()).min_width(18).flex_shrink(0.0_f32)),
-            rich(&inline, 13.0, color::text(), false),
+            rich(&inline, 13.0, color::text, false),
         ))
         .style(move |s| s.width_full().gap(4).padding_left(depth as f64 * 16.0))
         .into_any(),
-        Block::Quote(inline) => rich(&inline, 13.0, color::muted(), false)
+        Block::Quote(inline) => rich(&inline, 13.0, color::muted, false)
             .style(|s| {
                 s.padding_left(10)
                     .border_left(3)
@@ -189,15 +192,20 @@ fn preview(body: RwSignal<String>) -> impl IntoView {
         lines,
         |line| line.clone(),
         |(index, line)| {
-            let (background, color) = match line.chars().next() {
-                _ if index == 0 => (Color::TRANSPARENT, color::muted()),
-                Some('+') => (color::added(), color::added_text()),
-                Some('-') => (color::removed(), color::removed_text()),
-                _ => (Color::TRANSPARENT, color::muted()),
+            let kind = match line.chars().next() {
+                _ if index == 0 => None,
+                Some('+') => Some(true),
+                Some('-') => Some(false),
+                _ => None,
             };
             // Diff lines keep their shape; command output and errors wrap.
-            let diff = background != Color::TRANSPARENT;
+            let diff = kind.is_some();
             Label::new(line).style(move |s| {
+                let (background, color) = match kind {
+                    Some(true) => (color::added(), color::added_text()),
+                    Some(false) => (color::removed(), color::removed_text()),
+                    None => (Color::TRANSPARENT, color::muted()),
+                };
                 s.width_full()
                     .min_width(0)
                     .padding_horiz(10)
@@ -438,7 +446,7 @@ fn entry_view(state: Rc<Workbench>, session: Rc<Session>, entry: Rc<Entry>) -> i
                         .padding_horiz(12)
                         .padding_vert(8)
                         .border_radius(12)
-                        .background(color::accent().with_alpha(0.16))
+                        .background(color::highlight())
                         .color(color::text())
                 }),
             ))
@@ -590,14 +598,14 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
             editor,
             button("Send", move || submit(false)).style(move |s| {
                 s.background(color::accent())
-                    .color(color::bg())
+                    .color(color::on_accent())
                     .font_bold()
                     .padding_horiz(14)
                     .padding_vert(9)
                     .border_radius(8)
                     .hover(|s| {
                         s.background(color::accent().with_alpha(0.85))
-                            .color(color::bg())
+                            .color(color::on_accent())
                     })
             }),
         ))

@@ -77,7 +77,7 @@ fn row(
             .cursor(CursorStyle::Pointer)
             .hover(|s| s.background(color::border()))
             .apply_if(selected.get() == index, |s| {
-                s.background(color::accent().with_alpha(0.16))
+                s.background(color::highlight())
             })
     })
     .on_event_stop(el::Click, move |_, _| choose(picked.clone()));
@@ -155,8 +155,9 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
     Effect::new(move |_| {
         let current = mode.get();
         open_generation.set(open_generation.get() + 1);
+        // Setting the query runs the effect that picks the selection, so the
+        // selection is not touched after it.
         query.set(open_carried.borrow_mut().take().unwrap_or_default());
-        selected.set(0);
         hits.set(Vec::new());
         files.set(Vec::new());
         searched.set(String::new());
@@ -328,9 +329,14 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
         let current = (mode.get_untracked() == Some(Finder::Themes) && text.is_empty())
             .then(|| {
                 let chosen = color::chosen_name();
+                let files = theme_files().into_iter().filter_map(|path| {
+                    path.file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                });
                 workbench_text::theme::names()
-                    .iter()
-                    .position(|name| *name == chosen)
+                    .into_iter()
+                    .chain(files)
+                    .position(|name| name.eq_ignore_ascii_case(&chosen))
             })
             .flatten();
         selected.set(current.unwrap_or(0));

@@ -172,6 +172,8 @@ impl Terminal {
         scope.enter(|| {
             Effect::new(move |_| {
                 trigger.track();
+                // A new theme recolours the screen.
+                crate::ui::color::theme().track();
                 if let Some(terminal) = weak.upgrade() {
                     terminal.update();
                 }
@@ -203,7 +205,7 @@ impl Terminal {
         if self.listener.exited.load(Ordering::Relaxed) {
             self.exited.set(true);
         }
-        let screen = Rc::new(snapshot(&self.term.lock()));
+        let screen = Rc::new(Effect::untrack(|| snapshot(&self.term.lock())));
         if self.screen.with_untracked(|s| **s != *screen) {
             self.screen.set(screen);
         }

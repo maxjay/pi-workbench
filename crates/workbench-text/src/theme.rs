@@ -57,6 +57,22 @@ impl Rgba {
         Rgba(self.0, self.1, self.2, 255)
     }
 
+    /// A translucent colour as it looks drawn over `under`.
+    fn over(self, under: Rgba) -> Rgba {
+        under.mix(self.opaque(), f32::from(self.3) / 255.0)
+    }
+
+    /// Backs off toward the background it came from if `text` would no
+    /// longer read on it.
+    fn with_text(self, text: Rgba, background: Rgba) -> Rgba {
+        // Text that is dim on the background already cannot do better here.
+        let wanted = (text.contrast(background) * 0.75).min(3.5);
+        (0..=10)
+            .map(|step| self.mix(background, f32::from(step as u8) * 0.1))
+            .find(|c| text.contrast(*c) >= wanted)
+            .unwrap_or(background)
+    }
+
     /// How far the colour is from grey, 0 to 255.
     fn saturation(self) -> u8 {
         let (max, min) = (
@@ -131,6 +147,10 @@ pub struct Theme {
     pub gutter_text: Rgba,
     pub selection: Rgba,
     pub caret: Rgba,
+    /// The selected row in lists.
+    pub highlight: Rgba,
+    /// Text drawn on the accent, as on buttons.
+    pub on_accent: Rgba,
     /// The terminal's first sixteen colours.
     pub ansi: [Rgba; 16],
     tokens: Vec<(Token, TokenStyle)>,
@@ -208,8 +228,14 @@ pub fn default_theme() -> Theme {
         editor_background: Rgba::rgb(40, 44, 52),
         current_line: Rgba::rgb(46, 51, 61),
         gutter_text: Rgba::rgb(84, 94, 110),
-        selection: Rgba(128, 190, 175, 64),
+        selection: Rgba::rgb(57, 76, 81),
         caret: Rgba::rgb(128, 190, 175),
+        highlight: highlight(
+            Rgba::rgb(28, 32, 40),
+            Rgba::rgb(128, 190, 175),
+            Rgba::rgb(218, 224, 233),
+        ),
+        on_accent: Rgba::rgb(21, 24, 30),
         ansi: DARK_ANSI,
         tokens: vec![
             (Token::Keyword, style(198, 146, 233, false)),
@@ -248,7 +274,7 @@ pub fn names() -> Vec<String> {
 
 /// A theme by name, or from a `.tmTheme` file when given a path.
 pub fn load(name: &str) -> Result<Theme> {
-    if name == DEFAULT {
+    if name.eq_ignore_ascii_case(DEFAULT) {
         return Ok(default_theme());
     }
     let path = Path::new(name);
@@ -268,8 +294,9 @@ pub fn load(name: &str) -> Result<Theme> {
         .iter()
         .find(|embedded| embedded.as_name().eq_ignore_ascii_case(name))
         .with_context(|| format!("No theme named {name:?}"))?;
+    // The bundled theme's own spelling, whatever the settings say.
     Ok(derive(
-        name.to_owned(),
+        embedded.as_name().to_owned(),
         two_face::theme::extra().get(*embedded),
     ))
 }
@@ -401,52 +428,103 @@ fn derive(name: String, theme: &TextMateTheme) -> Theme {
         .into_iter()
         .find(|c| apart(*c, accent) && apart(*c, info))
         .unwrap_or(amber);
+    let surface = panel.mix(text, 0.04);
+    // Fixed mixes wash out on light themes; aim for contrast instead.
+    let border = reach(editor_background, text, 0.15, |c| c.contrast(panel) >= 1.4);
+    let muted = (0..=20)
+        .map(|step| text.mix(editor_background, 0.4 - f32::from(step as u8) * 0.02))
+        .find(|c| c.contrast(panel) >= 4.0)
+        .unwrap_or(text);
+    // A theme's highlight colours are often translucent: draw them over the
+    // editor before judging them.
+    let current_line = settings
+        .line_highlight
+        .map(Rgba::from_theme)
+        .map(|c| c.over(editor_background))
+        .filter(|c| {
+            // As readable as the theme's own text, near enough.
+            text.contrast(*c) >= (text.contrast(editor_background) * 0.85).min(4.5)
+                && *c != editor_background
+        })
+        .unwrap_or_else(|| editor_background.mix(text, 0.06));
+    let selection = settings
+        .selection
+        .map(Rgba::from_theme)
+        .map(|c| c.over(editor_background))
+        .unwrap_or_else(|| accent.mix(editor_background, 0.7));
+    let selection = reach(selection, text, 0.0, |c| {
+        c.contrast(editor_background) >= 1.3
+    })
+    .with_text(text, editor_background);
     Theme {
         name,
         dark,
         background,
         panel,
-        surface: panel.mix(text, 0.04),
-        border: editor_background.mix(text, 0.15),
+        surface,
+        border,
         text,
-        muted: text.mix(editor_background, 0.4),
+        muted,
         accent,
         info,
         warn,
         added: pick(&["markup.inserted", "string.quoted.double"], green),
         removed: pick(&["markup.deleted", "invalid"], red),
         editor_background,
-        current_line: settings
-            .line_highlight
-            .map(Rgba::from_theme)
-            .map(Rgba::opaque)
-            .unwrap_or_else(|| editor_background.mix(text, 0.05)),
+        current_line,
         gutter_text: settings
             .gutter_foreground
             .map(Rgba::from_theme)
-            .map(Rgba::opaque)
-            .filter(|c| c.contrast(editor_background) >= 1.5)
-            .unwrap_or_else(|| text.mix(editor_background, 0.6)),
-        selection: settings
-            .selection
-            .map(Rgba::from_theme)
-            .map(|c| {
-                if c.3 == 255 {
-                    Rgba(c.0, c.1, c.2, 90)
-                } else {
-                    c
-                }
-            })
-            .unwrap_or(Rgba(accent.0, accent.1, accent.2, 64)),
+            .map(|c| c.over(editor_background))
+            .filter(|c| c.contrast(editor_background) >= 1.8)
+            .unwrap_or_else(|| text.mix(editor_background, 0.55)),
+        selection,
         caret: settings
             .caret
             .map(Rgba::from_theme)
-            .map(Rgba::opaque)
+            .map(|c| c.over(editor_background))
             .filter(|c| c.contrast(editor_background) >= 2.0)
             .unwrap_or(accent),
+        highlight: highlight(panel, accent, text),
+        on_accent: on(
+            accent,
+            [
+                background,
+                text,
+                Rgba::rgb(0, 0, 0),
+                Rgba::rgb(255, 255, 255),
+            ],
+        ),
         ansi: if dark { DARK_ANSI } else { LIGHT_ANSI },
         tokens,
     }
+}
+
+/// `from` moved toward `toward` by at least `least`, and further until
+/// `good` holds or the colours meet.
+fn reach(from: Rgba, toward: Rgba, least: f32, good: impl Fn(Rgba) -> bool) -> Rgba {
+    (0..=50)
+        .map(|step| from.mix(toward, (least + f32::from(step as u8) * 0.02).min(1.0)))
+        .find(|c| good(*c))
+        .unwrap_or(toward)
+}
+
+/// The selected row in lists: the panel tinted with the accent, clearly
+/// apart from the panel and still easy to read on.
+fn highlight(panel: Rgba, accent: Rgba, text: Rgba) -> Rgba {
+    reach(panel, accent, 0.16, |c| c.contrast(panel) >= 1.25).with_text(text, panel)
+}
+
+/// Of `choices`, the one that reads best on `background`.
+fn on(background: Rgba, choices: [Rgba; 4]) -> Rgba {
+    choices
+        .into_iter()
+        .max_by(|a, b| {
+            a.contrast(background)
+                .partial_cmp(&b.contrast(background))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(background)
 }
 
 impl FromStr for Theme {
@@ -472,6 +550,45 @@ mod tests {
                 theme.accent.contrast(theme.panel) >= 2.5,
                 "{name}: accent is unreadable"
             );
+            let readable = [
+                (
+                    "text on the current line",
+                    theme.text.contrast(theme.current_line),
+                    (theme.text.contrast(theme.editor_background) * 0.85).min(4.5),
+                ),
+                (
+                    "muted text on panels",
+                    theme.muted.contrast(theme.panel),
+                    3.5,
+                ),
+                ("borders on panels", theme.border.contrast(theme.panel), 1.3),
+                (
+                    "selection",
+                    theme.selection.contrast(theme.editor_background),
+                    1.2,
+                ),
+                (
+                    "text on the selection",
+                    theme.text.contrast(theme.selection),
+                    (theme.text.contrast(theme.editor_background) * 0.75).min(3.5) - 0.01,
+                ),
+                (
+                    "the selected row",
+                    theme.highlight.contrast(theme.panel),
+                    1.2,
+                ),
+                (
+                    "text on the accent",
+                    theme.on_accent.contrast(theme.accent),
+                    3.0,
+                ),
+            ];
+            for (what, contrast, least) in readable {
+                assert!(
+                    contrast >= least,
+                    "{name}: {what} at {contrast:.2}, below {least}"
+                );
+            }
             let origins = [theme.accent, theme.info, theme.warn];
             for (i, a) in origins.iter().enumerate() {
                 for b in &origins[i + 1..] {
@@ -487,6 +604,7 @@ mod tests {
         assert!(!latte.dark);
         let mocha = load("catppuccin mocha").unwrap();
         assert!(mocha.dark);
+        assert_eq!(mocha.name, "Catppuccin Mocha", "the bundled spelling");
         assert_ne!(latte.token(Token::Keyword), mocha.token(Token::Keyword));
         assert!(load("No Such Theme").is_err());
         assert_eq!(load(DEFAULT).unwrap(), default_theme());

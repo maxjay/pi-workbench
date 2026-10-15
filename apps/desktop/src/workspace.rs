@@ -289,13 +289,18 @@ impl Workbench {
     /// Makes a theme the one in use and records it in the settings file.
     pub fn choose_theme(&self, name: &str) {
         match crate::ui::color::load(name) {
-            Ok(theme) => {
-                crate::ui::color::choose(theme.clone());
-                match workbench_core::settings::set_string("theme", name) {
-                    Ok(()) => self.status.set(format!("Theme: {}", theme.name)),
-                    Err(err) => self.status.set(format!("Settings: {err:#}")),
+            // Only a theme the settings file records is chosen; otherwise the
+            // next read of the file would put the old one back.
+            Ok(theme) => match workbench_core::settings::set_string("theme", name) {
+                Ok(()) => {
+                    crate::ui::color::choose(theme.clone());
+                    self.status.set(format!("Theme: {}", theme.name));
                 }
-            }
+                Err(err) => {
+                    crate::ui::color::revert();
+                    self.status.set(format!("Settings: {err:#}"));
+                }
+            },
             Err(err) => self.status.set(format!("{err:#}")),
         }
     }
@@ -307,10 +312,10 @@ impl Workbench {
             .sessions
             .active_untracked()
             .unwrap_or_else(|| self.sessions.create());
+        // In front of anything already typed, which may be its arguments.
         let text = format!("/{name} ");
-        let length = session.draft.text().len();
         session.draft.edit_single(
-            Selection::region(0, length, CursorAffinity::Forward),
+            Selection::caret(0, CursorAffinity::Forward),
             &text,
             EditType::InsertChars,
         );
@@ -961,6 +966,8 @@ impl Workbench {
     }
 
     fn finish_quit(&self) {
+        // A theme only previewed must not stay on in the other windows.
+        self.dismiss_finder();
         match self.persist_layout() {
             Ok(()) => (self.close_window)(),
             Err(err) => self.status.set(format!("Could not save layout: {err}")),

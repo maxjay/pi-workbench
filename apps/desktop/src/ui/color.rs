@@ -33,13 +33,17 @@ pub fn theme() -> ReadSignal<Rc<Theme>> {
     CURRENT.with(|current| current.read_only())
 }
 
-/// A theme by name or `.tmTheme` path, loaded once.
+/// A theme by name or `.tmTheme` path. Bundled themes are loaded once;
+/// files are read each time, so edits to them show.
 pub fn load(name: &str) -> anyhow::Result<Rc<Theme>> {
-    if let Some(theme) = LOADED.with(|loaded| loaded.borrow().get(name).cloned()) {
+    let file = name.to_ascii_lowercase().ends_with(".tmtheme");
+    if !file && let Some(theme) = LOADED.with(|loaded| loaded.borrow().get(name).cloned()) {
         return Ok(theme);
     }
     let theme = Rc::new(theme::load(name)?);
-    LOADED.with(|loaded| loaded.borrow_mut().insert(name.to_owned(), theme.clone()));
+    if !file {
+        LOADED.with(|loaded| loaded.borrow_mut().insert(name.to_owned(), theme.clone()));
+    }
     Ok(theme)
 }
 
@@ -145,6 +149,14 @@ pub fn selection() -> Color {
 }
 pub fn caret() -> Color {
     read(|t| t.caret)
+}
+/// The selected row in lists.
+pub fn highlight() -> Color {
+    read(|t| t.highlight)
+}
+/// Text on the accent colour, as on buttons.
+pub fn on_accent() -> Color {
+    read(|t| t.on_accent)
 }
 /// The terminal's first sixteen colours.
 pub fn ansi(index: usize) -> Color {

@@ -6,6 +6,7 @@ use floem::views::editor::core::xi_rope::Rope;
 use floem::{
     peniko::Color,
     prelude::*,
+    reactive::Effect,
     reactive::RwSignal,
     text::{Attrs, AttrsList, FamilyOwned},
     views::editor::{
@@ -129,8 +130,8 @@ fn ghost(col: usize, text: String) -> PhantomText {
         affinity: None,
         text,
         font_size: None,
-        fg: Some(color::removed_text()),
-        bg: Some(color::removed()),
+        fg: Some(Effect::untrack(color::removed_text)),
+        bg: Some(Effect::untrack(color::removed)),
         under_line: None,
     }
 }
@@ -279,7 +280,7 @@ impl Styling for LensStyling {
         // Floem's editor needs every line the same height, so focus fades
         // unchanged lines instead of folding them.
         if Self::flag(&self.overlay.dimmed, line) {
-            *attrs = AttrsList::new(default.color(color::muted().with_alpha(0.3)));
+            *attrs = AttrsList::new(default.color(Effect::untrack(color::muted).with_alpha(0.3)));
             return;
         }
         let Some(spans) = self.syntax.as_ref().and_then(|lines| lines.get(line)) else {
@@ -348,17 +349,20 @@ impl Styling for LensStyling {
         };
         if faint {
             // Reformatted only: a hairline, so it can be found but not read as a change.
+            layout_line.extra_style.push(mark(
+                Some(1.0),
+                Effect::untrack(color::muted).with_alpha(0.5),
+            ));
+        } else if added(self.incoming.as_deref(), line) {
             layout_line
                 .extra_style
-                .push(mark(Some(1.0), color::muted().with_alpha(0.5)));
-        } else if added(self.incoming.as_deref(), line) {
-            layout_line.extra_style.push(mark(None, color::added()));
+                .push(mark(None, Effect::untrack(color::added)));
         } else if added(self.lens.as_ref().map(|c| &c.diff), line) {
             let origin = self
                 .lens
                 .as_ref()
                 .and_then(|c| c.origins.get(line).copied().flatten());
-            let color = super::origin_color(origin.unwrap_or(Origin::You));
+            let color = Effect::untrack(|| super::origin_color(origin.unwrap_or(Origin::You)));
             layout_line
                 .extra_style
                 .push(mark(None, color.with_alpha(0.08)));
