@@ -230,6 +230,8 @@ pub struct Session {
     turns: RwSignal<Vec<Turn>>,
     /// The turn whose run is still going.
     open_turn: Cell<Option<usize>>,
+    /// The snapshot after a run is still being taken; saves stay held until it is.
+    settling: Cell<bool>,
     me: Weak<Self>,
     /// The composer's text, kept per session.
     pub draft: Rc<TextDocument>,
@@ -285,6 +287,7 @@ impl Session {
                 stats: RwSignal::new(String::new()),
                 turns: RwSignal::new(Vec::new()),
                 open_turn: Cell::new(None),
+                settling: Cell::new(false),
                 draft: Rc::new(TextDocument::new(scope, "")),
                 running_tools: Cell::new(0),
                 tree_changed: Cell::new(false),
@@ -472,7 +475,9 @@ impl Session {
     }
 
     fn prompt_when_saved(self: &Rc<Self>, text: String) {
-        if self.documents.any_saving() {
+        // Saves made while the last run settles are written once it has;
+        // Pi must see them.
+        if self.documents.any_saving() || self.settling.get() {
             // Weak, so closing the session meanwhile does not start Pi for it.
             let session = Rc::downgrade(self);
             exec_after(Duration::from_millis(30), move |_| {
@@ -560,6 +565,7 @@ impl Session {
         (self.hooks.settled)();
         // Snapshot what Pi did before held saves land on top of it.
         if let Some(index) = self.open_turn.take() {
+            self.settling.set(true);
             let session = self.me.clone();
             (self.hooks.snapshot)(Box::new(move |after| {
                 if let Some(session) = session.upgrade() {
@@ -568,6 +574,7 @@ impl Session {
                             turn.after = after;
                         }
                     });
+                    session.settling.set(false);
                 }
                 drop(hold);
             }));

@@ -17,12 +17,16 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use workbench_core::{
     diff::{Hunk, LineDiff},
     git::{Base, FileChange, Repo, Rev},
+    structure::{self, Changed},
 };
 
 /// Coalesces bursts of typing into one background diff.
@@ -70,6 +74,7 @@ impl Comparison {
         text: &str,
         revision: u64,
         context: &Context,
+        structural: impl FnOnce() -> Option<Changed>,
     ) -> Self {
         let diff = match base.as_ref() {
             Some(base) => LineDiff::compute(base, text),
@@ -104,10 +109,10 @@ impl Comparison {
         let formatting = origins::formatting(
             &name,
             base.as_deref(),
-            text,
             &plain,
             &base_lines,
             &current_lines,
+            structural,
         );
         let origins = origins::origins(&diff, &plain, &current_lines, text, context);
         Self {
@@ -151,6 +156,13 @@ fn lines(text: &str) -> Vec<&str> {
     text.split('\n').map(|l| l.trim_end_matches('\r')).collect()
 }
 
+/// A difftastic result and a hash of the texts it compared.
+type Structural = (u64, Option<Changed>);
+/// Blame by HEAD and file.
+type AuthorshipCache = Mutex<HashMap<(String, PathBuf), Option<Arc<Authorship>>>>;
+/// Each finished turn's files, by its before and after snapshots.
+type TurnCache = Mutex<HashMap<(String, String), Vec<FileChange>>>;
+
 /// One open file under the lens.
 pub struct FileLens {
     pub path: PathBuf,
@@ -161,7 +173,10 @@ pub struct FileLens {
     /// Who wrote the committed lines, when someone else did.
     authorship: RefCell<Option<Arc<Authorship>>>,
     comparison: RwSignal<Option<Rc<Comparison>>>,
-    generation: Cell<u64>,
+    /// Bumped per diff; shared so a background pass can tell it is stale.
+    generation: Arc<AtomicU64>,
+    /// The last difftastic result, by the texts it compared; also serialises runs.
+    structural: Arc<Mutex<Option<Structural>>>,
     /// Owns the effect that follows edits, so closing the file frees it.
     scope: Scope,
 }
@@ -191,6 +206,23 @@ pub struct TurnFiles {
 /// One open file's baseline and authorship, as read in the background.
 type Loaded = (anyhow::Result<Option<String>>, Option<Arc<Authorship>>);
 
+/// Blame for a file at HEAD, reused until HEAD moves.
+fn authorship(
+    cache: &AuthorshipCache,
+    repo: &Repo,
+    head: Option<&str>,
+    relative: &Path,
+) -> Option<Arc<Authorship>> {
+    let key = (head?.to_owned(), relative.to_path_buf());
+    if let Some(found) = cache.lock().ok()?.get(&key) {
+        return found.clone();
+    }
+    let me = repo.user_email().ok().flatten();
+    let found = Authorship::read(repo, relative, me.as_deref());
+    cache.lock().ok()?.insert(key, found.clone());
+    found
+}
+
 /// What one background refresh found.
 struct Refreshed {
     head: Option<String>,
@@ -217,6 +249,10 @@ pub struct Lens {
     /// What Pi's sessions wrote, by file.
     pi: RwSignal<PiLines>,
     records: Arc<Records>,
+    /// Blame by HEAD and file, and each finished turn's files: neither
+    /// changes until HEAD or the snapshots do.
+    authorship: Arc<AuthorshipCache>,
+    turn_cache: Arc<TurnCache>,
     show_formatting: RwSignal<bool>,
     changes: RwSignal<Vec<FileChange>>,
     files: RefCell<HashMap<PathBuf, Rc<FileLens>>>,
@@ -244,6 +280,8 @@ impl Lens {
             turn_files: RwSignal::new(Vec::new()),
             pi: RwSignal::new(PiLines::default()),
             records: Arc::default(),
+            authorship: Arc::default(),
+            turn_cache: Arc::default(),
             show_formatting: RwSignal::new(false),
             changes: RwSignal::new(Vec::new()),
             files: RefCell::new(HashMap::new()),
@@ -417,6 +455,7 @@ impl Lens {
             .map(|file| (file.path.clone(), self.relative(&file.path)))
             .collect();
         let (records, root) = (self.records.clone(), self.root.clone());
+        let (authors, turn_cache) = (self.authorship.clone(), self.turn_cache.clone());
         let lens = self.clone();
         let finish = create_ext_action(self.scope, move |found: Refreshed| {
             lens.refreshing.set(false);
@@ -435,14 +474,13 @@ impl Lens {
                 Since::LastTurn => turns.last().map(|t| Rev::Tree(t.before.clone())),
             };
             let changes = rev.as_ref().map(|rev| repo.changes(rev));
-            let me = repo.user_email().ok().flatten();
             let bases = match &rev {
                 Some(rev) => files
                     .into_iter()
                     .filter_map(|(path, relative)| {
                         let relative = relative?;
                         let base = repo.read(rev, &relative);
-                        let authorship = Authorship::read(&repo, &relative, me.as_deref());
+                        let authorship = authorship(&authors, &repo, head.as_deref(), &relative);
                         Some((path, (base, authorship)))
                     })
                     .collect(),
@@ -452,9 +490,18 @@ impl Lens {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, turn)| {
-                    let before = Rev::Tree(turn.before.clone());
-                    let after = Rev::Tree(turn.after.clone()?);
-                    let files = repo.changes_between(&before, &after).ok()?;
+                    let key = (turn.before.clone(), turn.after.clone()?);
+                    let cached = turn_cache.lock().ok()?.get(&key).cloned();
+                    let files = match cached {
+                        Some(files) => files,
+                        None => {
+                            let (before, after) =
+                                (Rev::Tree(key.0.clone()), Rev::Tree(key.1.clone()));
+                            let files = repo.changes_between(&before, &after).ok()?;
+                            turn_cache.lock().ok()?.insert(key, files.clone());
+                            files
+                        }
+                    };
                     Some(TurnFiles {
                         number: index + 1,
                         prompt: turn.prompt.clone(),
@@ -476,6 +523,7 @@ impl Lens {
     fn apply(self: &Rc<Self>, generation: u64, found: Refreshed) {
         if self.head.with_untracked(|h| *h != found.head) {
             self.head.set(found.head);
+            self.forget_old_blame();
         }
         if self.branch_base.with_untracked(|b| *b != found.branch_base) {
             self.branch_base.set(found.branch_base);
@@ -483,7 +531,7 @@ impl Lens {
         if self.changes_generation.get() != generation {
             return;
         }
-        if self.pi.with_untracked(|pi| **pi != *found.pi) {
+        if self.pi.with_untracked(|pi| !Arc::ptr_eq(pi, &found.pi)) {
             self.pi.set(found.pi);
         }
         let turn_files: Vec<TurnFiles> = found
@@ -503,7 +551,7 @@ impl Lens {
             self.changes.set(Vec::new());
             for file in self.files.borrow().values() {
                 *file.base.borrow_mut() = None;
-                file.generation.set(file.generation.get() + 1);
+                file.generation.fetch_add(1, Ordering::Relaxed);
                 file.comparison.set(None);
             }
             return;
@@ -548,7 +596,7 @@ impl Lens {
             // offer to revert the whole file.
             Err(err) => {
                 *file.base.borrow_mut() = None;
-                file.generation.set(file.generation.get() + 1);
+                file.generation.fetch_add(1, Ordering::Relaxed);
                 file.comparison.set(None);
                 self.status.set(format!("Changes: {err:#}"));
             }
@@ -573,9 +621,9 @@ impl Lens {
             }
         });
         let (repo, rev) = (repo.clone(), rev.clone());
+        let (authors, head) = (self.authorship.clone(), self.head.get_untracked());
         std::thread::spawn(move || {
-            let me = repo.user_email().ok().flatten();
-            let authorship = Authorship::read(&repo, &relative, me.as_deref());
+            let authorship = authorship(&authors, &repo, head.as_deref(), &relative);
             finish((repo.read(&rev, &relative), authorship))
         });
     }
@@ -599,7 +647,8 @@ impl Lens {
                 base: RefCell::new(None),
                 authorship: RefCell::new(None),
                 comparison: RwSignal::new(None),
-                generation: Cell::new(0),
+                generation: Arc::default(),
+                structural: Arc::default(),
                 scope,
             })
         });
@@ -646,11 +695,10 @@ impl Lens {
         };
         let text = file.text.text().to_string();
         let revision = file.revision.get_untracked();
-        let generation = file.generation.get() + 1;
-        file.generation.set(generation);
+        let generation = file.generation.fetch_add(1, Ordering::Relaxed) + 1;
         let target = file.clone();
         let finish = create_ext_action(self.scope, move |comparison: Comparison| {
-            if target.generation.get() == generation {
+            if target.generation.load(Ordering::Relaxed) == generation {
                 target.comparison.set(Some(Rc::new(comparison)));
             }
         });
@@ -659,7 +707,43 @@ impl Lens {
             pi: self.pi.with_untracked(|pi| pi.get(&path).cloned()),
             authorship: file.authorship.borrow().clone(),
         };
-        std::thread::spawn(move || finish(Comparison::new(&path, base, &text, revision, &context)));
+        let (cache, latest) = (file.structural.clone(), file.generation.clone());
+        std::thread::spawn(move || {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let structural = || {
+                let old = base.as_deref()?;
+                let mut hasher = DefaultHasher::new();
+                (old, &text).hash(&mut hasher);
+                let key = hasher.finish();
+                // One difftastic run per file at a time, skipped once stale.
+                let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((cached, changed)) = cache.as_ref()
+                    && *cached == key
+                {
+                    return changed.clone();
+                }
+                if latest.load(Ordering::Relaxed) != generation {
+                    return None;
+                }
+                let changed = structure::compare(&name, old, &text);
+                *cache = Some((key, changed.clone()));
+                changed
+            };
+            let comparison =
+                Comparison::new(&path, base.clone(), &text, revision, &context, structural);
+            finish(comparison)
+        });
+    }
+
+    /// Clears blame from other commits once HEAD moves.
+    fn forget_old_blame(&self) {
+        let head = self.head.get_untracked().unwrap_or_default();
+        if let Ok(mut cache) = self.authorship.lock() {
+            cache.retain(|(at, _), _| *at == head);
+        }
     }
 
     pub fn mark_seen(&self, key: u64) {
@@ -680,6 +764,7 @@ mod tests {
             text,
             0,
             &Context::default(),
+            || None,
         )
     }
 

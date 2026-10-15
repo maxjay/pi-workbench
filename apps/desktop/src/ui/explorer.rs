@@ -135,7 +135,8 @@ enum Row {
 }
 
 /// The changed files, grouped by the Pi turn that changed them when the
-/// active session has finished turns, newest first.
+/// active session has finished turns, newest first. Only files that still
+/// differ from the baseline are listed, with their counts against it.
 fn rows(changes: &[FileChange], turns: &[TurnFiles]) -> Vec<(usize, Row)> {
     if turns.is_empty() {
         return changes.iter().cloned().map(|c| (0, Row::File(c))).collect();
@@ -143,12 +144,19 @@ fn rows(changes: &[FileChange], turns: &[TurnFiles]) -> Vec<(usize, Row)> {
     let mut rows = Vec::new();
     let mut by_turn = std::collections::HashSet::new();
     for (group, turn) in turns.iter().rev().enumerate() {
+        let files: Vec<&FileChange> = changes
+            .iter()
+            .filter(|change| turn.files.iter().any(|f| f.path == change.path))
+            .collect();
+        if files.is_empty() {
+            continue;
+        }
         let prompt = turn.prompt.lines().next().unwrap_or_default().trim();
         rows.push((
             group,
             Row::Heading(format!("Turn {}", turn.number), prompt.into()),
         ));
-        for file in &turn.files {
+        for file in files {
             by_turn.insert(file.path.clone());
             rows.push((group, Row::File(file.clone())));
         }
@@ -174,10 +182,9 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
     let open_state = state.clone();
     Stack::vertical((
         Label::new("Nothing has changed").style(move |s| {
-            s.color(MUTED).padding(14).apply_if(
-                !changes.with(Vec::is_empty) || !turns.with(Vec::is_empty),
-                |s| s.hide(),
-            )
+            s.color(MUTED)
+                .padding(14)
+                .apply_if(!changes.with(Vec::is_empty), |s| s.hide())
         }),
         dyn_stack(
             move || changes.with(|changes| turns.with(|turns| rows(changes, turns))),

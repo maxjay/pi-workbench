@@ -24,6 +24,12 @@ pub struct Changed {
 fn command() -> Command {
     let mut command = Command::new("difft");
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    // The user's difftastic settings, such as ignoring comments, would hide changes.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("DFT_") {
+            command.env_remove(name);
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

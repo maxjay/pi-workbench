@@ -702,7 +702,12 @@ fn command(directory: &Path, args: &[&str]) -> Command {
             "core.fsmonitor=false",
             "-c",
             "core.hooksPath=/dev/null",
+            // A partial clone would fetch missing objects, running whatever
+            // transport command the repository's config names.
+            "-c",
+            "protocol.allow=never",
         ])
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(directory)
         .args(args)
