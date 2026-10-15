@@ -9,11 +9,11 @@ use floem::{
     AnyView,
     event::EventPropagation,
     prelude::*,
-    reactive::{Effect, ReadSignal},
+    reactive::{Effect, Memo},
     style::CursorStyle,
     text::{Attrs, AttrsList, FamilyOwned, FontStyle, FontWeight},
     views::{
-        TextInput, TextInputEnter, dyn_container,
+        TextInput, TextInputEnter,
         editor::{
             core::{cursor::CursorAffinity, editor::EditType, selection::Selection},
             text::{Document, SimpleStyling, WrapMethod},
@@ -527,7 +527,7 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
     })
 }
 
-fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
+fn composer(session: Rc<Session>, visible: Memo<bool>) -> impl IntoView {
     let working = session.working();
     let request = session.focus_request();
     let editor = text_editor("")
@@ -632,7 +632,12 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
     .style(|s| s.width_full().gap(6).padding(14).flex_shrink(0.0_f32))
 }
 
-fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
+/// A session tab: the conversation, its header and the composer.
+pub(super) fn session_view(
+    state: Rc<Workbench>,
+    session: Rc<Session>,
+    visible: Memo<bool>,
+) -> impl IntoView {
     let entries = session.entries();
     let (title, stats, model) = (session.title(), session.stats(), session.model());
     let status_session = session.clone();
@@ -730,7 +735,7 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
         100.0
     })
     .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
-    let composer = Stack::vertical((composer(session.clone(), state.conversation()),)).style(|s| {
+    let composer = Stack::vertical((composer(session.clone(), visible),)).style(|s| {
         s.width_full()
             .max_width(860)
             .margin_horiz(floem::unit::LengthAuto::Auto)
@@ -745,22 +750,4 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
             .min_height(0)
             .background(color::bg())
     })
-}
-
-/// The active session's conversation, or a prompt to start one.
-pub(super) fn conversation(state: Rc<Workbench>) -> impl IntoView {
-    let sessions = state.sessions.clone();
-    let active = state.sessions.active_key();
-    // Rebuild only when the front session changes: rebuilding twice in one
-    // frame leaves Floem with a stale layout listener for the removed editor.
-    dyn_container(
-        move || active.get(),
-        move |key| match key.and_then(|key| sessions.find(key)) {
-            Some(session) => session_view(state.clone(), session).into_any(),
-            None => Label::new("No session open. Press Ctrl+N to start one.")
-                .style(|s| s.color(color::muted()).padding(40))
-                .into_any(),
-        },
-    )
-    .style(|s| s.size_full().min_width(0).min_height(0))
 }

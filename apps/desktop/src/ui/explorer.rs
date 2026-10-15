@@ -1,7 +1,7 @@
 //! The explorer, read through the changes lens: changed files stand out with
 //! their line counts, the rest fade, and the tree can collapse to just the changes.
-use super::{CODE_FONT, color, command_button};
-use crate::{commands::Command, lens::TurnFiles, workspace::Workbench};
+use super::{CODE_FONT, color};
+use crate::{lens::TurnFiles, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use std::{path::PathBuf, rc::Rc};
 use workbench_core::git::{FileChange, FileStatus};
@@ -285,6 +285,28 @@ fn heading(title: String, detail: String) -> impl IntoView {
     })
 }
 
+/// One half of the Files | Changed switch at the top of the explorer.
+fn switch(state: Rc<Workbench>, title: &'static str, changed: bool) -> impl IntoView {
+    let changed_only = state.lens.changed_only();
+    Label::new(title)
+        .style(move |s| {
+            let on = changed_only.get() == changed;
+            s.padding_horiz(10)
+                .padding_vert(4)
+                .border_radius(5)
+                .font_size(12)
+                .cursor(CursorStyle::Pointer)
+                .color(if on { color::text() } else { color::muted() })
+                .hover(|s| s.color(color::text()))
+                .apply_if(on, |s| s.background(color::highlight()))
+        })
+        .on_event_stop(el::Click, move |_, _| {
+            if state.lens.changed_only().get_untracked() != changed {
+                state.lens.toggle_changed_only();
+            }
+        })
+}
+
 pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
     let layout = state.layout();
     let changed_only = state.lens.changed_only();
@@ -295,24 +317,17 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
     .style(|s| s.size_full().min_height(0));
     Stack::vertical((
         Stack::horizontal((
-            Label::derived(move || {
-                if changed_only.get() {
-                    "CHANGED"
-                } else {
-                    "FILES"
-                }
-                .to_string()
-            })
-            .style(|s| s.color(color::muted()).font_size(11).flex_grow(1.0_f32)),
-            command_button(state.clone(), "↔", Command::MoveExplorer),
-            command_button(state, "Refresh", Command::Refresh),
+            switch(state.clone(), "Files", false),
+            switch(state.clone(), "Changed", true),
         ))
         .style(|s| {
             s.width_full()
-                .height(42)
-                .padding_horiz(10)
-                .gap(6)
+                .height(38)
+                .padding_horiz(8)
+                .gap(2)
                 .items_center()
+                .border_bottom(1)
+                .border_color(color::border())
         }),
         files,
     ))

@@ -61,7 +61,7 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
                     .cursor(CursorStyle::Pointer)
                     .hover(|s| s.color(color::text()))
             })
-            .on_event_stop(el::Click, move |_, _| close_state.sessions.close(key)),
+            .on_event_stop(el::Click, move |_, _| close_state.close_session(key)),
     ))
     .style(move |s| {
         let selected = active.get() == Some(key);
@@ -80,8 +80,7 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
             })
     })
     .on_event_stop(el::Click, move |_, _| {
-        select_state.sessions.select(key);
-        select_state.show_conversation();
+        select_state.show_session(key);
     })
 }
 
@@ -110,8 +109,8 @@ fn recent_row(state: Rc<Workbench>, summary: SessionSummary) -> impl IntoView {
             })
     })
     .on_event_stop(el::Click, move |_, _| {
-        state.sessions.resume(&summary);
-        state.show_conversation();
+        let session = state.sessions.resume(&summary);
+        state.show_session(session.key);
     })
 }
 
@@ -138,8 +137,7 @@ pub(super) fn rail(state: Rc<Workbench>) -> impl IntoView {
                         .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
-                    new_state.sessions.create();
-                    new_state.show_conversation();
+                    new_state.new_session();
                 }),
         ))
         .style(|s| {

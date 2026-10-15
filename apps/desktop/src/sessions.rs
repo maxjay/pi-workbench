@@ -136,17 +136,21 @@ impl Sessions {
     }
 
     /// Brings a stored session to the front, starting Pi on it if needed.
-    pub fn resume(&self, summary: &SessionSummary) {
+    pub fn resume(&self, summary: &SessionSummary) -> Rc<Session> {
         let open = self.open.with_untracked(|open| {
             open.iter()
                 .find(|s| s.file().get_untracked().as_ref() == Some(&summary.path))
                 .cloned()
         });
         match open {
-            Some(session) => self.active.set(Some(session.key)),
+            Some(session) => {
+                self.active.set(Some(session.key));
+                session
+            }
             None => {
                 let session = self.add(Some(summary));
                 self.start(&session);
+                session
             }
         }
     }

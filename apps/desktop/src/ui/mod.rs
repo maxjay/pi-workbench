@@ -12,7 +12,8 @@ mod terminal;
 use crate::{
     commands::{self, Command},
     lens::Since,
-    workspace::{Integrations, Pane, Workbench},
+    panes::{Node, Tab},
+    workspace::{Integrations, Workbench},
 };
 use editor::pane;
 use explorer::explorer;
@@ -25,7 +26,7 @@ use floem::{
 };
 use overlays::confirmation;
 use pi_client::Launch;
-use std::{path::PathBuf, rc::Rc};
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 /// CSS-style family list; the first installed font wins.
 pub(crate) const CODE_FONT: &str =
@@ -90,80 +91,104 @@ fn button(title: &'static str, action: impl Fn() + 'static) -> impl IntoView {
 }
 
 /// A toolbar button that stays highlighted while its feature is on.
-fn toggle_button(
-    state: Rc<Workbench>,
-    title: &'static str,
-    command: Command,
-    on: impl Fn() -> bool + 'static,
-) -> impl IntoView {
-    button(title, move || commands::execute(&state, command)).style(move |s| {
-        s.apply_if(on(), |s| {
-            s.background(color::highlight())
-                .color(color::accent())
-                .hover(|s| {
-                    s.background(color::accent().with_alpha(0.26))
-                        .color(color::accent())
-                })
-        })
+/// A little picture of the window with its side bar, for the explorer toggle.
+fn sidebar_icon() -> impl IntoView {
+    Container::new(Empty::new().style(|s| {
+        s.absolute()
+            .inset_left(3)
+            .inset_top(0)
+            .width(1)
+            .height_full()
+            .background(color::muted())
+    }))
+    .style(|s| {
+        s.size(14, 11)
+            .border(1)
+            .border_color(color::muted())
+            .border_radius(2)
     })
 }
 
-fn command_button(state: Rc<Workbench>, title: &'static str, command: Command) -> impl IntoView {
-    button(title, move || commands::execute(&state, command))
-}
-
-fn separator() -> impl IntoView {
-    Empty::new().style(|s| {
-        s.width(1)
-            .height(20)
-            .margin_horiz(4)
-            .background(color::border())
-    })
-}
-
-fn toolbar(state: Rc<Workbench>) -> impl IntoView {
+/// The window's top row: what is open, and one search box for files,
+/// commands, Pi's commands and themes.
+fn title_bar(state: Rc<Workbench>) -> impl IntoView {
     let root = state
         .root()
         .file_name()
         .unwrap_or(state.root().as_os_str())
         .to_string_lossy()
         .into_owned();
+    let (search_state, explorer_state) = (state.clone(), state.clone());
     let layout = state.layout();
-    let (changed_only, focus) = (state.lens.changed_only(), state.lens.focus());
-    Stack::horizontal((
-        Label::new("π").style(|s| {
-            s.color(color::accent())
-                .font_size(20)
-                .font_family(CODE_FONT.to_string())
-        }),
-        Label::new(root).style(|s| {
-            s.color(color::text())
-                .font_bold()
+    let search = Stack::horizontal((
+        Label::new("Search files, commands and Pi's /commands").style(|s| {
+            s.color(color::muted())
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
         }),
-        command_button(state.clone(), "Open folder", Command::OpenFolder),
-        command_button(state.clone(), "Save", Command::Save),
-        separator(),
-        toggle_button(state.clone(), "Explorer", Command::Explorer, move || {
-            layout.with(|l| l.explorer_visible)
+        Label::new("Ctrl+P").style(|s| s.color(color::muted()).font_size(11)),
+    ))
+    .style(|s| {
+        s.width(460)
+            .max_width_pct(60.0)
+            .height(26)
+            .padding_horiz(12)
+            .gap(10)
+            .items_center()
+            .border(1)
+            .border_color(color::border())
+            .border_radius(6)
+            .background(color::bg())
+            .cursor(CursorStyle::Pointer)
+            .hover(|s| s.border_color(color::accent()))
+    })
+    .on_event_stop(el::Click, move |_, _| {
+        search_state.open_finder(crate::workspace::Finder::Files)
+    });
+    let explorer_toggle = floem::views::tooltip(
+        Container::new(sidebar_icon())
+            .style(move |s| {
+                s.padding(6)
+                    .border_radius(5)
+                    .cursor(CursorStyle::Pointer)
+                    .hover(|s| s.background(color::border()))
+                    .apply_if(layout.with(|l| l.explorer_visible), |s| {
+                        s.background(color::highlight())
+                    })
+            })
+            .on_event_stop(el::Click, move |_, _| explorer_state.toggle_explorer()),
+        || Label::new("Explorer  (Ctrl+B)").style(|s| s.padding(4).font_size(11)),
+    );
+    Stack::horizontal((
+        Stack::horizontal((
+            Label::new("π").style(|s| {
+                s.color(color::accent())
+                    .font_size(18)
+                    .font_family(CODE_FONT.to_string())
+            }),
+            Label::new(root).style(|s| s.color(color::text()).font_bold().text_ellipsis()),
+        ))
+        .style(|s| {
+            s.gap(8)
+                .items_center()
+                .flex_basis(0)
+                .flex_grow(1.0_f32)
+                .min_width(0)
         }),
-        toggle_button(state.clone(), "Split", Command::Split, move || {
-            layout.with(|l| l.split)
+        search,
+        Stack::horizontal((explorer_toggle,)).style(|s| {
+            s.flex_basis(0)
+                .flex_grow(1.0_f32)
+                .justify_end()
+                .items_center()
         }),
-        toggle_button(state.clone(), "Changed", Command::ChangedOnly, move || {
-            changed_only.get()
-        }),
-        toggle_button(state.clone(), "Focus", Command::Focus, move || focus.get()),
-        separator(),
-        command_button(state, "Commands", Command::Palette),
     ))
     .style(|s| {
         s.width_full()
-            .height(48)
+            .height(40)
             .padding_horiz(14)
-            .gap(4)
+            .gap(12)
             .items_center()
             .flex_shrink(0.0_f32)
             .background(color::panel())
@@ -172,64 +197,211 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
     })
 }
 
-fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl IntoView {
+/// The explorer's resize handle.
+fn divider(state: Rc<Workbench>) -> impl IntoView {
     let dragging = RwSignal::new(None::<(f64, f64)>);
     let layout = state.layout();
     Empty::new()
         .style(move |s| {
-            s.width(5)
+            s.width(4)
                 .height_full()
                 .flex_shrink(0.0_f32)
                 .background(color::border())
                 .cursor(CursorStyle::ColResize)
                 .hover(|s| s.background(color::accent()))
-                .apply_if(
-                    layout.with(|l| {
-                        if sidebar {
-                            !l.explorer_visible
-                        } else {
-                            !l.split
-                        }
-                    }),
-                    |s| s.hide(),
-                )
+                .apply_if(layout.with(|l| !l.explorer_visible), |s| s.hide())
         })
         .on_event_stop(el::PointerDown, move |cx, event| {
             if let Some(id) = event.pointer.pointer_id {
                 cx.request_pointer_capture(id);
-                let x = (cx.world_transform.inverse() * event.state.logical_point()).x;
-                dragging.set(Some((
-                    x,
-                    layout.with_untracked(|l| {
-                        if sidebar {
-                            l.explorer_width
-                        } else {
-                            l.split_fraction
-                        }
-                    }),
-                )));
+                let x = event.state.logical_point().x;
+                dragging.set(Some((x, layout.with_untracked(|l| l.explorer_width))));
             }
         })
-        .on_event_stop(el::PointerMove, move |cx, event| {
-            if let Some((start_x, start_value)) = dragging.get_untracked() {
-                let x = (cx.world_transform.inverse() * event.current.logical_point()).x;
-                let layout = layout.get_untracked();
-                if sidebar {
-                    let direction = if layout.explorer_right { -1.0 } else { 1.0 };
-                    state.resize_explorer(start_value + direction * (x - start_x));
+        .on_event_stop(el::PointerMove, move |_, event| {
+            if let Some((start_x, start_width)) = dragging.get_untracked() {
+                let x = event.current.logical_point().x;
+                let direction = if layout.with_untracked(|l| l.explorer_right) {
+                    -1.0
                 } else {
-                    let explorer_width = if layout.explorer_visible {
-                        layout.explorer_width + 5.0
-                    } else {
-                        0.0
-                    };
-                    let available = (width.get_untracked() - explorer_width - 5.0).max(200.0);
-                    state.resize_split(start_value + (x - start_x) / available);
-                }
+                    1.0
+                };
+                state.resize_explorer(start_width + direction * (x - start_x));
             }
         })
         .on_event_stop(el::PointerUp, move |_, _| dragging.set(None))
         .on_event_stop(el::LostPointerCapture, move |_, _| dragging.set(None))
+}
+
+/// The line between two panes of a split; dragging it moves the space
+/// between them.
+fn split_divider(
+    sizes: RwSignal<Vec<f64>>,
+    index: usize,
+    horizontal: bool,
+    container: Rc<Cell<Option<floem::ViewId>>>,
+) -> impl IntoView {
+    let dragging = RwSignal::new(None::<(f64, Vec<f64>, f64)>);
+    let along = move |point: floem::kurbo::Point| if horizontal { point.x } else { point.y };
+    Empty::new()
+        .style(move |s| {
+            let s = s
+                .flex_shrink(0.0_f32)
+                .background(color::border())
+                .hover(|s| s.background(color::accent()));
+            if horizontal {
+                s.width(4).height_full().cursor(CursorStyle::ColResize)
+            } else {
+                s.height(4).width_full().cursor(CursorStyle::RowResize)
+            }
+        })
+        .on_event_stop(el::PointerDown, move |cx, event| {
+            if let Some(id) = event.pointer.pointer_id {
+                cx.request_pointer_capture(id);
+                let length = container
+                    .get()
+                    .and_then(|view| view.get_size())
+                    .map_or(
+                        1.0,
+                        |size| if horizontal { size.width } else { size.height },
+                    );
+                dragging.set(Some((
+                    along(event.state.logical_point()),
+                    sizes.get_untracked(),
+                    length.max(1.0),
+                )));
+            }
+        })
+        .on_event_stop(el::PointerMove, move |_, event| {
+            let Some((start, shares, length)) = dragging.get_untracked() else {
+                return;
+            };
+            if index + 1 >= shares.len() {
+                return;
+            }
+            let delta = (along(event.current.logical_point()) - start) / length;
+            let pair = shares[index] + shares[index + 1];
+            let least = (pair / 2.0).min(0.06);
+            let first = (shares[index] + delta).clamp(least, pair - least);
+            let mut next = shares;
+            next[index] = first;
+            next[index + 1] = pair - first;
+            sizes.set(next);
+        })
+        .on_event_stop(el::PointerUp, move |_, _| dragging.set(None))
+        .on_event_stop(el::LostPointerCapture, move |_, _| dragging.set(None))
+}
+
+/// One node of the pane tree: a pane, or a split of further nodes.
+fn node_view(state: Rc<Workbench>, node: Node) -> floem::AnyView {
+    match node {
+        Node::Leaf(id) => match state.panes.pane(id) {
+            Some(found) => pane(state, found).into_any(),
+            None => Empty::new().into_any(),
+        },
+        Node::Split {
+            horizontal,
+            children,
+            sizes,
+        } => {
+            let container: Rc<Cell<Option<floem::ViewId>>> = Rc::default();
+            let count = children.len();
+            let mut views = Vec::new();
+            for (index, child) in children.into_iter().enumerate() {
+                if index > 0 {
+                    views.push(
+                        split_divider(sizes, index - 1, horizontal, container.clone()).into_any(),
+                    );
+                }
+                views.push(
+                    Container::new(node_view(state.clone(), child))
+                        .style(move |s| {
+                            let share = sizes
+                                .with(|v| v.get(index).copied())
+                                .unwrap_or(1.0 / count as f64);
+                            s.flex_basis(0)
+                                .flex_grow(share as f32)
+                                .min_width(0)
+                                .min_height(0)
+                                .apply_if(horizontal, |s| s.height_full())
+                                .apply_if(!horizontal, |s| s.width_full())
+                        })
+                        .into_any(),
+                );
+            }
+            let stack = Stack::from_iter(views).style(move |s| {
+                s.size_full()
+                    .min_width(0)
+                    .min_height(0)
+                    .flex_direction(if horizontal {
+                        floem::taffy::FlexDirection::Row
+                    } else {
+                        floem::taffy::FlexDirection::Column
+                    })
+            });
+            container.set(Some(stack.view_id()));
+            stack.into_any()
+        }
+    }
+}
+
+/// The dragged tab, following the pointer.
+fn drag_ghost(state: Rc<Workbench>) -> impl IntoView {
+    let dragging = state.dragging();
+    let point = state.drag_point();
+    let title_state = state.clone();
+    Label::derived(move || {
+        dragging
+            .get()
+            .map(|(_, tab)| match tab {
+                Tab::File(path) => path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                Tab::Session(key) => title_state
+                    .sessions
+                    .find(key)
+                    .map(|s| format!("π  {}", s.title().get()))
+                    .unwrap_or_default(),
+                Tab::Terminal(key) => title_state
+                    .terminal(key)
+                    .map(|slot| format!("›_  Terminal {}", slot.number))
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_default()
+    })
+    .style(move |s| {
+        let at = point.get();
+        s.absolute()
+            .inset_left(at.x + 12.0)
+            .inset_top(at.y + 10.0)
+            .padding_horiz(10)
+            .padding_vert(5)
+            .border(1)
+            .border_color(color::accent())
+            .border_radius(6)
+            .background(color::panel())
+            .color(color::text())
+            .z_index(40)
+            .apply_if(dragging.with(Option::is_none), |s| s.hide())
+    })
+}
+
+/// Every pane, or only the maximised one.
+fn pane_tree(state: Rc<Workbench>) -> impl IntoView {
+    let tree = state.panes.tree();
+    let maximized = state.panes.maximized();
+    // Rebuilt only when the arrangement really changes.
+    let shape = floem::reactive::Memo::new(move |_| (tree.get(), maximized.get()));
+    dyn_container(
+        move || shape.get(),
+        move |(tree, maximized)| match maximized.and_then(|id| state.panes.pane(id)) {
+            Some(only) => pane(state.clone(), only).into_any(),
+            None => node_view(state.clone(), tree),
+        },
+    )
+    .style(|s| s.size_full().min_width(0).min_height(0))
 }
 
 pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
@@ -240,12 +412,12 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     let state = Workbench::new(root, layout_path, integrations, move || {
         floem::close_window(window)
     });
+    state.start_with_session();
     state.restore();
     if let Some(err) = settings_error.or_else(color::follow_settings) {
         state.report(err);
     }
     state.sessions.refresh_recent();
-    state.sessions.create();
     state.lens.start();
     let (synced, changed, tree) = (
         state.documents.clone(),
@@ -265,21 +437,13 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     let layout = state.layout();
     let status = state.status();
     let focused = state.focused();
-    let width = RwSignal::new(1280.0);
     let close_state = state.clone();
     let keyboard_state = state.clone();
-    let panes = Stack::horizontal((
-        pane(state.clone(), Pane::Primary),
-        divider(state.clone(), false, width),
-        pane(state.clone(), Pane::Secondary),
-    ))
-    .style(move |s| s.size_full().min_width(0).min_height(0));
-    let editors = Stack::vertical((panes, terminal::terminal_panel(state.clone())))
-        .style(move |s| s.size_full().min_width(0).min_height(0));
+    let pointer_state = state.clone();
     let body = Stack::horizontal((
         explorer(state.clone()),
-        divider(state.clone(), true, width),
-        editors,
+        divider(state.clone()),
+        pane_tree(state.clone()),
     ))
     .style(move |s| {
         s.size_full().min_width(0).min_height(0).flex_direction(
@@ -344,8 +508,23 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             .flex_shrink(0.0_f32)
             .apply_if(legend_changes.with(Vec::is_empty), |s| s.hide())
     });
+    // Focus fades everything away from the changes; it lives by the lens.
+    let (focus_lens, toggle_lens) = (state.lens.clone(), state.lens.clone());
+    let focus_chip = Label::new("Focus")
+        .style(move |s| {
+            let on = focus_lens.focus().get();
+            s.padding_horiz(8)
+                .padding_vert(2)
+                .border_radius(5)
+                .cursor(CursorStyle::Pointer)
+                .color(if on { color::accent() } else { color::muted() })
+                .hover(|s| s.background(color::border()))
+                .apply_if(on, |s| s.background(color::highlight()))
+        })
+        .on_event_stop(el::Click, move |_, _| toggle_lens.toggle_focus());
     let footer = Stack::horizontal((
         lens_summary,
+        focus_chip,
         legend,
         Label::derived(move || status.get()).style(|s| {
             s.color(color::muted())
@@ -369,14 +548,13 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         })
         .style(|s| s.color(color::muted())),
         Label::derived(move || {
-            let pane = focused.get();
-            if pane == Pane::Primary && position_state.conversation().get() {
+            let Some(pane) = position_state.panes.pane(focused.get()) else {
+                return String::new();
+            };
+            if !matches!(pane.active.get(), Some(Tab::File(_))) {
                 return String::new();
             }
-            let (line, col) = (
-                position_state.cursor_line(pane).get(),
-                position_state.cursor_col(pane).get(),
-            );
+            let (line, col) = (pane.cursor_line.get(), pane.cursor_col.get());
             format!("Ln {}, Col {}  ·  UTF-8", line + 1, col + 1)
         })
         .style(|s| s.color(color::muted()).margin_left(8)),
@@ -395,13 +573,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     });
     Stack::new((
         Stack::vertical((
-            toolbar(state.clone()),
+            title_bar(state.clone()),
             Stack::horizontal((rail::rail(state.clone()), body))
                 .style(|s| s.size_full().min_width(0).min_height(0)),
             footer,
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        drag_ghost(state.clone()),
         finder::finder(state.clone()),
         confirmation(state),
     ))
@@ -411,11 +590,20 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             .color(color::text())
             .font_size(13)
     })
+    // Tab drags are followed here, over the whole window.
+    .on_event_cont_with_config(el::PointerMove, CAPTURE, {
+        let state = pointer_state.clone();
+        move |_, event| {
+            state.pointer_moved(event.current.logical_point());
+        }
+    })
+    .on_event_cont_with_config(el::PointerUp, CAPTURE, move |_, _| {
+        pointer_state.pointer_released();
+    })
     .on_event_cont(el::WindowCloseRequested, move |cx, _| {
         cx.prevent_default();
         close_state.request_quit();
     })
-    .on_event_cont(el::WindowResized, move |_, size| width.set(size.width))
     .on_event_with_config(el::KeyDown, CAPTURE, move |cx, event| {
         if event.key == Key::Named(NamedKey::Escape) {
             keyboard_state.dismiss_finder();
@@ -434,10 +622,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 && !matches!(
                     command,
                     Command::Terminal
+                        | Command::NewTerminal
                         | Command::Palette
                         | Command::NextSession
                         | Command::PreviousSession
                         | Command::Session(_)
+                        | Command::FocusPane(_)
+                        | Command::MoveTab(_)
+                        | Command::MaximizePane
                 )
             {
                 return EventPropagation::Continue;
