@@ -25,6 +25,13 @@ struct Block {
     changed: bool,
 }
 
+/// A changed region: baseline lines replaced by current lines.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Hunk {
+    pub base: Range<usize>,
+    pub current: Range<usize>,
+}
+
 /// Per-line changes for both sides, indexed by editor line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LineDiff {
@@ -97,6 +104,17 @@ impl LineDiff {
                 .into_iter()
                 .collect(),
         }
+    }
+
+    /// Each changed region, in order. Either range may be empty.
+    pub fn hunks_iter(&self) -> impl Iterator<Item = Hunk> + '_ {
+        self.blocks
+            .iter()
+            .filter(|block| block.changed)
+            .map(|block| Hunk {
+                base: block.base.clone(),
+                current: block.current.clone(),
+            })
     }
 
     /// Number of separate changed regions.
@@ -179,6 +197,26 @@ two
         assert_eq!((diff.added(), diff.removed(), diff.hunks()), (2, 0, 1));
         assert_eq!(diff.base_line(1), 0);
         assert_eq!(LineDiff::all_added("").hunks(), 0);
+    }
+
+    #[test]
+    fn hunks_pair_removed_and_added_lines() {
+        let diff = LineDiff::compute("a
+b
+c
+d", "a
+B
+c
+d
+e");
+        let hunks: Vec<_> = diff.hunks_iter().collect();
+        assert_eq!(
+            hunks,
+            [
+                Hunk { base: 1..2, current: 1..2 },
+                Hunk { base: 4..4, current: 4..5 }
+            ]
+        );
     }
 
     #[test]

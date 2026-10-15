@@ -1,7 +1,7 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
-mod diff;
 mod editor;
 mod explorer;
+mod lens_doc;
 mod overlays;
 mod rail;
 mod session;

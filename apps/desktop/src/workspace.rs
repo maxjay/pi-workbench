@@ -1,20 +1,17 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{changes::Changes, documents::Documents, explorer::Explorer, sessions::Sessions};
+use crate::{documents::Documents, explorer::Explorer, lens::Lens, sessions::Sessions};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
-use floem::reactive::{ReadSignal, Scope};
+use floem::reactive::{Effect, ReadSignal, Scope};
 use pi_client::Launch;
 use std::{
     cell::RefCell,
     collections::HashSet,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::Arc,
 };
 use workbench_core::{
-    MAX_OPEN_DOCUMENTS,
-    baseline::BaselineSource,
-    files,
+    MAX_OPEN_DOCUMENTS, files,
     layout::{self, Layout},
 };
 
@@ -42,17 +39,15 @@ pub enum Confirm {
     Reload(PathBuf),
 }
 
-/// External services the workbench uses. Swap these to change what
-/// diffs compare against or how Pi is started.
+/// External services the workbench uses.
 pub struct Integrations {
-    pub baseline: Arc<dyn BaselineSource>,
     pub pi: Launch,
 }
 
 pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
-    pub changes: Rc<Changes>,
+    pub lens: Rc<Lens>,
     pub sessions: Rc<Sessions>,
     /// The primary pane shows the active session's conversation instead of a file.
     conversation: RwSignal<bool>,
@@ -89,7 +84,9 @@ impl Workbench {
         let status = RwSignal::new(message);
         let documents = Documents::new(Scope::current(), root.clone(), status);
         let explorer = Explorer::new(Scope::current(), root.clone(), status);
-        let (synced, tree) = (documents.clone(), explorer.clone());
+        let lens = Lens::new(Scope::current(), root.clone(), status);
+        let (synced, tree, changed) = (documents.clone(), explorer.clone(), lens.clone());
+        let snapshots = lens.clone();
         let sessions = Sessions::new(
             Scope::current(),
             root.clone(),
@@ -98,16 +95,27 @@ impl Workbench {
             move |tree_changed| {
                 // Pi wrote to disk; fold its changes into open buffers.
                 synced.sync_from_disk("Pi");
+                changed.refresh();
                 if tree_changed {
                     tree.refresh();
                 }
             },
+            move |done| snapshots.snapshot(done),
             status,
         );
+        // "Since session start" and "since Pi's last turn" follow the front session.
+        let (turns_lens, turns_sessions) = (lens.clone(), sessions.clone());
+        Effect::new(move |_| {
+            let turns = turns_sessions
+                .active()
+                .map(|session| session.turns().get())
+                .unwrap_or_default();
+            turns_lens.set_turns(turns);
+        });
         Rc::new(Self {
             documents,
             explorer,
-            changes: Changes::new(Scope::current(), integrations.baseline, status),
+            lens,
             sessions,
             conversation: RwSignal::new(true),
             scope: Scope::current(),
@@ -142,7 +150,6 @@ impl Workbench {
         self.conversation.read_only()
     }
     pub fn show_conversation(&self) {
-        self.changes.close();
         self.conversation.set(true);
         self.focused.set(Pane::Primary);
     }
@@ -231,8 +238,6 @@ impl Workbench {
     }
 
     pub fn open(self: &Rc<Self>, path: PathBuf, pane: Pane) {
-        // Opening from the explorer returns to the panes so the file is visible.
-        self.changes.close();
         if pane == Pane::Primary {
             self.conversation.set(false);
         }
@@ -300,14 +305,12 @@ impl Workbench {
         }
     }
 
-    fn active_path(&self) -> Option<PathBuf> {
+    pub fn active_path(&self) -> Option<PathBuf> {
         let pane = self.focused.get_untracked();
         if pane == Pane::Primary && self.conversation.get_untracked() {
-            return self.changes.path();
+            return None;
         }
-        self.changes
-            .path()
-            .or_else(|| self.active(pane).get_untracked())
+        self.active(pane).get_untracked()
     }
 
     /// Opens a file next to the conversation, turning on the second pane.
@@ -317,16 +320,6 @@ impl Workbench {
         }
         self.open(path, Pane::Secondary);
         self.focused.set(Pane::Secondary);
-    }
-
-    pub fn toggle_changes(&self) {
-        if self.changes.active() {
-            self.changes.close();
-        } else if let Some(doc) = self.active_path().and_then(|p| self.documents.get(&p)) {
-            self.changes.show(doc);
-        } else {
-            self.status.set("Open a file to see its changes.".into());
-        }
     }
 
     pub fn save_active(&self) {
@@ -358,7 +351,7 @@ impl Workbench {
     }
 
     fn remove_file(&self, path: &Path) {
-        self.changes.forget(path);
+        self.lens.forget(path);
         self.documents.remove(path);
         let fallback = self
             .documents
@@ -504,7 +497,6 @@ mod tests {
                 dir.path().to_path_buf(),
                 dir.path().join("layout.json"),
                 Integrations {
-                    baseline: Arc::new(crate::changes::tests::Fixed(Some("base"))),
                     pi: Launch::default(),
                 },
                 move || on_close.set(true),
@@ -696,27 +688,6 @@ mod tests {
             let restored = layout::load(&state.layout_path).unwrap();
             assert_eq!(restored.open_files, vec![PathBuf::from("test.rs")]);
             assert_eq!(restored.active[0], Some("test.rs".into()));
-        });
-    }
-
-    #[test]
-    fn changes_need_an_open_file_and_close_with_their_document() {
-        with_workspace(|state, _| {
-            state.toggle_changes();
-            assert!(state.status().get().contains("Open a file"));
-            assert!(!state.changes.active());
-
-            let path = state.root.join("test.rs");
-            state.documents.insert(path.clone(), "text".into());
-            state.select_document(Pane::Primary, path.clone());
-            let doc = state.documents.get(&path).unwrap();
-            state.changes.show_now(doc);
-            assert_eq!(state.changes.path(), Some(path.clone()));
-            state.toggle_changes();
-            assert!(!state.changes.active());
-            state.changes.show_now(state.documents.get(&path).unwrap());
-            state.close_file(path);
-            assert!(!state.changes.active());
         });
     }
 

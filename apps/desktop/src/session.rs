@@ -95,6 +95,8 @@ pub struct Hooks {
     pub files_changed: Box<dyn Fn(bool)>,
     /// A run finished; the session list may have changed.
     pub settled: Box<dyn Fn()>,
+    /// Snapshots the workspace before a prompt; the callback gets a tree id.
+    pub snapshot: Box<dyn Fn(Box<dyn FnOnce(Option<String>)>)>,
 }
 
 /// Tools whose effects on disk the workbench cannot predict from their arguments.
@@ -224,6 +226,8 @@ pub struct Session {
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
+    /// Workspace snapshots taken before each prompt in this window, oldest first.
+    turns: RwSignal<Vec<String>>,
     /// The composer's text, kept per session.
     pub draft: Rc<TextDocument>,
     /// Pi runs tools in parallel; reading files while one is still writing
@@ -272,6 +276,7 @@ impl Session {
                 model: RwSignal::new(None),
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
+                turns: RwSignal::new(Vec::new()),
                 draft: Rc::new(TextDocument::new(scope, "")),
                 running_tools: Cell::new(0),
                 tree_changed: Cell::new(false),
@@ -327,6 +332,9 @@ impl Session {
     }
     pub fn stats(&self) -> ReadSignal<String> {
         self.stats.read_only()
+    }
+    pub fn turns(&self) -> ReadSignal<Vec<String>> {
+        self.turns.read_only()
     }
 
     /// Tracked: what the rail and status bar show.
@@ -460,6 +468,17 @@ impl Session {
         // the edits are merged with Pi's instead.
         self.documents.hold_saves();
         self.holding.set(true);
+        // Snapshot first, so "since this turn" includes nothing Pi did.
+        let session = self.clone();
+        (self.hooks.snapshot)(Box::new(move |tree| {
+            if let Some(tree) = tree {
+                session.turns.update(|turns| turns.push(tree));
+            }
+            session.send_prompt(text);
+        }));
+    }
+
+    fn send_prompt(&self, text: String) {
         let result = self.start().and_then(|()| {
             self.process
                 .borrow_mut()
@@ -763,6 +782,7 @@ mod tests {
             let hooks = Rc::new(Hooks {
                 files_changed: Box::new(move |tree| log.borrow_mut().push(tree)),
                 settled: Box::new(|| {}),
+                snapshot: Box::new(|done| done(None)),
             });
             let session = Session::new(
                 scope,
