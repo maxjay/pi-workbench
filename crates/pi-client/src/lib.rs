@@ -172,7 +172,9 @@ impl Drop for PiProcess {
                 std::thread::sleep(Duration::from_secs(2));
                 if matches!(child.try_wait(), Ok(None)) {
                     // Closing the job ends the whole tree; kill() only the direct child.
-                    drop(tree);
+                    if let Some(tree) = tree {
+                        tree.kill();
+                    }
                     let _ = child.kill();
                 }
                 let _ = child.wait();

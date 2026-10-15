@@ -46,6 +46,9 @@ mod imp {
                 Some(Self(job))
             }
         }
+
+        /// Ends every process in the job.
+        pub fn kill(self) {}
     }
 
     impl Drop for Tree {
@@ -67,6 +70,9 @@ mod imp {
         pub fn adopt(_: &std::process::Child) -> Option<Self> {
             Some(Self)
         }
+
+        /// Nothing beyond the direct child to end.
+        pub fn kill(self) {}
     }
 }
 
