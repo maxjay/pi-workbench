@@ -396,6 +396,7 @@ fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         })
         .style(|s| s.color(MUTED).font_size(11).padding_horiz(6)),
         action("Revert", Command::RevertChange),
+        action("Stage", Command::StageChange),
         action("Ask Pi", Command::AskAboutChange),
         action("Seen", Command::MarkChangeSeen),
         action("Next ↓", Command::NextChange),

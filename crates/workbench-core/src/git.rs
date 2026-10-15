@@ -511,6 +511,58 @@ impl Repo {
             .then(|| String::from_utf8_lossy(line(&output.stdout)).into_owned()))
     }
 
+    /// The staged version of a file and its mode, if the index has it.
+    pub fn staged_text(&self, path: &Path) -> Result<Option<(String, String)>> {
+        let relative = self.relative(path)?;
+        let output = self.git(&["ls-files", "-z", "--stage", "--", &relative])?;
+        let Some(record) = fields(&output).next() else {
+            return Ok(None);
+        };
+        let meta = String::from_utf8_lossy(record);
+        let mut meta = meta.split([' ', '\t']);
+        let (Some(mode), Some(id)) = (meta.next(), meta.next()) else {
+            bail!("Unexpected git ls-files output");
+        };
+        let text = files::decode_text(self.git(&["cat-file", "blob", id])?)?;
+        Ok(Some((mode.to_owned(), text)))
+    }
+
+    /// Stages `text` as the file's content, leaving the working tree alone.
+    /// Files that git transforms when staging (filters such as LFS, or
+    /// working-tree encodings) are refused: their staged form is not the text.
+    pub fn stage_text(&self, path: &Path, mode: &str, text: &str) -> Result<()> {
+        let relative = self.relative(path)?;
+        ensure!(
+            matches!(mode, "100644" | "100755"),
+            "Only regular files can be staged here"
+        );
+        let attributes = self.git(&[
+            "check-attr",
+            "filter",
+            "working-tree-encoding",
+            "--",
+            &relative,
+        ])?;
+        let transformed = String::from_utf8_lossy(&attributes)
+            .lines()
+            .any(|line| !line.ends_with(": unspecified"));
+        ensure!(
+            !transformed,
+            "Git transforms this file when staging; stage it from the terminal"
+        );
+        let id = succeeded(run(
+            command(
+                &self.root,
+                &["hash-object", "-w", "--no-filters", "--stdin"],
+            ),
+            Some(text.as_bytes().to_vec()),
+        )?)?;
+        let id = String::from_utf8_lossy(line(&id)).into_owned();
+        let entry = format!("{mode},{id},{relative}");
+        self.git(&["update-index", "--cacheinfo", &entry])?;
+        Ok(())
+    }
+
     /// Index entries by path, so files git cannot hash from disk keep their recorded version.
     fn staged(&self) -> Result<BTreeMap<Vec<u8>, Staged>> {
         let output = self.git(&["ls-files", "-z", "--stage"])?;
@@ -1176,6 +1228,33 @@ mod tests {
         let refused = elsewhere.path().join("pi-3");
         assert!(repo.add_worktree(&refused, "pi/3").is_err());
         assert!(!refused.exists());
+    }
+
+    #[test]
+    fn staging_text_changes_only_the_index() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "one\ntwo\n");
+        commit(&root, "base");
+        write(&root, "a.txt", "one\nTWO\nthree\n");
+        let repo = open(&root);
+        let path = root.join("a.txt");
+        let (mode, text) = repo.staged_text(&path).unwrap().unwrap();
+        assert_eq!((mode.as_str(), text.as_str()), ("100644", "one\ntwo\n"));
+        repo.stage_text(&path, &mode, "one\nTWO\n").unwrap();
+        assert_eq!(repo.staged_text(&path).unwrap().unwrap().1, "one\nTWO\n");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "one\nTWO\nthree\n",
+            "the working tree is untouched"
+        );
+        assert_eq!(repo.staged_text(&root.join("new.txt")).unwrap(), None);
+        write(&root, ".gitattributes", "*.lfs filter=lfs\n");
+        write(&root, "b.lfs", "x\n");
+        run(&root, &["add", "b.lfs", ".gitattributes"]);
+        assert!(
+            repo.stage_text(&root.join("b.lfs"), "100644", "y\n")
+                .is_err()
+        );
     }
 
     #[test]

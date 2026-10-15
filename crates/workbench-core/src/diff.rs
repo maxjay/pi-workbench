@@ -136,6 +136,41 @@ impl LineDiff {
             .count()
     }
 
+    /// `base` with only the changes that touch `lines` of `current` taken from
+    /// `current`, keeping `base`'s line endings. Used to stage part of a file.
+    pub fn apply_lines(base: &str, current: &str, lines: Range<usize>) -> String {
+        let diff = LineDiff::compute(base, current);
+        let ending = if base.contains("\r\n") { "\r\n" } else { "\n" };
+        let split = |text: &str| -> Vec<String> {
+            text.split('\n')
+                .map(|l| l.trim_end_matches('\r').to_owned())
+                .collect()
+        };
+        let (old, new) = (split(base), split(current));
+        let touches = |hunk: &Hunk| {
+            if hunk.current.is_empty() || lines.is_empty() {
+                // A removal, or a selection of no lines, touches by position.
+                (lines.start..=lines.end).contains(&hunk.current.start)
+                    || (hunk.current.start..=hunk.current.end).contains(&lines.start)
+            } else {
+                hunk.current.start < lines.end && lines.start < hunk.current.end
+            }
+        };
+        let mut out: Vec<String> = Vec::new();
+        let mut at = 0;
+        for hunk in diff.hunks_iter() {
+            out.extend_from_slice(&old[at..hunk.base.start]);
+            if touches(&hunk) {
+                out.extend_from_slice(&new[hunk.current.clone()]);
+            } else {
+                out.extend_from_slice(&old[hunk.base.clone()]);
+            }
+            at = hunk.base.end;
+        }
+        out.extend_from_slice(&old[at..]);
+        out.join(ending)
+    }
+
     /// The baseline line `current_line` is a copy of, if it is unchanged.
     pub fn unchanged_base_line(&self, current_line: usize) -> Option<usize> {
         let block = self
@@ -171,6 +206,22 @@ impl LineDiff {
 mod tests {
     use super::*;
     use LineChange::*;
+
+    #[test]
+    fn applying_lines_takes_only_the_touched_changes() {
+        let base = "a\nb\nc\nd\n";
+        let current = "a\nB\nc\nD\n";
+        assert_eq!(LineDiff::apply_lines(base, current, 1..2), "a\nB\nc\nd\n");
+        assert_eq!(LineDiff::apply_lines(base, current, 3..4), "a\nb\nc\nD\n");
+        assert_eq!(LineDiff::apply_lines(base, current, 0..4), current);
+        // A removal is taken by its position.
+        assert_eq!(LineDiff::apply_lines("a\nb\nc\n", "a\nc\n", 1..1), "a\nc\n");
+        // The base's line endings are kept.
+        assert_eq!(
+            LineDiff::apply_lines("a\r\nb\r\n", "a\nB\n", 1..2),
+            "a\r\nB\r\n"
+        );
+    }
 
     #[test]
     fn unchanged_lines_map_back_to_the_baseline() {
