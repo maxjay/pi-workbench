@@ -37,6 +37,40 @@ pub enum Finder {
     Search,
 }
 
+/// Creates `<repository>-worktrees/pi-<time>` beside the repository on a new
+/// branch `pi/pi-<time>`; returns the workspace folder inside it and the branch.
+fn add_worktree(root: &Path) -> anyhow::Result<(PathBuf, String)> {
+    use anyhow::Context;
+    let repo = workbench_core::git::Repo::discover(root)?
+        .context("This folder is not in a git repository")?;
+    let name = repo
+        .root()
+        .file_name()
+        .context("The repository has no folder name")?
+        .to_string_lossy()
+        .into_owned();
+    let parent = repo
+        .root()
+        .parent()
+        .context("The repository has no parent folder")?;
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let slug = format!("pi-{seconds}");
+    let branch = format!("pi/{slug}");
+    let tree = parent.join(format!("{name}-worktrees")).join(&slug);
+    std::fs::create_dir_all(tree.parent().context("No parent folder")?)?;
+    repo.add_worktree(&tree, &branch)?;
+    // Open the same folder of the repository the window shows; workspace
+    // paths are canonical, so compare with the canonical repository root.
+    let repo_root = repo
+        .root()
+        .canonicalize()
+        .unwrap_or_else(|_| repo.root().to_path_buf());
+    let inside = root.strip_prefix(&repo_root).unwrap_or(Path::new(""));
+    Ok((tree.join(inside), branch))
+}
+
 /// Where a pane's cursor should go once its file and diff are ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JumpTo {
@@ -102,6 +136,11 @@ pub struct Workbench {
     confirm: RwSignal<Option<Confirm>>,
     palette: RwSignal<bool>,
     finder: RwSignal<Option<Finder>>,
+    /// The window's shell, started the first time the panel opens.
+    terminal: RwSignal<Option<Rc<crate::terminal::Terminal>>>,
+    terminal_visible: RwSignal<bool>,
+    terminal_focused: RwSignal<bool>,
+    terminal_failed: std::cell::Cell<bool>,
     /// Each pane's cursor line, kept by the pane for change navigation.
     cursor_line: [RwSignal<usize>; 2],
     cursor_col: [RwSignal<usize>; 2],
@@ -177,6 +216,10 @@ impl Workbench {
             confirm: RwSignal::new(None),
             palette: RwSignal::new(false),
             finder: RwSignal::new(None),
+            terminal: RwSignal::new(None),
+            terminal_visible: RwSignal::new(false),
+            terminal_focused: RwSignal::new(false),
+            terminal_failed: std::cell::Cell::new(false),
             cursor_line: [RwSignal::new(0), RwSignal::new(0)],
             cursor_col: [RwSignal::new(0), RwSignal::new(0)],
             jump: RwSignal::new(None),
@@ -209,6 +252,10 @@ impl Workbench {
     }
     pub fn status(&self) -> ReadSignal<String> {
         self.status.read_only()
+    }
+    /// Shows a message in the status bar.
+    pub fn report(&self, message: String) {
+        self.status.set(message);
     }
     pub fn confirmation(&self) -> ReadSignal<Option<Confirm>> {
         self.confirm.read_only()
@@ -327,13 +374,109 @@ impl Workbench {
         let reading = path.clone();
         let finish = create_ext_action(self.scope, move |result| state.finish_open(path, result));
         let root = self.root.clone();
+        // The settings file is the one file outside the workspace that opens.
+        let settings = workbench_core::settings::path()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p));
         std::thread::spawn(move || {
-            finish(
+            let allowed = if settings.as_ref() == Some(&reading) {
+                Ok(reading.clone())
+            } else {
                 files::within(&root, &reading)
+            };
+            finish(
+                allowed
                     .and_then(|p| files::read_text(&p))
                     .map_err(|e| e.to_string()),
             );
         });
+    }
+
+    /// Checks out the current commit as a new branch in a sibling folder and
+    /// opens it in a new window with a fresh session, so Pi works apart from
+    /// this checkout.
+    pub fn new_worktree_session(&self) {
+        self.status.set("Creating a worktree…".into());
+        let status = self.status;
+        let finish = create_ext_action(
+            self.scope,
+            move |result: anyhow::Result<(PathBuf, String)>| match result.and_then(
+                |(path, branch)| {
+                    crate::open_window(&path)?;
+                    Ok(branch)
+                },
+            ) {
+                Ok(branch) => status.set(format!("Opened a new window on branch {branch}")),
+                Err(err) => status.set(format!("Worktree: {err:#}")),
+            },
+        );
+        let root = self.root.clone();
+        std::thread::spawn(move || finish(add_worktree(&root)));
+    }
+
+    pub fn terminal(&self) -> ReadSignal<Option<Rc<crate::terminal::Terminal>>> {
+        self.terminal.read_only()
+    }
+    pub fn terminal_visible(&self) -> ReadSignal<bool> {
+        self.terminal_visible.read_only()
+    }
+    pub fn terminal_focused(&self) -> ReadSignal<bool> {
+        self.terminal_focused.read_only()
+    }
+    pub fn set_terminal_focused(&self, focused: bool) {
+        if self.terminal_focused.get_untracked() != focused {
+            self.terminal_focused.set(focused);
+        }
+    }
+    pub fn toggle_terminal(&self) {
+        let shown = !self.terminal_visible.get_untracked();
+        self.terminal_visible.set(shown);
+        if shown {
+            // A shell that failed to start gets another try each opening.
+            self.terminal_failed.set(false);
+        } else if self.terminal_focused.get_untracked() {
+            // Typing must not go on into a shell nobody can see.
+            self.set_terminal_focused(false);
+            floem::action::clear_focus();
+        }
+    }
+
+    /// Starts the shell at the panel's size, or resizes the running one.
+    pub fn ensure_terminal(&self, columns: usize, lines: usize) {
+        if let Some(terminal) = self.terminal.get_untracked() {
+            terminal.resize(columns, lines);
+            return;
+        }
+        if self.terminal_failed.get() {
+            return;
+        }
+        match crate::terminal::Terminal::start(self.scope, &self.root, columns, lines) {
+            Ok(terminal) => self.terminal.set(Some(terminal)),
+            Err(err) => {
+                self.terminal_failed.set(true);
+                self.status.set(format!("Terminal: {err:#}"));
+            }
+        }
+    }
+
+    pub fn restart_terminal(&self) {
+        if let Some(old) = self.terminal.get_untracked() {
+            let size = old.size();
+            self.terminal.set(None);
+            self.ensure_terminal(size.0, size.1);
+        }
+    }
+
+    /// Opens the settings file, creating it with every setting explained.
+    pub fn open_settings(self: &Rc<Self>) {
+        match crate::settings::file() {
+            Ok(path) => {
+                self.open(path, self.focused.get_untracked());
+                self.status
+                    .set("Settings apply as you save; fonts and keys in new windows.".into());
+            }
+            Err(err) => self.status.set(format!("Settings: {err:#}")),
+        }
     }
 
     /// A jump into a file that never opened must not fire later.

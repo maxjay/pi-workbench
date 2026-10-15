@@ -6,7 +6,9 @@ mod markdown;
 mod origins;
 mod session;
 mod sessions;
+mod settings;
 mod syntax;
+mod terminal;
 mod ui;
 mod watcher;
 mod workspace;
@@ -37,17 +39,22 @@ fn open_folder() {
         |selected| {
             if let Some(info) = selected
                 && let Some(path) = info.path.first()
+                && let Err(err) = open_window(path)
             {
-                match workspace_paths(path) {
-                    Ok((root, layout)) => floem::new_window(
-                        move |id| ui::workbench(id, root, layout),
-                        Some(window_config()),
-                    ),
-                    Err(err) => eprintln!("Cannot open workspace: {err}"),
-                }
+                eprintln!("Cannot open workspace: {err:#}");
             }
         },
     );
+}
+
+/// Opens a workspace folder in a new window.
+fn open_window(path: &Path) -> Result<()> {
+    let (root, layout) = workspace_paths(path)?;
+    floem::new_window(
+        move |id| ui::workbench(id, root, layout),
+        Some(window_config()),
+    );
+    Ok(())
 }
 
 /// WSLg's GPU-backed OpenGL loses the device while wgpu sets up, which Floem

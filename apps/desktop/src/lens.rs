@@ -227,6 +227,7 @@ fn authorship(
 struct Refreshed {
     head: Option<String>,
     branch_base: Option<Base>,
+    base_note: Option<String>,
     changes: Option<anyhow::Result<Vec<FileChange>>>,
     bases: Vec<(PathBuf, Loaded)>,
     turn_files: Vec<TurnFiles>,
@@ -455,6 +456,7 @@ impl Lens {
             .map(|file| (file.path.clone(), self.relative(&file.path)))
             .collect();
         let (records, root) = (self.records.clone(), self.root.clone());
+        let preferred = crate::settings::get().base_branch.clone();
         let (authors, turn_cache) = (self.authorship.clone(), self.turn_cache.clone());
         let lens = self.clone();
         let finish = create_ext_action(self.scope, move |found: Refreshed| {
@@ -466,7 +468,18 @@ impl Lens {
         });
         std::thread::spawn(move || {
             let head = repo.head().ok().flatten();
-            let branch_base = repo.default_base().ok().flatten();
+            let branch_base = repo.base(preferred.as_deref()).ok().flatten();
+            // Say so when the configured branch was not found.
+            let base_note = preferred
+                .filter(|p| !p.trim().is_empty())
+                .filter(|p| {
+                    branch_base
+                        .as_ref()
+                        .is_none_or(|b| b.branch != *p && b.branch != format!("origin/{p}"))
+                })
+                .map(|p| {
+                    format!("Settings: no branch {p:?} to compare with; using the usual base")
+                });
             let rev = match since {
                 Since::Branch => branch_base.as_ref().map(|b| Rev::Commit(b.commit.clone())),
                 Since::Head => head.clone().map(Rev::Commit),
@@ -512,6 +525,7 @@ impl Lens {
             finish(Refreshed {
                 head,
                 branch_base,
+                base_note,
                 changes,
                 bases,
                 turn_files,
@@ -527,6 +541,9 @@ impl Lens {
         }
         if self.branch_base.with_untracked(|b| *b != found.branch_base) {
             self.branch_base.set(found.branch_base);
+            if let Some(note) = found.base_note {
+                self.status.set(note);
+            }
         }
         if self.changes_generation.get() != generation {
             return;

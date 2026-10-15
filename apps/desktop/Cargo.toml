@@ -13,6 +13,7 @@ anyhow.workspace = true
 pulldown-cmark = { version = "0.13.4", default-features = false }
 notify = "8.2.0"
 workbench-text.workspace = true
+alacritty_terminal = "0.26.0"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -42,10 +42,20 @@ impl Default for Launch {
 }
 
 impl Launch {
-    /// `PI_WORKBENCH_PI` overrides the program; `PI_WORKBENCH_PI_ARGS` adds
+    /// `PI_WORKBENCH_PI` overrides the program; `PI_WORKBENCH_PI_ARGS` sets the
     /// whitespace-separated arguments, such as `--provider x --model y`.
     pub fn from_env() -> Self {
+        Self::from_settings(None, &[])
+    }
+
+    /// Like [`Self::from_env`], starting from a configured program and
+    /// arguments; the environment variables still win.
+    pub fn from_settings(program: Option<&str>, args: &[String]) -> Self {
         let mut launch = Self::default();
+        if let Some(program) = program.filter(|p| !p.trim().is_empty()) {
+            launch.program = program.to_owned();
+        }
+        launch.args = args.to_vec();
         if let Ok(program) = std::env::var("PI_WORKBENCH_PI") {
             launch.program = program;
         }

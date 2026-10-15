@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+/// Checking out a whole working tree can take minutes on a large repository.
+const WORKTREE_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// A hung git (a lock, a network filesystem) must not leave the view loading forever.
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -149,6 +152,21 @@ impl Repo {
     /// `None` until the first commit.
     pub fn head(&self) -> Result<Option<String>> {
         self.resolve("HEAD")
+    }
+
+    /// The merge base with `preferred` when given, otherwise as [`Self::default_base`].
+    pub fn base(&self, preferred: Option<&str>) -> Result<Option<Base>> {
+        match preferred.map(str::trim).filter(|b| !b.is_empty()) {
+            Some(branch) => {
+                ensure!(!branch.starts_with('-'), "Invalid branch name {branch:?}");
+                // A misspelt setting falls back to the usual branches.
+                match self.merge_base(branch)? {
+                    Some(base) => Ok(Some(base)),
+                    None => self.default_base(),
+                }
+            }
+            None => self.default_base(),
+        }
     }
 
     /// The merge base with the first of develop, main, or master that exists,
@@ -378,6 +396,56 @@ impl Repo {
             .collect();
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(changes)
+    }
+
+    /// Checks out HEAD as a new branch in a new working tree at `path`, which
+    /// must not exist yet. Uncommitted changes stay where they are.
+    pub fn add_worktree(&self, path: &Path, branch: &str) -> Result<()> {
+        ensure!(!path.exists(), "{} already exists", path.display());
+        ensure!(
+            !branch.starts_with('-') && !branch.is_empty(),
+            "Invalid branch name {branch:?}"
+        );
+        // A checkout runs the content filters a repository's own config
+        // names; filters from the user's global config are theirs to trust.
+        let local = git(
+            &self.root,
+            &[
+                "config",
+                "--local",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\.",
+            ],
+        )?;
+        ensure!(
+            local.stdout.trim_ascii().is_empty(),
+            "This repository's own config defines content filters; create the worktree from a terminal"
+        );
+        let target = plain_path(path);
+        let target = target
+            .to_str()
+            .context("Worktree path is not valid UTF-8")?;
+        // A large checkout takes far longer than a query.
+        let added = run_for(
+            command(
+                &self.root,
+                &["worktree", "add", "-q", "-b", branch, "--", target, "HEAD"],
+            ),
+            None,
+            WORKTREE_TIMEOUT,
+            "git",
+        )
+        .and_then(succeeded);
+        if let Err(err) = added {
+            // Leave nothing half made behind.
+            let _ = git(&self.root, &["worktree", "remove", "--force", "--", target]);
+            let _ = git(&self.root, &["worktree", "prune"]);
+            let _ = git(&self.root, &["branch", "-D", "--", branch]);
+            let _ = fs::remove_dir_all(path);
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// The email commits made here are recorded with, if set.
@@ -1073,6 +1141,41 @@ mod tests {
             ["test@example.com", "other@example.com", "other@example.com"]
         );
         assert_eq!(repo.blame(&root.join("missing.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn worktrees_start_from_head_on_a_new_branch() {
+        let (_dir, root) = init();
+        write(
+            &root, "a.txt", "one
+",
+        );
+        commit(&root, "base");
+        write(
+            &root,
+            "a.txt",
+            "uncommitted
+",
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        let tree = elsewhere.path().join("pi-1");
+        let repo = open(&root);
+        repo.add_worktree(&tree, "pi/1").unwrap();
+        assert_eq!(
+            fs::read_to_string(tree.join("a.txt")).unwrap(),
+            "one
+"
+        );
+        assert_eq!(run(&tree, &["branch", "--show-current"]), "pi/1");
+        assert!(repo.add_worktree(&tree, "pi/2").is_err());
+        assert!(
+            repo.add_worktree(&elsewhere.path().join("x"), "-x")
+                .is_err()
+        );
+        run(&root, &["config", "filter.evil.smudge", "evil"]);
+        let refused = elsewhere.path().join("pi-3");
+        assert!(repo.add_worktree(&refused, "pi/3").is_err());
+        assert!(!refused.exists());
     }
 
     #[test]
