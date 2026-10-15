@@ -42,6 +42,78 @@ pub enum Finder {
     /// The workbench's commands and Pi's slash commands.
     Commands,
     Themes,
+    /// A path for a new file.
+    NewFile,
+}
+
+/// Where a dragged tab would land: in a pane, in a new pane on one of its
+/// sides, or in its tab bar before the tab at `index`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DropAt {
+    pub pane: PaneId,
+    pub side: Option<Direction>,
+    pub index: Option<usize>,
+}
+
+/// A row of a popup menu; one without an action is a separator.
+#[derive(Clone)]
+pub struct MenuItem {
+    pub title: String,
+    pub hint: String,
+    pub action: Option<Rc<dyn Fn()>>,
+}
+
+impl MenuItem {
+    pub fn new(title: impl Into<String>, action: impl Fn() + 'static) -> Self {
+        Self {
+            title: title.into(),
+            hint: String::new(),
+            action: Some(Rc::new(action)),
+        }
+    }
+    pub fn hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = hint.into();
+        self
+    }
+    pub fn separator() -> Self {
+        Self {
+            title: String::new(),
+            hint: String::new(),
+            action: None,
+        }
+    }
+}
+
+/// A popup menu open at a point in the window.
+#[derive(Clone)]
+pub struct PopupMenu {
+    pub at: floem::kurbo::Point,
+    pub items: Vec<MenuItem>,
+}
+
+/// The zoom steps, as in a browser.
+const ZOOMS: [f64; 13] = [
+    0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
+];
+
+/// Whether a typed path names a file inside the workspace: relative, with
+/// no `..`, and not a folder.
+fn new_file_path(text: &str) -> Result<PathBuf, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Type a file name".into());
+    }
+    if text.ends_with(['/', '\\']) {
+        return Err("Type a file name after the folder".into());
+    }
+    let path = PathBuf::from(text);
+    let plain = path
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !plain {
+        return Err("Use a path inside the workspace, without ..".into());
+    }
+    Ok(path)
 }
 
 /// Creates `<repository>-worktrees/pi-<time>` beside the repository on a new
@@ -137,15 +209,24 @@ pub struct Workbench {
     /// last terminal shown.
     last_pane: Rc<Cell<Option<PaneId>>>,
     last_terminal: Rc<Cell<Option<u64>>>,
-    /// A tab being dragged, and where it would land if dropped now.
-    dragging: RwSignal<Option<(PaneId, Tab)>>,
-    drop_target: RwSignal<Option<(PaneId, Option<Direction>)>>,
+    /// A tab being dragged, from its pane or from outside any (the explorer
+    /// or the rail), and where it would land if dropped now.
+    dragging: RwSignal<Option<(Option<PaneId>, Tab)>>,
+    drop_target: RwSignal<Option<DropAt>>,
     /// A tab pressed but not yet moved far enough to count as a drag.
-    pressed: RefCell<Option<(PaneId, Tab, floem::kurbo::Point)>>,
+    pressed: RefCell<Option<(Option<PaneId>, Tab, floem::kurbo::Point)>>,
     /// Where the pointer is while dragging, for the tab that follows it.
     drag_point: RwSignal<floem::kurbo::Point>,
-    /// Each pane's body, to find which pane the pointer is over.
+    /// Where the pointer last was in the window.
+    pointer: Cell<floem::kurbo::Point>,
+    /// Each pane's body and tab bar, and each tab, to find what the pointer
+    /// is over. Views of closed panes and tabs are dropped as they are found.
     pane_views: RefCell<BTreeMap<PaneId, floem::ViewId>>,
+    bar_views: RefCell<BTreeMap<PaneId, floem::ViewId>>,
+    tab_views: RefCell<Vec<(PaneId, Tab, floem::ViewId)>>,
+    menu: RwSignal<Option<PopupMenu>>,
+    /// Text the picker opens with.
+    prefill: RefCell<Option<String>>,
     jump: RwSignal<Option<Jump>>,
     /// Whether restoring opens a session when none was saved; off in tests,
     /// which must not start Pi.
@@ -248,7 +329,12 @@ impl Workbench {
             drop_target: RwSignal::new(None),
             pressed: RefCell::new(None),
             drag_point: RwSignal::new(floem::kurbo::Point::ZERO),
+            pointer: Cell::new(floem::kurbo::Point::ZERO),
             pane_views: RefCell::new(BTreeMap::new()),
+            bar_views: RefCell::new(BTreeMap::new()),
+            tab_views: RefCell::new(Vec::new()),
+            menu: RwSignal::new(None),
+            prefill: RefCell::new(None),
             jump: RwSignal::new(None),
             start_session: Cell::new(false),
             kept: RefCell::new(Vec::new()),
@@ -292,6 +378,10 @@ impl Workbench {
     }
     pub fn finder(&self) -> ReadSignal<Option<Finder>> {
         self.finder.read_only()
+    }
+    /// The text the picker opens with, once.
+    pub fn take_prefill(&self) -> Option<String> {
+        self.prefill.borrow_mut().take()
     }
     pub fn open_finder(&self, mode: Finder) {
         if self.finder.get_untracked() == Some(Finder::Themes) && mode != Finder::Themes {
@@ -687,6 +777,81 @@ impl Workbench {
         }
     }
 
+    /// Asks for a new file's path, starting in the folder of the file showing.
+    pub fn new_file(&self) {
+        let folder = self
+            .active_path()
+            .and_then(|p| Some(p.parent()?.strip_prefix(&self.root).ok()?.to_path_buf()))
+            .filter(|folder| !folder.as_os_str().is_empty())
+            .map(|folder| format!("{}/", folder.to_string_lossy().replace('\\', "/")));
+        *self.prefill.borrow_mut() = Some(folder.unwrap_or_default());
+        self.open_finder(Finder::NewFile);
+    }
+
+    /// What creating `text` would do, for the picker to show.
+    pub fn describe_new_file(&self, text: &str) -> Result<(PathBuf, bool), String> {
+        let relative = new_file_path(text)?;
+        let exists = self.root.join(&relative).is_file();
+        if !exists && self.root.join(&relative).exists() {
+            return Err(format!("{} is a folder", relative.display()));
+        }
+        Ok((relative, exists))
+    }
+
+    /// Creates a file in the workspace, with any folders it needs, and shows
+    /// it in the focused pane; a file that already exists just opens.
+    pub fn create_file(self: &Rc<Self>, text: &str) {
+        match self.make_file(text) {
+            Ok(path) => {
+                self.explorer.refresh();
+                self.open(path, self.panes.focused().get_untracked());
+            }
+            Err(err) => self.status.set(err),
+        }
+    }
+
+    /// Makes the file `text` names, with its folders, unless it exists.
+    fn make_file(&self, text: &str) -> Result<PathBuf, String> {
+        let (relative, exists) = self.describe_new_file(text)?;
+        let path = self.root.join(&relative);
+        if !exists {
+            let made = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map(drop)
+                });
+            made.map_err(|err| format!("Could not create {}: {err}", relative.display()))?;
+        }
+        Ok(path)
+    }
+
+    // ---- Popup menus ----
+
+    pub fn menu(&self) -> ReadSignal<Option<PopupMenu>> {
+        self.menu.read_only()
+    }
+    pub fn open_menu(&self, at: floem::kurbo::Point, items: Vec<MenuItem>) {
+        self.pressed.borrow_mut().take();
+        self.menu.set(Some(PopupMenu { at, items }));
+    }
+    pub fn dismiss_menu(&self) {
+        if self.menu.with_untracked(Option::is_some) {
+            self.menu.set(None);
+        }
+    }
+    /// Where the pointer last was in the window.
+    pub fn pointer(&self) -> floem::kurbo::Point {
+        self.pointer.get()
+    }
+    pub fn note_pointer(&self, at: floem::kurbo::Point) {
+        self.pointer.set(at);
+    }
+
     /// A jump into a file that never opened must not fire later.
     fn drop_jump(&self, path: &Path) {
         if self
@@ -1003,6 +1168,37 @@ impl Workbench {
         }
     }
 
+    /// Closes several tabs of a pane. A file with unsaved edits that only this
+    /// pane shows stays open, and is named.
+    pub fn close_tabs(&self, pane: PaneId, tabs: Vec<Tab>) {
+        let mut kept = Vec::new();
+        for tab in tabs {
+            if let Tab::File(path) = &tab
+                && self.panes.holding(&tab).len() <= 1
+                && self
+                    .documents
+                    .get(path)
+                    .is_some_and(|doc| doc.dirty() || doc.saving())
+            {
+                kept.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                continue;
+            }
+            self.close_tab(pane, tab);
+        }
+        if !kept.is_empty() {
+            self.status.set(format!(
+                "Kept {} open: unsaved edits. Save or close {} first.",
+                kept.join(", "),
+                if kept.len() == 1 { "it" } else { "them" }
+            ));
+        }
+    }
+
     /// Ctrl+W: the focused tab, or the focused pane once it has none.
     pub fn close_active(&self) {
         let pane = self.panes.focused_pane();
@@ -1136,6 +1332,53 @@ impl Workbench {
         self.panes.focus(new.id);
     }
 
+    /// Ctrl+PageDown and Ctrl+PageUp: the next or previous tab in the pane.
+    pub fn cycle_tab(&self, forward: bool) {
+        let pane = self.panes.focused_pane();
+        let tabs = pane.tabs.get_untracked();
+        if tabs.is_empty() {
+            return;
+        }
+        let at = pane
+            .active
+            .with_untracked(|a| a.as_ref().and_then(|a| tabs.iter().position(|t| t == a)))
+            .unwrap_or(0);
+        let next = if forward {
+            (at + 1) % tabs.len()
+        } else {
+            (at + tabs.len() - 1) % tabs.len()
+        };
+        self.select_tab(pane.id, tabs[next].clone());
+    }
+
+    /// Makes a pane's text a step larger (`step` > 0), smaller (< 0), or the
+    /// usual size (0).
+    pub fn zoom(&self, pane: PaneId, step: i32) {
+        let Some(pane) = self.panes.pane(pane) else {
+            return;
+        };
+        let now = pane.zoom.get_untracked();
+        let next = match step.cmp(&0) {
+            std::cmp::Ordering::Equal => 1.0,
+            std::cmp::Ordering::Greater => ZOOMS
+                .iter()
+                .copied()
+                .find(|z| *z > now + 1e-6)
+                .unwrap_or(ZOOMS[ZOOMS.len() - 1]),
+            std::cmp::Ordering::Less => ZOOMS
+                .iter()
+                .rev()
+                .copied()
+                .find(|z| *z < now - 1e-6)
+                .unwrap_or(ZOOMS[0]),
+        };
+        if next != now {
+            pane.zoom.set(next);
+        }
+        self.status
+            .set(format!("Zoom {}%", (next * 100.0).round() as i64));
+    }
+
     pub fn focus_direction(&self, direction: Direction) {
         let from = self.panes.focused().get_untracked();
         if let Some(to) = self.panes.neighbour(from, direction) {
@@ -1175,27 +1418,45 @@ impl Workbench {
         self.panes.toggle_maximized(id);
     }
 
-    pub fn drop_target(&self) -> ReadSignal<Option<(PaneId, Option<Direction>)>> {
+    pub fn drop_target(&self) -> ReadSignal<Option<DropAt>> {
         self.drop_target.read_only()
     }
-    pub fn dragging(&self) -> ReadSignal<Option<(PaneId, Tab)>> {
+    pub fn dragging(&self) -> ReadSignal<Option<(Option<PaneId>, Tab)>> {
         self.dragging.read_only()
     }
     pub fn drag_point(&self) -> ReadSignal<floem::kurbo::Point> {
         self.drag_point.read_only()
     }
-    /// Records a pane's body so drags can find it.
-    pub fn register_pane_view(&self, pane: PaneId, view: floem::ViewId) {
-        self.pane_views.borrow_mut().insert(pane, view);
+    /// Records a pane's body and tab bar so drags can find them.
+    pub fn register_pane_view(&self, pane: PaneId, body: floem::ViewId, bar: floem::ViewId) {
+        self.pane_views.borrow_mut().insert(pane, body);
+        self.bar_views.borrow_mut().insert(pane, bar);
+    }
+    /// Records a tab's view, so a drag over it can land before or after it.
+    pub fn register_tab_view(&self, pane: PaneId, tab: Tab, view: floem::ViewId) {
+        let mut views = self.tab_views.borrow_mut();
+        views.retain(|(p, t, v)| v.is_valid() && !(*p == pane && *t == tab));
+        views.push((pane, tab, view));
     }
 
-    /// A tab was pressed; it becomes a drag once the pointer moves away.
-    pub fn press_tab(&self, pane: PaneId, tab: Tab, at: floem::kurbo::Point) {
-        *self.pressed.borrow_mut() = Some((pane, tab, at));
+    /// A tab was pressed, in a pane or outside any (a file in the explorer,
+    /// a session in the rail); it becomes a drag once the pointer moves away.
+    pub fn press_tab(&self, pane: Option<PaneId>, tab: Tab) {
+        *self.pressed.borrow_mut() = Some((pane, tab, self.pointer.get()));
     }
 
-    /// The pointer moved anywhere in the window. Returns whether a drag is on.
-    pub fn pointer_moved(&self, at: floem::kurbo::Point) -> bool {
+    /// The pointer moved anywhere in the window, with a button held or not.
+    /// Returns whether a drag is on.
+    pub fn pointer_moved(&self, at: floem::kurbo::Point, held: bool) -> bool {
+        self.pointer.set(at);
+        if !held {
+            // The button came up outside the window.
+            self.pressed.borrow_mut().take();
+            if self.dragging.with_untracked(Option::is_some) {
+                self.end_drag();
+            }
+            return false;
+        }
         if self.dragging.with_untracked(Option::is_none) {
             let started = self
                 .pressed
@@ -1209,41 +1470,74 @@ impl Workbench {
             self.dragging.set(Some((pane, tab)));
         }
         self.drag_point.set(at);
-        let over = self.pane_views.borrow().iter().find_map(|(pane, view)| {
-            let rect = view.get_visual_rect();
-            rect.contains(at).then(|| {
-                let side = side_at(at.x - rect.x0, at.y - rect.y0, rect.width(), rect.height());
-                (*pane, side)
-            })
-        });
-        match over {
-            Some((pane, side)) => self.drag_over(pane, side),
-            None if self.drop_target.with_untracked(Option::is_some) => self.drop_target.set(None),
-            None => {}
+        let over = self.target_at(at);
+        if self.drop_target.get_untracked() != over {
+            self.drop_target.set(over);
         }
         true
     }
 
+    /// What a tab dropped at a point would land on: a place in a tab bar, or
+    /// a pane's middle or edge.
+    fn target_at(&self, at: floem::kurbo::Point) -> Option<DropAt> {
+        let live = |view: &floem::ViewId| view.is_valid();
+        self.pane_views.borrow_mut().retain(|_, view| live(view));
+        self.bar_views.borrow_mut().retain(|_, view| live(view));
+        self.tab_views
+            .borrow_mut()
+            .retain(|(_, _, view)| live(view));
+        for (pane, tab, view) in self.tab_views.borrow().iter() {
+            let rect = view.get_visual_rect();
+            if rect.area() > 0.0 && rect.contains(at) {
+                let index = self.panes.pane(*pane).and_then(|p| {
+                    p.tabs
+                        .with_untracked(|tabs| tabs.iter().position(|t| t == tab))
+                });
+                if let Some(index) = index {
+                    let after = at.x > rect.center().x;
+                    return Some(DropAt {
+                        pane: *pane,
+                        side: None,
+                        index: Some(index + usize::from(after)),
+                    });
+                }
+            }
+        }
+        for (pane, view) in self.bar_views.borrow().iter() {
+            let rect = view.get_visual_rect();
+            if rect.area() > 0.0 && rect.contains(at) {
+                let count = self
+                    .panes
+                    .pane(*pane)
+                    .map_or(0, |p| p.tabs.with_untracked(Vec::len));
+                return Some(DropAt {
+                    pane: *pane,
+                    side: None,
+                    index: Some(count),
+                });
+            }
+        }
+        self.pane_views.borrow().iter().find_map(|(pane, view)| {
+            let rect = view.get_visual_rect();
+            (rect.area() > 0.0 && rect.contains(at)).then(|| DropAt {
+                pane: *pane,
+                side: side_at(at.x - rect.x0, at.y - rect.y0, rect.width(), rect.height()),
+                index: None,
+            })
+        })
+    }
+
     /// The pointer was released: drops a dragged tab where it is over.
-    pub fn pointer_released(&self) -> bool {
+    pub fn pointer_released(self: &Rc<Self>) -> bool {
         self.pressed.borrow_mut().take();
         if self.dragging.with_untracked(Option::is_none) {
             return false;
         }
         match self.drop_target.get_untracked() {
-            Some((pane, side)) => self.drop_tab(pane, side, None),
+            Some(at) => self.drop_tab(at),
             None => self.end_drag(),
         }
         true
-    }
-    /// Where a dragged tab would land: in the pane, or in a new pane on one
-    /// of its sides.
-    pub fn drag_over(&self, pane: PaneId, side: Option<Direction>) {
-        if self.dragging.with_untracked(Option::is_some)
-            && self.drop_target.get_untracked() != Some((pane, side))
-        {
-            self.drop_target.set(Some((pane, side)));
-        }
     }
     pub fn end_drag(&self) {
         if self.dragging.with_untracked(Option::is_some) {
@@ -1253,20 +1547,25 @@ impl Workbench {
             self.drop_target.set(None);
         }
     }
-    /// Drops the dragged tab on a pane, or on its side to split it, or before
-    /// another tab when `index` is given.
-    pub fn drop_tab(&self, pane: PaneId, side: Option<Direction>, index: Option<usize>) {
+    /// Drops the dragged tab where `at` says.
+    pub fn drop_tab(self: &Rc<Self>, at: DropAt) {
         let Some((from, tab)) = self.dragging.get_untracked() else {
             return;
         };
         self.end_drag();
+        // The explorer's paths are spelled as found; documents go by one spelling.
+        let tab = match tab {
+            Tab::File(path) if from.is_none() => Tab::File(path.canonicalize().unwrap_or(path)),
+            tab => tab,
+        };
+        let DropAt { pane, side, index } = at;
         let target = match side {
             // A pane's only tab dropped on its own side would leave it empty.
             Some(_)
-                if from == pane
+                if from == Some(pane)
                     && self
                         .panes
-                        .pane(from)
+                        .pane(pane)
                         .is_some_and(|p| p.tabs.with_untracked(Vec::len) == 1) =>
             {
                 return;
@@ -1274,9 +1573,29 @@ impl Workbench {
             Some(direction) => self.panes.split(pane, direction).id,
             None => pane,
         };
-        self.panes.move_tab(from, &tab, target, index);
-        if from != target {
-            self.close_if_empty(from);
+        match from {
+            Some(from) => {
+                self.panes.move_tab(from, &tab, target, index);
+                if from != target {
+                    self.close_if_empty(from);
+                }
+            }
+            // From the explorer or the rail: shown there, as if opened.
+            None => {
+                match &tab {
+                    Tab::File(path) if self.documents.get(path).is_none() => {
+                        self.open(path.clone(), target);
+                    }
+                    _ => self.panes.show(target, tab.clone()),
+                }
+                if let Some(index) = index {
+                    self.panes.move_tab(target, &tab, target, Some(index));
+                }
+                if let Tab::Session(key) = tab {
+                    self.sessions.select(key);
+                }
+                self.panes.focus(target);
+            }
         }
     }
 
@@ -1473,6 +1792,7 @@ mod tests {
             let saved = SavedNode::Pane {
                 tabs: vec![SavedTab::File("previous.rs".into())],
                 active: Some(0),
+                zoom: 1.0,
             };
             state.finish_restore(
                 Layout::default(),
@@ -1536,6 +1856,134 @@ mod tests {
         });
     }
 
+    /// Starts dragging a tab the way the pointer does.
+    fn drag(state: &Workbench, from: Option<PaneId>, tab: Tab) {
+        state.note_pointer(floem::kurbo::Point::new(10.0, 10.0));
+        state.press_tab(from, tab);
+        assert!(state.pointer_moved(floem::kurbo::Point::new(40.0, 10.0), true));
+    }
+
+    #[test]
+    fn tabs_reorder_and_files_and_sessions_drag_in_from_outside() {
+        with_workspace(|state, _| {
+            let pane = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            let b = file(&state, "b.rs", "b");
+            let c = file(&state, "c.rs", "c");
+            for path in [&a, &b, &c] {
+                state.select_tab(pane, Tab::File(path.clone()));
+            }
+            // c dropped before a, in the same tab bar.
+            drag(&state, Some(pane), Tab::File(c.clone()));
+            state.drop_tab(DropAt {
+                pane,
+                side: None,
+                index: Some(0),
+            });
+            assert_eq!(
+                focused(&state).tabs.get_untracked(),
+                vec![
+                    Tab::File(c.clone()),
+                    Tab::File(a.clone()),
+                    Tab::File(b.clone())
+                ]
+            );
+            // A press that never moves stays a click.
+            state.press_tab(Some(pane), Tab::File(a.clone()));
+            assert!(!state.pointer_moved(floem::kurbo::Point::new(41.0, 10.0), true));
+            assert!(!state.pointer_released());
+            // Released outside the window: the drag ends without a drop.
+            drag(&state, Some(pane), Tab::File(a.clone()));
+            assert!(!state.pointer_moved(floem::kurbo::Point::new(50.0, 10.0), false));
+            assert!(state.dragging().get_untracked().is_none());
+            // A file from the explorer, dropped on the right edge, splits.
+            let d = file(&state, "d.rs", "d");
+            drag(&state, None, Tab::File(d.clone()));
+            state.drop_tab(DropAt {
+                pane,
+                side: Some(Direction::Right),
+                index: None,
+            });
+            assert_eq!(state.panes.all().len(), 2);
+            let right = focused(&state).id;
+            assert_ne!(right, pane);
+            assert_eq!(showing(&state, right), Some(Tab::File(d.clone())));
+            assert_eq!(focused(&state).tabs.get_untracked().len(), 1);
+            // A tab from outside any pane (a session in the rail; a terminal
+            // here, which starts no Pi) joins a pane's tabs where dropped.
+            let outside = Tab::Terminal(state.add_terminal());
+            drag(&state, None, outside.clone());
+            state.drop_tab(DropAt {
+                pane,
+                side: None,
+                index: Some(1),
+            });
+            assert_eq!(
+                state.panes.pane(pane).unwrap().tabs.get_untracked()[1],
+                outside
+            );
+            assert_eq!(state.panes.focused().get_untracked(), pane);
+        });
+    }
+
+    #[test]
+    fn zoom_steps_cycle_tabs_and_close_several() {
+        with_workspace(|state, _| {
+            let pane = focused(&state).id;
+            let zoom = focused(&state).zoom;
+            state.zoom(pane, 1);
+            assert_eq!(zoom.get_untracked(), 1.1);
+            for _ in 0..30 {
+                state.zoom(pane, -1);
+            }
+            assert_eq!(zoom.get_untracked(), 0.5);
+            state.zoom(pane, 0);
+            assert_eq!(zoom.get_untracked(), 1.0);
+
+            let a = file(&state, "a.rs", "a");
+            let b = file(&state, "b.rs", "b");
+            state.select_tab(pane, Tab::File(a.clone()));
+            state.select_tab(pane, Tab::File(b.clone()));
+            state.cycle_tab(true);
+            assert_eq!(showing(&state, pane), Some(Tab::File(a.clone())));
+            state.cycle_tab(false);
+            assert_eq!(showing(&state, pane), Some(Tab::File(b.clone())));
+
+            // Closing every tab keeps a file with unsaved edits.
+            let dirty = dirty_document(&state);
+            let all = focused(&state).tabs.get_untracked();
+            state.close_tabs(pane, all);
+            assert_eq!(
+                focused(&state).tabs.get_untracked(),
+                vec![Tab::File(dirty.clone())]
+            );
+            assert!(state.status().get_untracked().contains("test.rs"));
+        });
+    }
+
+    #[test]
+    fn new_files_are_made_inside_the_workspace() {
+        with_workspace(|state, _| {
+            assert!(state.describe_new_file("../out.rs").is_err());
+            assert!(state.describe_new_file("src/").is_err());
+            assert!(state.describe_new_file("  ").is_err());
+            assert_eq!(
+                state.describe_new_file("src/new.rs"),
+                Ok((PathBuf::from("src/new.rs"), false))
+            );
+            let made = state.make_file("src/new.rs").unwrap();
+            assert!(made.is_file() && made.ends_with("src/new.rs"));
+            std::fs::write(&made, "kept").unwrap();
+            state.make_file("src/new.rs").unwrap();
+            assert_eq!(std::fs::read_to_string(&made).unwrap(), "kept");
+            assert_eq!(
+                state.describe_new_file("src/new.rs"),
+                Ok((PathBuf::from("src/new.rs"), true))
+            );
+            assert!(state.describe_new_file("src").is_err(), "a folder");
+        });
+    }
+
     #[test]
     fn closing_a_pane_waits_for_unsaved_files_only_it_shows() {
         with_workspace(|state, _| {
@@ -1584,10 +2032,12 @@ mod tests {
                             SavedTab::File("missing.rs".into()),
                         ],
                         active: Some(1),
+                        zoom: 1.0,
                     },
                     SavedNode::Pane {
                         tabs: vec![SavedTab::Terminal, SavedTab::Terminal],
                         active: Some(0),
+                        zoom: 1.5,
                     },
                 ],
             };
@@ -1617,6 +2067,7 @@ mod tests {
                 Some(Tab::File(state.root.join("second.rs")))
             );
             assert_eq!(panes[1].tabs.get_untracked().len(), 2);
+            assert_eq!(panes[1].zoom.get_untracked(), 1.5);
             assert_eq!(state.panes.focused().get_untracked(), panes[1].id);
             assert_eq!(state.status().get_untracked(), "gone");
         });
@@ -1705,10 +2156,12 @@ mod tests {
                         SavedNode::Pane {
                             tabs: vec![SavedTab::File("test.rs".into())],
                             active: Some(0),
+                            zoom: 1.0,
                         },
                         SavedNode::Pane {
                             tabs: vec![SavedTab::Terminal],
                             active: Some(0),
+                            zoom: 1.0,
                         },
                     ],
                 })

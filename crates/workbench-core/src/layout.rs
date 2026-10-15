@@ -41,6 +41,9 @@ pub enum SavedNode {
     Pane {
         tabs: Vec<SavedTab>,
         active: Option<usize>,
+        /// Text size in the pane, 1 being the usual.
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        zoom: f64,
     },
     Split {
         /// Side by side when true, stacked when false.
@@ -49,6 +52,16 @@ pub enum SavedNode {
         children: Vec<SavedNode>,
     },
 }
+
+fn one() -> f64 {
+    1.0
+}
+fn is_one(zoom: &f64) -> bool {
+    *zoom == 1.0
+}
+
+/// The smallest and largest pane zoom.
+pub const ZOOM_RANGE: (f64, f64) = (0.5, 3.0);
 
 /// No more panes than this are restored, so a damaged file stays usable.
 pub const MAX_PANES: usize = 16;
@@ -69,7 +82,11 @@ impl SavedNode {
     /// splits of one, sizes that are not positive numbers, too many panes.
     fn normalize(self, depth: usize, budget: &mut usize) -> Option<SavedNode> {
         match self {
-            SavedNode::Pane { mut tabs, active } => {
+            SavedNode::Pane {
+                mut tabs,
+                active,
+                zoom,
+            } => {
                 if *budget == 0 {
                     return None;
                 }
@@ -85,7 +102,12 @@ impl SavedNode {
                 tabs.retain(|tab| *tab == SavedTab::Terminal || seen.insert(tab.clone()));
                 tabs.truncate(crate::MAX_OPEN_DOCUMENTS);
                 let active = active.filter(|&i| i < tabs.len());
-                Some(SavedNode::Pane { tabs, active })
+                let zoom = if zoom.is_finite() {
+                    zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1)
+                } else {
+                    1.0
+                };
+                Some(SavedNode::Pane { tabs, active, zoom })
             }
             SavedNode::Split {
                 horizontal,
@@ -197,6 +219,7 @@ impl Layout {
                 .as_ref()
                 .and_then(|a| self.open_files.iter().position(|f| f == a)),
             tabs: files.clone(),
+            zoom: 1.0,
         };
         if self.split {
             SavedNode::Split {
@@ -322,6 +345,7 @@ mod tests {
                         SavedTab::Terminal,
                     ],
                     active: Some(9),
+                    zoom: 99.0,
                 },
                 // A split of one collapses into its child.
                 SavedNode::Split {
@@ -330,6 +354,7 @@ mod tests {
                     children: vec![SavedNode::Pane {
                         tabs: vec![SavedTab::Session("relative.jsonl".into())],
                         active: Some(0),
+                        zoom: f64::NAN,
                     }],
                 },
                 SavedNode::Split {
@@ -364,13 +389,15 @@ mod tests {
                     SavedTab::Terminal
                 ],
                 active: None,
+                zoom: 3.0,
             }
         );
         assert_eq!(
             children[1],
             SavedNode::Pane {
                 tabs: vec![],
-                active: None
+                active: None,
+                zoom: 1.0,
             }
         );
         assert_eq!(restored.focused, 0);
@@ -393,7 +420,7 @@ mod tests {
         };
         assert_eq!(sizes, vec![0.6, 0.4]);
         assert!(
-            matches!(&children[0], SavedNode::Pane { active: Some(1), tabs } if tabs.len() == 2)
+            matches!(&children[0], SavedNode::Pane { active: Some(1), tabs, .. } if tabs.len() == 2)
         );
         assert!(matches!(
             &children[1],

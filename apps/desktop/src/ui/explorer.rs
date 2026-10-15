@@ -1,7 +1,7 @@
 //! The explorer, read through the changes lens: changed files stand out with
 //! their line counts, the rest fade, and the tree can collapse to just the changes.
 use super::{CODE_FONT, color};
-use crate::{lens::TurnFiles, workspace::Workbench};
+use crate::{lens::TurnFiles, panes::Tab, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use std::{path::PathBuf, rc::Rc};
 use workbench_core::git::{FileChange, FileStatus};
@@ -111,6 +111,15 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
                     .padding_right(10)
                     .cursor(CursorStyle::Pointer)
                     .hover(|s| s.background(color::border()))
+            })
+            // A file can be dragged into a pane, or onto its edge to split it.
+            .on_event_cont(el::PointerDown, {
+                let (state, path) = (action_state.clone(), path.clone());
+                move |_, _| {
+                    if !directory {
+                        state.press_tab(None, Tab::File(path.clone()));
+                    }
+                }
             })
             .on_event_stop(el::Click, move |_, _| {
                 if directory {

@@ -23,11 +23,23 @@ struct Font {
     line_height: f64,
 }
 
-fn font() -> Font {
-    let size = (crate::settings::code_size() as f32 - 1.0).max(9.0);
+fn font(zoom: f64) -> Font {
+    let size = ((crate::settings::code_size() as f32 - 1.0) * zoom as f32)
+        .round()
+        .max(6.0);
     let line_height = (size * 1.4).round();
-    let family: &'static [FamilyOwned] =
-        Box::leak(FamilyOwned::parse_list(&crate::settings::code_font()).collect());
+    // Attrs borrow their family for as long as the text lives; one leaked
+    // list per font name, however often terminals are laid out again.
+    thread_local! {
+        static FAMILIES: std::cell::RefCell<std::collections::HashMap<String, &'static [FamilyOwned]>> =
+            Default::default();
+    }
+    let name = crate::settings::code_font();
+    let family: &'static [FamilyOwned] = FAMILIES.with_borrow_mut(|families| {
+        *families
+            .entry(name.clone())
+            .or_insert_with(|| Box::leak(FamilyOwned::parse_list(&name).collect()))
+    });
     let attrs = Attrs::new()
         .family(family)
         .font_size(size)
@@ -87,12 +99,13 @@ pub(super) fn terminal_view(
     state: Rc<Workbench>,
     slot: Rc<TerminalSlot>,
     visible: Memo<bool>,
+    zoom: f64,
 ) -> impl IntoView {
     let key = slot.key;
     let terminal = slot.terminal;
     // Whether this terminal, rather than another, has the keyboard.
     let has_focus = RwSignal::new(false);
-    let font = font();
+    let font = font(zoom);
     let (cell_width, line_height) = (font.cell_width, font.line_height);
 
     let screen = move || terminal.get().map(|t| t.screen().get()).unwrap_or_default();

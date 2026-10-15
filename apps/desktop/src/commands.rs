@@ -21,6 +21,13 @@ pub enum Command {
     FocusPane(Direction),
     /// Moves the focused tab to the pane on one side.
     MoveTab(Direction),
+    NextTab,
+    PreviousTab,
+    /// Text size in the focused pane.
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    NewFile,
     Conversation,
     StopSession,
     NewSession,
@@ -77,6 +84,12 @@ pub const COMMANDS: &[Command] = &[
     Command::MoveTab(Direction::Right),
     Command::MoveTab(Direction::Up),
     Command::MoveTab(Direction::Down),
+    Command::NextTab,
+    Command::PreviousTab,
+    Command::ZoomIn,
+    Command::ZoomOut,
+    Command::ZoomReset,
+    Command::NewFile,
     Command::Conversation,
     Command::StopSession,
     Command::NewSession,
@@ -293,6 +306,12 @@ impl Command {
                 },
                 ctrl_alt_shift(arrow(direction)),
             ),
+            Self::NextTab => ("Next tab in the pane", ctrl("pagedown")),
+            Self::PreviousTab => ("Previous tab in the pane", ctrl("pageup")),
+            Self::ZoomIn => ("Zoom in (this pane)", ctrl("=")),
+            Self::ZoomOut => ("Zoom out (this pane)", ctrl("-")),
+            Self::ZoomReset => ("Reset zoom (this pane)", ctrl("0")),
+            Self::NewFile => ("New file…", None),
             Self::Conversation => ("Show Pi session", ctrl("j")),
             Self::StopSession => ("Stop Pi in this session", None),
             Self::NewSession => ("New Pi session", ctrl("n")),
@@ -364,6 +383,12 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::MaximizePane => state.toggle_maximized(),
         Command::FocusPane(direction) => state.focus_direction(direction),
         Command::MoveTab(direction) => state.move_tab(direction),
+        Command::NextTab => state.cycle_tab(true),
+        Command::PreviousTab => state.cycle_tab(false),
+        Command::ZoomIn => state.zoom(state.focused().get_untracked(), 1),
+        Command::ZoomOut => state.zoom(state.focused().get_untracked(), -1),
+        Command::ZoomReset => state.zoom(state.focused().get_untracked(), 0),
+        Command::NewFile => state.new_file(),
         Command::Conversation => {
             state.show_conversation();
         }
@@ -465,6 +490,8 @@ impl Shortcut {
             "tab" => "Tab".to_string(),
             "down" => "Down".to_string(),
             "up" => "Up".to_string(),
+            "pagedown" => "PageDown".to_string(),
+            "pageup" => "PageUp".to_string(),
             key if self.named().is_some() => {
                 let mut chars = key.chars();
                 chars.next().map_or_else(String::new, |first| {
@@ -493,6 +520,12 @@ impl Shortcut {
 
 /// Shortcuts from the settings file win over built-in ones they collide with.
 pub fn for_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
+    // "+" zooms in as "=" does, whether it takes Shift or is on the keypad.
+    if let Key::Character(c) = key
+        && c == "+"
+    {
+        return for_key(&Key::Character("=".into()), modifiers - Modifiers::SHIFT);
+    }
     let settings = crate::settings::get();
     let overridden = |command: &Command| settings.keys.contains_key(&setting_name(*command));
     let matching = |command: &Command| {
@@ -595,5 +628,11 @@ mod tests {
             for_key(&Key::Named(NamedKey::ArrowDown), Modifiers::empty()),
             None
         );
+        for shift in [Modifiers::empty(), Modifiers::SHIFT] {
+            assert_eq!(
+                for_key(&Key::Character("+".into()), primary_modifier() | shift),
+                Some(Command::ZoomIn)
+            );
+        }
     }
 }

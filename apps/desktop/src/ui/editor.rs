@@ -9,9 +9,11 @@ use crate::{
     commands::{self, Command},
     documents::OpenDocument,
     panes::{Direction, Pane, PaneId, Tab},
-    workspace::{JumpTo, Workbench},
+    workspace::{DropAt, JumpTo, MenuItem, Workbench},
 };
 use floem::reactive::Scope;
+use floem::style::CustomStylable;
+use floem::ui_events::pointer::PointerButton;
 use floem::{
     prelude::*,
     reactive::{Effect, Memo},
@@ -63,13 +65,79 @@ fn tab_title(state: &Rc<Workbench>, tab: &Tab) -> impl Fn() -> String + 'static 
     }
 }
 
+/// A menu row that acts on the workbench.
+fn item(state: &Rc<Workbench>, title: &str, action: impl Fn(&Rc<Workbench>) + 'static) -> MenuItem {
+    let state = state.clone();
+    MenuItem::new(title, move || action(&state))
+}
+
+/// What can be done to a tab, on right-click.
+fn tab_menu(state: &Rc<Workbench>, pane: &Rc<Pane>, tab: &Tab) -> Vec<MenuItem> {
+    let id = pane.id;
+    let tabs = pane.tabs.get_untracked();
+    let at = tabs.iter().position(|t| t == tab).unwrap_or(0);
+    let others: Vec<Tab> = tabs.iter().filter(|t| *t != tab).cloned().collect();
+    let right: Vec<Tab> = tabs[(at + 1).min(tabs.len())..].to_vec();
+    let mut items = Vec::new();
+    let closed = tab.clone();
+    items.push(
+        item(state, "Close", move |s| s.close_tab(id, closed.clone()))
+            .hint(Command::CloseFile.shortcut_label()),
+    );
+    if !others.is_empty() {
+        items.push(item(state, "Close others", move |s| {
+            s.close_tabs(id, others.clone())
+        }));
+    }
+    if !right.is_empty() {
+        items.push(item(state, "Close to the right", move |s| {
+            s.close_tabs(id, right.clone())
+        }));
+    }
+    items.push(item(state, "Close all", move |s| {
+        s.close_tabs(id, tabs.clone())
+    }));
+    items.push(MenuItem::separator());
+    for (title, direction, command) in [
+        ("Split right", Direction::Right, Command::Split),
+        ("Split down", Direction::Down, Command::SplitDown),
+    ] {
+        let tab = tab.clone();
+        items.push(
+            item(state, title, move |s| {
+                s.select_tab(id, tab.clone());
+                s.split(direction);
+            })
+            .hint(command.shortcut_label()),
+        );
+    }
+    match *tab {
+        Tab::Session(key) => {
+            items.push(MenuItem::separator());
+            items.push(item(state, "End session", move |s| s.close_session(key)));
+        }
+        Tab::Terminal(key) => {
+            items.push(MenuItem::separator());
+            items.push(item(state, "Restart shell", move |s| {
+                s.restart_terminal(key)
+            }));
+        }
+        Tab::File(_) => {}
+    }
+    items
+}
+
 fn tab_view(state: Rc<Workbench>, pane: Rc<Pane>, tab: Tab) -> impl IntoView {
     let id = pane.id;
     let active = pane.active;
+    let tabs = pane.tabs;
     let focused = state.focused();
+    let target = state.drop_target();
     let selected = tab.clone();
-    let (select_state, close_state) = (state.clone(), state.clone());
-    let (select_tab, close_tab) = (tab.clone(), tab.clone());
+    let (select_state, close_state, menu_state) = (state.clone(), state.clone(), state.clone());
+    let (select_tab, close_tab, menu_tab, mark_tab) =
+        (tab.clone(), tab.clone(), tab.clone(), tab.clone());
+    let menu_pane = pane.clone();
     let reveal_tab = tab.clone();
     let session_dot = match &tab {
         Tab::Session(key) => state.sessions.find(*key),
@@ -103,12 +171,28 @@ fn tab_view(state: Rc<Workbench>, pane: Rc<Pane>, tab: Tab) -> impl IntoView {
                     .hover(|s| s.color(color::text()))
             })
             .on_event_stop(el::PointerDown, |_, _| {})
-            .on_event_stop(el::Click, move |_, _| {
-                close_state.close_tab(id, close_tab.clone())
+            .on_event_stop(el::Click, {
+                let (state, tab) = (state.clone(), tab.clone());
+                move |_, _| state.close_tab(id, tab.clone())
             }),
     ))
     .style(move |s| {
         let showing = active.with(|a| a.as_ref() == Some(&selected));
+        // A tab dragged over the bar lands before this tab, or after the last.
+        let (before, after) = match target.get() {
+            Some(DropAt {
+                pane,
+                index: Some(index),
+                ..
+            }) if pane == id => tabs.with(|tabs| {
+                let at = tabs.iter().position(|t| *t == mark_tab);
+                (
+                    at == Some(index),
+                    at.is_some_and(|at| at + 1 == index && index == tabs.len()),
+                )
+            }),
+            _ => (false, false),
+        };
         // Tab text is a handle, not something to select.
         s.selectable(false)
             .height(TAB_HEIGHT)
@@ -129,18 +213,35 @@ fn tab_view(state: Rc<Workbench>, pane: Rc<Pane>, tab: Tab) -> impl IntoView {
                         color::border()
                     })
             })
+            .apply_if(before, |s| {
+                s.border_left(2).border_left_color(color::accent())
+            })
+            .apply_if(after, |s| {
+                s.border_right(2).border_right_color(color::accent())
+            })
     })
     // Pressing selects, so a tab picked up to drag is the one showing; the
-    // window turns the press into a drag once the pointer moves.
-    .on_event_cont(el::PointerDown, move |_, event| {
-        select_state.select_tab(id, select_tab.clone());
-        select_state.press_tab(id, select_tab.clone(), event.state.logical_point());
+    // window turns the press into a drag once the pointer moves. The middle
+    // button closes, as in a browser.
+    .on_event_cont(el::PointerDown, move |_, event| match event.button {
+        Some(PointerButton::Auxiliary) => close_state.close_tab(id, close_tab.clone()),
+        Some(PointerButton::Secondary) => {}
+        _ => {
+            select_state.select_tab(id, select_tab.clone());
+            select_state.press_tab(Some(id), select_tab.clone());
+        }
+    })
+    .on_event_stop(el::SecondaryClick, move |_, _| {
+        let items = tab_menu(&menu_state, &menu_pane, &menu_tab);
+        menu_state.open_menu(menu_state.pointer(), items);
     });
+    state.register_tab_view(id, tab.clone(), view.view_id());
     // The showing tab scrolls into view, as when a tab arrives by drag.
     let view_id = view.view_id();
     Effect::new(move |_| {
         if active.with(|a| a.as_ref() == Some(&reveal_tab)) {
-            view_id.scroll_to(None);
+            // Once laid out: a new tab has no place in the bar yet.
+            floem::action::exec_after_animation_frame(move |_| view_id.scroll_to(None));
         }
     });
     view
@@ -169,10 +270,12 @@ fn pane_button(
     pane: PaneId,
     icon: impl IntoView + 'static,
     tip: &'static str,
-    action: impl Fn(&Rc<Workbench>) + 'static,
+    action: impl Fn(&Rc<Workbench>, floem::kurbo::Point) + 'static,
 ) -> impl IntoView {
+    let button = Container::new(icon);
+    let button_id = button.view_id();
     floem::views::tooltip(
-        Container::new(icon)
+        button
             .style(|s| {
                 s.padding_horiz(6)
                     .padding_vert(6)
@@ -184,13 +287,44 @@ fn pane_button(
             })
             .on_event_stop(el::Click, move |_, _| {
                 state.focus_pane(pane);
-                action(&state)
+                // Below the button, for one that opens a menu.
+                let rect = button_id.get_visual_rect();
+                action(&state, floem::kurbo::Point::new(rect.x0, rect.y1 + 2.0))
             }),
         move || Label::new(tip).style(|s| s.padding(4).font_size(11)),
     )
 }
 
-fn tab_bar(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
+/// What the + in a pane's tab bar adds there.
+fn new_tab_menu(state: &Rc<Workbench>, pane: PaneId) -> Vec<MenuItem> {
+    let act = |f: fn(&Rc<Workbench>, PaneId)| {
+        let state = state.clone();
+        move || {
+            state.focus_pane(pane);
+            f(&state, pane)
+        }
+    };
+    vec![
+        MenuItem::new("New file…", act(|s, _| s.new_file())),
+        MenuItem::new(
+            "Open file…",
+            act(|s, _| commands::execute(s, Command::QuickOpen)),
+        )
+        .hint(Command::QuickOpen.shortcut_label()),
+        MenuItem::separator(),
+        MenuItem::new("New Pi session", act(|s, _| s.new_session()))
+            .hint(Command::NewSession.shortcut_label()),
+        MenuItem::new(
+            "New terminal",
+            act(|s, pane| {
+                s.new_terminal(pane);
+            }),
+        )
+        .hint(Command::NewTerminal.shortcut_label()),
+    ]
+}
+
+fn tab_bar(state: Rc<Workbench>, pane: Rc<Pane>) -> Stack {
     let id = pane.id;
     let tabs = pane.tabs;
     let tab_state = state.clone();
@@ -200,8 +334,14 @@ fn tab_bar(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
         |tab| tab.clone(),
         move |tab| tab_view(tab_state.clone(), tab_pane.clone(), tab),
     )
-    .style(|s| s.flex_row().height(TAB_HEIGHT))
+    // As wide as its tabs, not the bar, so the bar can scroll.
+    .style(|s| s.flex_row().height(TAB_HEIGHT).flex_shrink(0.0_f32))
     .scroll()
+    // The wheel scrolls the tabs sideways.
+    .custom_style(|s: floem::views::scroll::ScrollCustomStyle| {
+        s.vertical_scroll_as_horizontal(true)
+            .show_bars_when_idle(false)
+    })
     .style(|s| {
         s.flex_grow(1.0_f32)
             .flex_basis(0)
@@ -218,36 +358,47 @@ fn tab_bar(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
         id,
         Label::new("×").style(|s| s.font_size(14).color(color::muted())),
         "Close pane",
-        move |state| state.close_pane(id),
+        move |state, _| state.close_pane(id),
     );
+    let zoom = pane.zoom;
+    let zoom_chip = pane_button(
+        state.clone(),
+        id,
+        Label::derived(move || format!("{}%", (zoom.get() * 100.0).round() as i64))
+            .style(|s| s.font_size(11).color(color::muted())),
+        "Reset zoom  (Ctrl+0; Ctrl+= and Ctrl+- or Ctrl+wheel to zoom)",
+        move |state, _| state.zoom(id, 0),
+    )
+    .style(move |s| s.apply_if(zoom.get() == 1.0, |s| s.hide()));
     let actions = Stack::horizontal((
+        zoom_chip,
         pane_button(
             state.clone(),
             id,
             Label::new("+").style(|s| s.font_size(14).color(color::muted())),
-            "New terminal here  (Ctrl+Shift+`)",
-            |state| state.new_terminal_here(),
+            "New file, session or terminal here",
+            move |state, at| state.open_menu(at, new_tab_menu(state, id)),
         ),
         pane_button(
             state.clone(),
             id,
             pane_icon(Some(true)),
             "Split right  (Ctrl+\\)",
-            |state| state.split(Direction::Right),
+            |state, _| state.split(Direction::Right),
         ),
         pane_button(
             state.clone(),
             id,
             pane_icon(Some(false)),
             "Split down  (Ctrl+Shift+\\)",
-            |state| state.split(Direction::Down),
+            |state, _| state.split(Direction::Down),
         ),
         pane_button(
             state.clone(),
             id,
             pane_icon(None),
             "Maximise or restore  (Ctrl+Shift+M)",
-            |state| state.toggle_maximized(),
+            |state, _| state.toggle_maximized(),
         )
         .style(move |s| s.apply_if(!several() && maximized.get().is_none(), |s| s.hide())),
         close.style({
@@ -283,7 +434,7 @@ fn file_area(
     let id = pane.id;
     let docs = state.documents.items();
     let editor = text_editor("")
-        .styling(super::code_styling())
+        .styling(super::code_styling(pane.zoom.get_untracked()))
         .editor_style(super::editor_colors)
         .editor_style(|s| s.scroll_beyond_last_line(false))
         .style(|s| super::editor_surface(s.size_full().min_width(0).min_height(0)));
@@ -336,6 +487,7 @@ fn file_area(
     });
     // Restyle when the lens diff, focus, seen changes, or Pi's latest edit change.
     let (styled, lens, syntax) = (handle.clone(), state.lens.clone(), state.syntax.clone());
+    let styled_zoom = pane.zoom;
     let blank = Rc::new(TextDocument::new(Scope::current(), ""));
     Effect::new(move |_| {
         let path = active.get();
@@ -344,8 +496,9 @@ fn file_area(
                 .find(|doc| Some(doc.path()) == path.as_ref())
                 .cloned()
         });
-        // Code colours come from the theme.
+        // Code colours come from the theme, and size from the pane's zoom.
         super::color::theme().track();
+        let zoom = styled_zoom.get();
         let focus = lens.focus().get();
         let seen = lens.seen().get();
         let show_formatting = lens.show_formatting().get();
@@ -372,7 +525,7 @@ fn file_area(
         let view = Rc::new(view);
         overlay.set(view.clone());
         styled.update_styling(Rc::new(LensStyling::new(
-            super::code_styling(),
+            super::code_styling(zoom),
             comparison,
             incoming,
             view,
@@ -434,8 +587,8 @@ fn drop_hint(state: Rc<Workbench>, id: PaneId) -> impl IntoView {
     Empty::new().style(move |s| {
         let side = target
             .get()
-            .filter(|(pane, _)| *pane == id)
-            .map(|(_, side)| side);
+            .filter(|at| at.pane == id && at.index.is_none())
+            .map(|at| at.side);
         let s = s
             .absolute()
             .background(color::accent().with_alpha(0.16))
@@ -488,13 +641,18 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
     });
     let session_state = state.clone();
     let session_visible = Memo::new(move |_| session_key.get().is_some());
+    let zoom = pane.zoom;
+    // A new zoom lays the session or terminal out afresh at the new size.
     let session = dyn_container(
-        move || session_key.get(),
-        move |key| match key.and_then(|key| session_state.sessions.find(key)) {
-            Some(session) => {
-                super::session::session_view(session_state.clone(), session, session_visible)
-                    .into_any()
-            }
+        move || (session_key.get(), zoom.get().to_bits()),
+        move |(key, zoom)| match key.and_then(|key| session_state.sessions.find(key)) {
+            Some(session) => super::session::session_view(
+                session_state.clone(),
+                session,
+                session_visible,
+                f64::from_bits(zoom),
+            )
+            .into_any(),
             None => Empty::new().into_any(),
         },
     )
@@ -507,12 +665,15 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
     let terminal_state = state.clone();
     let terminal_visible = Memo::new(move |_| terminal_key.get().is_some());
     let terminal = dyn_container(
-        move || terminal_key.get(),
-        move |key| match key.and_then(|key| terminal_state.terminal(key)) {
-            Some(slot) => {
-                super::terminal::terminal_view(terminal_state.clone(), slot, terminal_visible)
-                    .into_any()
-            }
+        move || (terminal_key.get(), zoom.get().to_bits()),
+        move |(key, zoom)| match key.and_then(|key| terminal_state.terminal(key)) {
+            Some(slot) => super::terminal::terminal_view(
+                terminal_state.clone(),
+                slot,
+                terminal_visible,
+                f64::from_bits(zoom),
+            )
+            .into_any(),
             None => Empty::new().into_any(),
         },
     )
@@ -523,7 +684,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
             .apply_if(terminal_key.get().is_none(), |s| s.hide())
     });
     let empty_hint = Label::new(
-        "Open a file from the explorer or with Ctrl+P, drag a tab here,\nor press Ctrl+Shift+` for a terminal.",
+        "Open a file from the explorer or with Ctrl+P, drag a tab or file here,\nor use + above for a new file, Pi session or terminal.",
     )
     .style(move |s| {
         s.absolute()
@@ -564,8 +725,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
         drop_hint(state.clone(), id),
     ))
     .style(|s| s.size_full().min_height(0).min_width(0));
-    state.register_pane_view(id, body.view_id());
     let bar = tab_bar(state.clone(), pane.clone());
+    state.register_pane_view(id, body.view_id(), bar.view_id());
+    let wheel_state = state.clone();
     let several = {
         let state = state.clone();
         move || state.panes.tree().with(|tree| tree.leaves().len() > 1)
@@ -584,6 +746,18 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
         })
         .on_event_cont_with_config(el::PointerDown, CAPTURE, move |_, _| {
             focus_state.focus_pane(id)
+        })
+        // Ctrl+wheel zooms the pane under the pointer.
+        .on_event_with_config(el::PointerWheel, CAPTURE, move |_, event| {
+            if !event.state.modifiers.ctrl() {
+                return floem::event::EventPropagation::Continue;
+            }
+            use floem::event::PointerScrollEventExt;
+            let delta = event.resolve_to_points(None, None);
+            if delta.y != 0.0 {
+                wheel_state.zoom(id, if delta.y > 0.0 { 1 } else { -1 });
+            }
+            floem::event::EventPropagation::Stop
         })
 }
 

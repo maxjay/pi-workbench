@@ -53,6 +53,8 @@ pub struct Pane {
     /// Where each file was left in this pane: line, character and scroll.
     /// Kept here, as the pane's view is rebuilt when the layout changes.
     pub positions: RefCell<HashMap<PathBuf, (usize, usize, f64)>>,
+    /// Text size in the pane, 1 being the usual.
+    pub zoom: RwSignal<f64>,
 }
 
 impl Pane {
@@ -167,6 +169,7 @@ impl Panes {
                 cursor_line: RwSignal::new(0),
                 cursor_col: RwSignal::new(0),
                 positions: RefCell::new(HashMap::new()),
+                zoom: RwSignal::new(1.0),
             })
         });
         self.panes.borrow_mut().insert(id, pane.clone());
@@ -558,6 +561,7 @@ impl Panes {
         match node {
             Node::Leaf(id) => {
                 let pane = self.pane(*id);
+                let zoom = pane.as_ref().map_or(1.0, |pane| pane.zoom.get_untracked());
                 let (tabs, active) = pane.map_or((Vec::new(), None), |pane| {
                     let all = pane.tabs.get_untracked();
                     let active = pane.active.get_untracked();
@@ -573,7 +577,7 @@ impl Panes {
                     }
                     (saved, index)
                 });
-                SavedNode::Pane { tabs, active }
+                SavedNode::Pane { tabs, active, zoom }
             }
             Node::Split {
                 horizontal,
@@ -608,8 +612,9 @@ impl Panes {
         restore: &mut impl FnMut(&SavedTab) -> Option<Tab>,
     ) -> Node {
         match saved {
-            SavedNode::Pane { tabs, active } => {
+            SavedNode::Pane { tabs, active, zoom } => {
                 let pane = self.fresh();
+                pane.zoom.set(*zoom);
                 let mut made = Vec::new();
                 let mut shown = None;
                 for (index, saved) in tabs.iter().enumerate() {

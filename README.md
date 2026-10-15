@@ -130,20 +130,23 @@ Code is coloured by the theme's own rules. The rest of the app is derived from t
 
 ![A Pi session beside two files, with terminal tabs in a pane below](docs/screenshots/panes.png)
 
-The window is yours to arrange. Every pane is a row of tabs, and a tab is a file, a Pi session or a terminal.
+The window is yours to arrange. Every pane is a row of tabs, and a tab is a file, a Pi session or a terminal, all treated alike.
 
+- **Add:** a pane's **+** makes a new file, opens one, or starts a Pi session or a terminal in that pane.
 - **Split:** with the buttons in a pane's tab bar, Ctrl+\ (right) or Ctrl+Shift+\ (down). A split shows the same file or session on both sides; splitting a terminal starts another shell.
-- **Move:** drag a tab onto another pane to move it there, or onto a pane's edge to split that pane with it. Ctrl+Alt+Shift+arrows move the tab to the next pane, making one if there is none.
+- **Move:** drag a tab along its tab bar to reorder it, onto another pane to move it there, or onto a pane's edge to split that pane with it. Files from the explorer and sessions from the rail drag in the same way. Ctrl+Alt+Shift+arrows move the tab to the next pane, making one if there is none.
+- **Many tabs:** the wheel scrolls a tab bar sideways, Ctrl+PageDown and Ctrl+PageUp step through a pane's tabs, and the middle button closes a tab. Right-click a tab to close others or those to its right, split, end a session or restart a shell.
+- **Zoom:** Ctrl+= and Ctrl+- (or Ctrl+wheel) make one pane's text larger or smaller, whether it shows code, a Pi session or a terminal; Ctrl+0 or the pane's percentage puts it back.
 - **Focus and resize:** Ctrl+Alt+arrows move between panes, dividers drag, and Ctrl+Shift+M maximises a pane and back.
-- **Close:** Ctrl+W closes a tab. A file closes when no other pane shows it, asking first if it has unsaved edits. A session keeps running in the rail. A terminal ends with its last tab.
+- **Close:** Ctrl+W closes a tab; closing several keeps any file with unsaved edits open. A file closes when no other pane shows it, asking first if it has unsaved edits. A session keeps running in the rail. A terminal ends with its last tab.
 
-Clicking a session in the rail shows it where it already is, or in the focused pane. The panes, their tabs and sizes are saved per workspace, and the sessions in them resume when you reopen it.
+Clicking a session in the rail shows it where it already is, or in the focused pane. The panes, their tabs, sizes and zoom are saved per workspace, and the sessions in them resume when you reopen it.
 
 ## Terminals, settings and worktrees
 
 ![A terminal tab running git](docs/screenshots/terminal.png)
 
-**Ctrl+Shift+`** opens a terminal tab, and the pane's **+** does the same there. **Ctrl+`** jumps to the last terminal, opening one along the bottom if there is none, and from a terminal back to where you were. Terminals start in the workspace folder: PowerShell on Windows, `$SHELL` elsewhere. Each is a full terminal emulator (`alacritty_terminal`), so pagers, editors and colours work. While one has focus it keeps Ctrl keys such as Ctrl+C, Ctrl+P and Ctrl+W, except for the terminal keys, the palette, session switching and moving between panes. Ctrl+Shift+V pastes, and the wheel scrolls back.
+**Ctrl+Shift+`** opens a terminal tab, and a pane's **+** opens one there. **Ctrl+`** jumps to the last terminal, opening one along the bottom if there is none, and from a terminal back to where you were. Terminals start in the workspace folder: PowerShell on Windows, `$SHELL` elsewhere. Each is a full terminal emulator (`alacritty_terminal`), so pagers, editors and colours work. While one has focus it keeps Ctrl keys such as Ctrl+C, Ctrl+P and Ctrl+W, except for the terminal keys, the palette, session switching, moving between panes and tabs, and zoom. Ctrl+Shift+V pastes, and the wheel scrolls back.
 
 **Ctrl+,** opens the settings file (`settings.json` in the app's configuration folder), created with every setting and a comment explaining it. It sets:
 
@@ -184,6 +187,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | Ctrl/Cmd+Alt+Shift+arrows | Move the tab to the pane on that side |
 | Ctrl/Cmd+Shift+M | Maximise or restore the pane |
 | Ctrl/Cmd+W | Close tab |
+| Ctrl/Cmd+PageDown, Ctrl/Cmd+PageUp | Next or previous tab in the pane |
+| Ctrl/Cmd+=, Ctrl/Cmd+-, Ctrl/Cmd+0 | Zoom the pane in, out, back |
 | Ctrl/Cmd+Shift+P | All commands (also `>` in the file picker; `/` for Pi's) |
 | Ctrl/Cmd+T | Colour theme |
 | Escape | Dismiss palette or dialog |

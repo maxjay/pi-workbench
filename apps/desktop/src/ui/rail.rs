@@ -1,6 +1,6 @@
 //! The sessions rail: open Pi sessions to tab between, and recent ones to resume.
 use super::{color, session::status_color};
-use crate::{session::Session, workspace::Workbench};
+use crate::{panes::Tab, session::Session, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use pi_client::sessions::SessionSummary;
 use std::{rc::Rc, time::SystemTime};
@@ -78,6 +78,11 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
             .apply_if(selected, |s| {
                 s.background(color::border()).border_color(color::accent())
             })
+    })
+    // A session can be dragged into a pane, or onto its edge to split it.
+    .on_event_cont(el::PointerDown, {
+        let state = select_state.clone();
+        move |_, _| state.press_tab(None, Tab::Session(key))
     })
     .on_event_stop(el::Click, move |_, _| {
         select_state.show_session(key);

@@ -69,11 +69,14 @@ fn editor_surface(s: floem::style::Style) -> floem::style::Style {
         })
 }
 
-/// Editor styling shared by every code view.
-fn code_styling() -> floem::views::editor::text::SimpleStyling {
+/// Editor styling shared by every code view, at a pane's zoom.
+fn code_styling(zoom: f64) -> floem::views::editor::text::SimpleStyling {
+    let size = (crate::settings::code_size() as f64 * zoom)
+        .round()
+        .max(6.0) as usize;
     floem::views::editor::text::SimpleStyling::builder()
         .font_family(floem::text::FamilyOwned::parse_list(&crate::settings::code_font()).collect())
-        .font_size(crate::settings::code_size())
+        .font_size(size)
         .line_height(1.6)
         .build()
 }
@@ -388,6 +391,100 @@ fn drag_ghost(state: Rc<Workbench>) -> impl IntoView {
     })
 }
 
+/// A popup menu: what a pane's + adds, or what can be done to a tab.
+fn popup_menu(state: Rc<Workbench>) -> impl IntoView {
+    let menu = state.menu();
+    let window: Rc<Cell<Option<floem::ViewId>>> = Rc::default();
+    let overlay_view = window.clone();
+    let row_state = state.clone();
+    let panel = dyn_container(
+        move || menu.get(),
+        move |open| {
+            let Some(open) = open else {
+                return Empty::new().into_any();
+            };
+            let count = open.items.len();
+            let rows = open.items.into_iter().map(|item| match item.action {
+                None => Empty::new()
+                    .style(|s| {
+                        s.width_full()
+                            .height(1)
+                            .margin_vert(4)
+                            .background(color::border())
+                    })
+                    .into_any(),
+                Some(action) => {
+                    let state = row_state.clone();
+                    Stack::horizontal((
+                        Label::new(item.title).style(|s| s.flex_grow(1.0_f32)),
+                        Label::new(item.hint).style(|s| s.color(color::muted()).font_size(11)),
+                    ))
+                    .style(|s| {
+                        s.width_full()
+                            .gap(18)
+                            .padding_horiz(12)
+                            .padding_vert(6)
+                            .items_center()
+                            .border_radius(5)
+                            .cursor(floem::style::CursorStyle::Pointer)
+                            .hover(|s| s.background(color::highlight()))
+                    })
+                    .on_event_stop(el::Click, move |_, _| {
+                        state.dismiss_menu();
+                        action();
+                    })
+                    .into_any()
+                }
+            });
+            // Kept inside the window.
+            let size = window
+                .get()
+                .map(|id| id.root().get_size().unwrap_or_default())
+                .unwrap_or_default();
+            let (width, height) = (260.0, count as f64 * 30.0 + 10.0);
+            let x = open.at.x.min(size.width - width - 6.0).max(6.0);
+            let y = if open.at.y + height > size.height {
+                (open.at.y - height).max(6.0)
+            } else {
+                open.at.y
+            };
+            Stack::vertical_from_iter(rows)
+                .style(move |s| {
+                    s.absolute()
+                        .inset_left(x)
+                        .inset_top(y)
+                        .width(width)
+                        .padding(4)
+                        .background(color::panel())
+                        .color(color::text())
+                        .border(1)
+                        .border_color(color::border())
+                        .border_radius(8)
+                        .box_shadow_blur(12)
+                        .box_shadow_color(Color::BLACK.with_alpha(0.3))
+                })
+                .into_any()
+        },
+    )
+    .style(|s| s.absolute().inset(0));
+    let dismiss = state.clone();
+    let overlay = Stack::new((
+        // A click anywhere else closes the menu.
+        Empty::new()
+            .style(|s| s.absolute().inset(0))
+            .on_event_stop(el::PointerDown, move |_, _| dismiss.dismiss_menu()),
+        panel,
+    ))
+    .style(move |s| {
+        s.absolute()
+            .inset(0)
+            .z_index(45)
+            .apply_if(menu.with(Option::is_none), |s| s.hide())
+    });
+    overlay_view.set(Some(overlay.view_id()));
+    overlay
+}
+
 /// Every pane, or only the maximised one.
 fn pane_tree(state: Rc<Workbench>) -> impl IntoView {
     let tree = state.panes.tree();
@@ -580,6 +677,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        popup_menu(state.clone()),
         drag_ghost(state.clone()),
         finder::finder(state.clone()),
         confirmation(state),
@@ -594,8 +692,13 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     .on_event_cont_with_config(el::PointerMove, CAPTURE, {
         let state = pointer_state.clone();
         move |_, event| {
-            state.pointer_moved(event.current.logical_point());
+            let held = !event.current.buttons.is_empty();
+            state.pointer_moved(event.current.logical_point(), held);
         }
+    })
+    .on_event_cont_with_config(el::PointerDown, CAPTURE, {
+        let state = pointer_state.clone();
+        move |_, event| state.note_pointer(event.state.logical_point())
     })
     .on_event_cont_with_config(el::PointerUp, CAPTURE, move |_, _| {
         pointer_state.pointer_released();
@@ -606,6 +709,10 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     })
     .on_event_with_config(el::KeyDown, CAPTURE, move |cx, event| {
         if event.key == Key::Named(NamedKey::Escape) {
+            if keyboard_state.menu().with_untracked(Option::is_some) {
+                keyboard_state.dismiss_menu();
+                return EventPropagation::Stop;
+            }
             keyboard_state.dismiss_finder();
             keyboard_state.dismiss_confirmation();
             return EventPropagation::Continue;
@@ -630,6 +737,11 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                         | Command::FocusPane(_)
                         | Command::MoveTab(_)
                         | Command::MaximizePane
+                        | Command::NextTab
+                        | Command::PreviousTab
+                        | Command::ZoomIn
+                        | Command::ZoomOut
+                        | Command::ZoomReset
                 )
             {
                 return EventPropagation::Continue;
