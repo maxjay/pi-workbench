@@ -17,7 +17,9 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
 - **Editor:** syntax highlighting, open by name (Ctrl+P), search across files (Ctrl+Shift+F), cursor and scroll kept per tab, and an explorer that hides what `.gitignore` ignores.
 - **Terminal, settings, worktrees:** a terminal panel under the editors, a commented settings file, and sessions that work in their own git worktree.
-- A second pane, background saves, and a command palette.
+- **One quick picker, extended by Pi:** files, commands and colour themes in one VS Code-style picker. Pi's own slash commands are in it too, including the ones your Pi extensions, prompt templates and skills add.
+- **Themes:** 30 bundled themes, including Catppuccin, Dracula, Nord, Gruvbox, Solarized, One Half, GitHub and Monokai, or any `.tmTheme` file, with a live preview.
+- A second pane and background saves.
 
 ## Install on WSL or Linux
 
@@ -90,9 +92,38 @@ Changes that only reformat (the same text once whitespace is ignored or, with [d
 
 ## Finding your way
 
-![Search across files](docs/screenshots/search.png)
+![Pi's commands in the quick picker](docs/screenshots/commands.png)
 
-**Ctrl+P** opens files by name with fuzzy matching. **Ctrl+Shift+F** searches file contents; Enter runs the search and Enter again opens the selected hit at its line. Both skip what `.gitignore` ignores, and both are in the command palette. Files open highlighted and keep their cursor and scroll as you switch tabs; the footer shows the cursor's line and column.
+One picker does it all, as in VS Code:
+
+- **Ctrl+P** opens files by name with fuzzy matching.
+- **Ctrl+Shift+P**, or `>` typed in the file picker, lists commands with their shortcuts.
+- **`/`** lists Pi's slash commands, with their descriptions and where they come from.
+- **Ctrl+T** picks a colour theme.
+- **Ctrl+Shift+F** searches file contents. Enter runs the search, and Enter again opens the selected hit at its line.
+
+The file list and search skip what `.gitignore` ignores. Files open highlighted and keep their cursor and scroll as you switch tabs, and the footer shows the cursor's line and column.
+
+### Extending it with Pi
+
+The picker asks the active session's Pi for its commands (`get_commands` over RPC) each time it opens. Whatever extends Pi extends the picker, with no workbench code:
+
+- an extension's `pi.registerCommand()`;
+- a prompt template in `prompts/`;
+- a skill.
+
+Picking one puts `/name ` in the composer, ready for its arguments. Pi runs it, and any questions it asks are answered inline in the conversation.
+
+### Themes
+
+![Catppuccin Latte, previewed from the picker](docs/screenshots/themes.png)
+
+Themes are TextMate themes, the format Sublime Text and `bat` use:
+
+- **Bundled:** the 30 themes from `bat`'s collection.
+- **Your own:** put `.tmTheme` files in a `themes` folder next to the settings file, or name a file's path in the settings.
+
+Code is coloured by the theme's own rules. The rest of the app is derived from the theme's colours, keeping text and accents readable and the three "who changed it" colours apart. **Ctrl+T** previews themes as you move through the list. Enter keeps one and writes it to the settings file; Escape puts back the one you had.
 
 ## Terminal, settings and worktrees
 
@@ -102,6 +133,7 @@ Changes that only reformat (the same text once whitespace is ignored or, with [d
 
 **Ctrl+,** opens the settings file (`settings.json` in the app's configuration folder), created with every setting and a comment explaining it. It sets:
 
+- the colour theme;
 - the editor and terminal font and size;
 - the base branch for "Changes since";
 - how Pi is started;
@@ -134,7 +166,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | Ctrl/Cmd+` | Toggle terminal |
 | Ctrl/Cmd+, | Open settings file |
 | Ctrl/Cmd+\ | Toggle second pane |
-| Ctrl/Cmd+Shift+P | Command palette |
+| Ctrl/Cmd+Shift+P | All commands (also `>` in the file picker; `/` for Pi's) |
+| Ctrl/Cmd+T | Colour theme |
 | Escape | Dismiss palette or dialog |
 
 ## Development
@@ -156,10 +189,11 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [commands.rs](apps/desktop/src/commands.rs) | Actions and shortcuts |
 | [ui/](apps/desktop/src/ui) | Views and styling: rail, conversation, panes, changes |
 | [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars, focus and highlighting inside an editor |
-| [ui/finder.rs](apps/desktop/src/ui/finder.rs) | Open by name and search in files |
+| [ui/finder.rs](apps/desktop/src/ui/finder.rs) | The quick picker: files, commands, Pi's commands, themes, search |
+| [ui/color.rs](apps/desktop/src/ui/color.rs) | The colours in use, from the current theme |
 | [ui/terminal.rs](apps/desktop/src/ui/terminal.rs) | The terminal panel |
 | [workbench-core](crates/workbench-core/src) | File operations, layout storage, settings, line diffs, merges, git access (read-only, plus worktrees), blame, difftastic |
-| [workbench-text](crates/workbench-text/src) | Syntax highlighting, the gitignore-aware file index and fuzzy matching, content search |
+| [workbench-text](crates/workbench-text/src) | Syntax highlighting, themes, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |
 
 To add an action, update `Command`, `COMMANDS`, `Command::details`, and `execute` in `commands.rs`. Keep its behavior in the module that owns the relevant state.
@@ -186,7 +220,7 @@ PI_CODING_AGENT_DIR=/tmp/pi-fake PI_WORKBENCH_PI_ARGS="--provider fake --model f
 ## Current limitations
 
 - UTF-8 files only; 4 MiB per file, 64 open documents
-- No LSP yet; one colour theme
+- No LSP yet
 - The terminal has no text selection or copy yet
 - Focus fades unchanged lines rather than folding them; the editor needs equal line heights
 - Sessions in one window share its checkout; two sessions editing the same lines will conflict (use a worktree session to keep them apart)

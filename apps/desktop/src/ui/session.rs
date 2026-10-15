@@ -1,8 +1,5 @@
 //! The conversation: a Pi session's timeline, its questions, and the composer.
-use super::{
-    ACCENT, ADDED, ADDED_TEXT, BG, BORDER, CAPTURE, CODE_FONT, EDITOR_BG, INFO, MUTED, PANEL,
-    REMOVED, REMOVED_TEXT, SURFACE, TEXT, WARN, button,
-};
+use super::{CAPTURE, CODE_FONT, button, color};
 use crate::{
     markdown::{self, Block, Inline, Style},
     session::{Entry, EntryKind, Model, Session, Status, ToolState},
@@ -35,10 +32,10 @@ static CODE_FAMILY: LazyLock<Vec<FamilyOwned>> =
 
 pub(super) fn status_color(status: Status) -> Color {
     match status {
-        Status::Working => WARN,
-        Status::NeedsInput => INFO,
-        Status::Stopped => REMOVED_TEXT,
-        Status::Idle => MUTED,
+        Status::Working => color::warn(),
+        Status::NeedsInput => color::info(),
+        Status::Stopped => color::removed_text(),
+        Status::Idle => color::muted(),
     }
 }
 
@@ -65,62 +62,70 @@ fn pill(text: impl Fn() -> String + 'static, color: impl Fn() -> Color + 'static
     })
 }
 
-fn rich(inline: &Inline, size: f32, color: Color, bold: bool) -> impl IntoView {
-    let base = Attrs::new().color(color).font_size(size).weight(if bold {
-        FontWeight::BOLD
-    } else {
-        FontWeight::NORMAL
-    });
-    let mut attrs = AttrsList::new(base.clone());
-    for (range, style) in &inline.styles {
-        let span = match style {
-            Style::Strong => base.clone().weight(FontWeight::BOLD),
-            Style::Emphasis => base.clone().font_style(FontStyle::Italic),
-            Style::Code => base
-                .clone()
-                .family(&CODE_FAMILY)
-                .color(ACCENT)
-                .font_size(size - 1.0),
-            Style::Link => base.clone().color(INFO),
-        };
-        attrs.add_span(range.clone(), span);
-    }
-    let text = inline.text.clone();
-    rich_text(text.clone(), attrs.clone(), move || {
-        (text.clone(), attrs.clone())
-    })
-    .style(|s| s.width_full().min_width(0).line_height(1.5))
+/// Styled text whose colours follow the theme: `color` is read each time
+/// the text is laid out.
+fn rich(inline: &Inline, size: f32, color: fn() -> Color, bold: bool) -> impl IntoView {
+    let inline = inline.clone();
+    let attrs = move || {
+        let base = Attrs::new().color(color()).font_size(size).weight(if bold {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        });
+        let mut attrs = AttrsList::new(base.clone());
+        for (range, style) in &inline.styles {
+            let span = match style {
+                Style::Strong => base.clone().weight(FontWeight::BOLD),
+                Style::Emphasis => base.clone().font_style(FontStyle::Italic),
+                Style::Code => base
+                    .clone()
+                    .family(&CODE_FAMILY)
+                    .color(color::accent())
+                    .font_size(size - 1.0),
+                Style::Link => base.clone().color(color::info()),
+            };
+            attrs.add_span(range.clone(), span);
+        }
+        (inline.text.clone(), attrs)
+    };
+    let (text, first) = attrs();
+    rich_text(text, first, attrs).style(|s| s.width_full().min_width(0).line_height(1.5))
 }
 
 fn block_view(block: Block) -> AnyView {
     match block {
-        Block::Heading(inline) => rich(&inline, 15.0, TEXT, true)
+        Block::Heading(inline) => rich(&inline, 15.0, color::text, true)
             .style(|s| s.padding_top(4))
             .into_any(),
-        Block::Paragraph(inline) => rich(&inline, 13.0, TEXT, false).into_any(),
+        Block::Paragraph(inline) => rich(&inline, 13.0, color::text, false).into_any(),
         Block::Item {
             depth,
             marker,
             inline,
         } => Stack::horizontal((
-            Label::new(marker).style(|s| s.color(MUTED).min_width(18).flex_shrink(0.0_f32)),
-            rich(&inline, 13.0, TEXT, false),
+            Label::new(marker)
+                .style(|s| s.color(color::muted()).min_width(18).flex_shrink(0.0_f32)),
+            rich(&inline, 13.0, color::text, false),
         ))
         .style(move |s| s.width_full().gap(4).padding_left(depth as f64 * 16.0))
         .into_any(),
-        Block::Quote(inline) => rich(&inline, 13.0, MUTED, false)
-            .style(|s| s.padding_left(10).border_left(3).border_color(BORDER))
+        Block::Quote(inline) => rich(&inline, 13.0, color::muted, false)
+            .style(|s| {
+                s.padding_left(10)
+                    .border_left(3)
+                    .border_color(color::border())
+            })
             .into_any(),
         Block::Code { language, text } => Stack::vertical((
             Label::new(language.clone()).style(move |s| {
-                s.color(MUTED)
+                s.color(color::muted())
                     .font_size(10)
                     .apply_if(language.is_empty(), |s| s.hide())
             }),
             Label::new(text).style(|s| {
                 s.font_family(CODE_FONT.to_string())
                     .font_size(12)
-                    .color(TEXT)
+                    .color(color::text())
                     .text_wrap()
                     .min_width(0)
             }),
@@ -130,13 +135,13 @@ fn block_view(block: Block) -> AnyView {
                 .gap(4)
                 .padding(10)
                 .border_radius(6)
-                .background(BG)
+                .background(color::bg())
                 .border(1)
-                .border_color(BORDER)
+                .border_color(color::border())
         })
         .into_any(),
         Block::Rule => Empty::new()
-            .style(|s| s.width_full().height(1).background(BORDER))
+            .style(|s| s.width_full().height(1).background(color::border()))
             .into_any(),
     }
 }
@@ -158,11 +163,11 @@ fn markdown_view(body: RwSignal<String>) -> impl IntoView {
 fn state_label(tool: &str, state: Option<ToolState>) -> (&'static str, Color) {
     let file_tool = matches!(tool, "edit" | "write");
     match state {
-        Some(ToolState::Streaming) => ("writing", WARN),
-        Some(ToolState::Running) => ("running", INFO),
-        Some(ToolState::Failed) => ("failed", REMOVED_TEXT),
-        _ if file_tool => ("applied", ACCENT),
-        _ => ("done", ACCENT),
+        Some(ToolState::Streaming) => ("writing", color::warn()),
+        Some(ToolState::Running) => ("running", color::info()),
+        Some(ToolState::Failed) => ("failed", color::removed_text()),
+        _ if file_tool => ("applied", color::accent()),
+        _ => ("done", color::accent()),
     }
 }
 
@@ -187,15 +192,20 @@ fn preview(body: RwSignal<String>) -> impl IntoView {
         lines,
         |line| line.clone(),
         |(index, line)| {
-            let (background, color) = match line.chars().next() {
-                _ if index == 0 => (Color::TRANSPARENT, MUTED),
-                Some('+') => (ADDED, ADDED_TEXT),
-                Some('-') => (REMOVED, REMOVED_TEXT),
-                _ => (Color::TRANSPARENT, MUTED),
+            let kind = match line.chars().next() {
+                _ if index == 0 => None,
+                Some('+') => Some(true),
+                Some('-') => Some(false),
+                _ => None,
             };
             // Diff lines keep their shape; command output and errors wrap.
-            let diff = background != Color::TRANSPARENT;
+            let diff = kind.is_some();
             Label::new(line).style(move |s| {
+                let (background, color) = match kind {
+                    Some(true) => (color::added(), color::added_text()),
+                    Some(false) => (color::removed(), color::removed_text()),
+                    None => (Color::TRANSPARENT, color::muted()),
+                };
                 s.width_full()
                     .min_width(0)
                     .padding_horiz(10)
@@ -214,7 +224,7 @@ fn preview(body: RwSignal<String>) -> impl IntoView {
             .font_size(12)
             .font_family(CODE_FONT.to_string())
             .border_top(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .apply_if(body.with(String::is_empty), |s| s.hide())
     })
 }
@@ -230,14 +240,15 @@ fn tool_card(state: Rc<Workbench>, entry: &Entry) -> impl IntoView {
                 move || state_label(&pill_tool, entry_state.get()).0.to_string(),
                 move || state_label(&color_tool, entry_state.get()).1,
             ),
-            Label::new(tool).style(|s| s.color(MUTED).flex_shrink(0.0_f32)),
+            Label::new(tool).style(|s| s.color(color::muted()).flex_shrink(0.0_f32)),
             Label::derived(move || title.get()).style(move |s| {
-                s.color(TEXT)
+                s.color(color::text())
                     .min_width(0)
                     .flex_grow(1.0_f32)
                     .text_ellipsis()
                     .apply_if(file_tool, |s| {
-                        s.cursor(CursorStyle::Pointer).hover(|s| s.color(ACCENT))
+                        s.cursor(CursorStyle::Pointer)
+                            .hover(|s| s.color(color::accent()))
                     })
             }),
         ))
@@ -262,13 +273,13 @@ fn tool_card(state: Rc<Workbench>, entry: &Entry) -> impl IntoView {
     .style(move |s| {
         let failed = entry_state.get() == Some(ToolState::Failed);
         s.width_full()
-            .background(SURFACE)
+            .background(color::surface())
             .border(1)
             .border_radius(8)
             .border_color(if failed {
-                REMOVED_TEXT.with_alpha(0.5)
+                color::removed_text().with_alpha(0.5)
             } else {
-                BORDER
+                color::border()
             })
     })
 }
@@ -313,10 +324,10 @@ fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
                         s.flex_grow(1.0_f32)
                             .padding(6)
                             .border(1)
-                            .border_color(BORDER)
+                            .border_color(color::border())
                             .border_radius(6)
-                            .background(BG)
-                            .color(TEXT)
+                            .background(color::bg())
+                            .color(color::text())
                     }),
                 button("Answer", submit),
             ))
@@ -331,9 +342,9 @@ fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
         })
     };
     Stack::vertical((
-        Label::new(ask.title.clone()).style(|s| s.color(TEXT).font_bold()),
+        Label::new(ask.title.clone()).style(|s| s.color(color::text()).font_bold()),
         Label::new(ask.message.clone()).style(move |s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .text_wrap()
                 .apply_if(ask.message.is_empty(), |s| s.hide())
         }),
@@ -341,7 +352,7 @@ fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
             .style(move |s| s.gap(6).apply_if(answered.get().is_some(), |s| s.hide())),
         Label::derived(move || format!("Answered: {}", answered.get().unwrap_or_default())).style(
             move |s| {
-                s.color(MUTED)
+                s.color(color::muted())
                     .apply_if(answered.get().is_none(), |s| s.hide())
             },
         ),
@@ -353,11 +364,11 @@ fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
             .border_radius(8)
             .border(1)
             .border_color(if answered.get().is_none() {
-                INFO
+                color::info()
             } else {
-                BORDER
+                color::border()
             })
-            .background(SURFACE)
+            .background(color::surface())
     })
     .into_any()
 }
@@ -367,11 +378,11 @@ fn button_owned(title: String, action: impl Fn() + 'static) -> impl IntoView {
         s.padding_horiz(10)
             .padding_vert(5)
             .border(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .border_radius(6)
-            .background(BG)
-            .color(TEXT)
-            .hover(|s| s.background(BORDER))
+            .background(color::bg())
+            .color(color::text())
+            .hover(|s| s.background(color::border()))
     })
 }
 
@@ -392,7 +403,7 @@ fn thinking_view(body: RwSignal<String>) -> impl IntoView {
             }
         })
         .style(|s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .font_size(12)
                 .font_style(FontStyle::Italic)
                 .cursor(CursorStyle::Pointer)
@@ -401,13 +412,13 @@ fn thinking_view(body: RwSignal<String>) -> impl IntoView {
         })
         .on_event_stop(el::Click, move |_, _| open.update(|o| *o = !*o)),
         Label::derived(move || body.get()).style(move |s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .font_size(12)
                 .text_wrap()
                 .min_width(0)
                 .padding_left(10)
                 .border_left(2)
-                .border_color(BORDER)
+                .border_color(color::border())
                 .apply_if(!open.get(), |s| s.hide())
         }),
     ))
@@ -425,7 +436,7 @@ fn entry_view(state: Rc<Workbench>, session: Rc<Session>, entry: Rc<Entry>) -> i
             };
             Stack::vertical((
                 Label::new(queued).style(move |s| {
-                    s.color(MUTED)
+                    s.color(color::muted())
                         .font_size(10)
                         .apply_if(queued.is_empty(), |s| s.hide())
                 }),
@@ -435,15 +446,15 @@ fn entry_view(state: Rc<Workbench>, session: Rc<Session>, entry: Rc<Entry>) -> i
                         .padding_horiz(12)
                         .padding_vert(8)
                         .border_radius(12)
-                        .background(ACCENT.with_alpha(0.16))
-                        .color(TEXT)
+                        .background(color::highlight())
+                        .color(color::text())
                 }),
             ))
             .style(|s| s.width_full().items_end().gap(2).padding_left(80))
             .into_any()
         }
         EntryKind::Assistant => Stack::vertical((
-            Label::new("Pi").style(|s| s.color(ACCENT).font_bold().font_size(11)),
+            Label::new("Pi").style(|s| s.color(color::accent()).font_bold().font_size(11)),
             markdown_view(body),
         ))
         .style(|s| s.width_full().gap(6))
@@ -462,11 +473,11 @@ fn entry_view(state: Rc<Workbench>, session: Rc<Session>, entry: Rc<Entry>) -> i
                         .border_radius(8)
                         .apply_if(error, |s| {
                             s.border_left(3)
-                                .border_color(REMOVED_TEXT)
-                                .background(REMOVED)
-                                .color(TEXT)
+                                .border_color(color::removed_text())
+                                .background(color::removed())
+                                .color(color::text())
                         })
-                        .apply_if(!error, |s| s.color(MUTED).font_size(12))
+                        .apply_if(!error, |s| s.color(color::muted()).font_size(12))
                 })
                 .into_any()
         }
@@ -489,9 +500,9 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
                     s.width_full()
                         .padding_horiz(12)
                         .padding_vert(7)
-                        .color(TEXT)
+                        .color(color::text())
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(BORDER))
+                        .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
                     session.set_model(&model);
@@ -507,9 +518,9 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
             .inset_right(12)
             .width(320)
             .max_height(320)
-            .background(PANEL)
+            .background(color::panel())
             .border(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .border_radius(8)
             .z_index(10)
             .apply_if(!open.get(), |s| s.hide())
@@ -518,15 +529,16 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
 
 fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
     let working = session.working();
+    let request = session.focus_request();
     let editor = text_editor("")
         .styling(SimpleStyling::builder().font_size(13).build())
         .editor_style(super::editor_colors)
         .editor_style(|s| {
             s.wrap_method(WrapMethod::EditorWidth)
                 .hide_gutter(true)
-                .current_line_color(EDITOR_BG)
+                .current_line_color(color::editor_bg())
         })
-        .style(|s| s.width_full().height(84).min_width(0));
+        .style(|s| super::editor_surface(s.width_full().height(84).min_width(0)));
     let handle = editor.editor().clone();
     handle.update_doc(session.draft.clone(), None);
     // Placeholders belong to the document, so set it on the session's draft.
@@ -552,6 +564,24 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
         }
         EventPropagation::Continue
     });
+    // A picked Pi command focuses the composer, after its text.
+    let caret_handle = handle.clone();
+    let request_focus = handle.editor_view_id;
+    Effect::new(move |_| {
+        let Some(offset) = request.get() else { return };
+        request.set(None);
+        floem::action::exec_after_animation_frame(move |_| {
+            caret_handle.cursor.update(|cursor| {
+                cursor.set_insert(floem::views::editor::core::selection::Selection::caret(
+                    offset,
+                    floem::views::editor::core::cursor::CursorAffinity::Forward,
+                ))
+            });
+            if let Some(id) = request_focus.try_get_untracked().flatten() {
+                id.request_focus();
+            }
+        });
+    });
     // Focus the composer only when it can be seen; a hidden one would take typing.
     let focus = handle.editor_view_id;
     Effect::new(move |_| {
@@ -567,13 +597,16 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
         Stack::horizontal((
             editor,
             button("Send", move || submit(false)).style(move |s| {
-                s.background(ACCENT)
-                    .color(BG)
+                s.background(color::accent())
+                    .color(color::on_accent())
                     .font_bold()
                     .padding_horiz(14)
                     .padding_vert(9)
                     .border_radius(8)
-                    .hover(|s| s.background(ACCENT.with_alpha(0.85)).color(BG))
+                    .hover(|s| {
+                        s.background(color::accent().with_alpha(0.85))
+                            .color(color::on_accent())
+                    })
             }),
         ))
         .style(|s| {
@@ -582,9 +615,9 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
                 .items_end()
                 .padding(8)
                 .border(1)
-                .border_color(BORDER)
+                .border_color(color::border())
                 .border_radius(10)
-                .background(EDITOR_BG)
+                .background(color::editor_bg())
         }),
         Label::derived(move || {
             if working.get() {
@@ -594,7 +627,7 @@ fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
             }
             .to_string()
         })
-        .style(|s| s.color(MUTED).font_size(11)),
+        .style(|s| s.color(color::muted()).font_size(11)),
     ))
     .style(|s| s.width_full().gap(6).padding(14).flex_shrink(0.0_f32))
 }
@@ -609,7 +642,7 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
     let working = session.working();
     let header = Stack::horizontal((
         Label::derived(move || title.get()).style(|s| {
-            s.color(TEXT)
+            s.color(color::text())
                 .font_bold()
                 .font_size(14)
                 .min_width(0)
@@ -623,20 +656,22 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
             move || status_color(status()),
         ),
         Empty::new().style(|s| s.flex_grow(1.0_f32)),
-        Label::derived(move || stats.get()).style(|s| s.color(MUTED).font_size(11)),
+        Label::derived(move || stats.get()).style(|s| s.color(color::muted()).font_size(11)),
         Label::derived(move || model.get().map_or("Choose model".into(), |m| m.name))
             .style(|s| {
-                s.color(TEXT)
+                s.color(color::text())
                     .font_size(12)
                     .padding_horiz(10)
                     .padding_vert(5)
                     .border_radius(6)
                     .cursor(CursorStyle::Pointer)
-                    .hover(|s| s.background(BORDER))
+                    .hover(|s| s.background(color::border()))
             })
             .on_event_stop(el::Click, move |_, _| menu_open.update(|o| *o = !*o)),
-        button("Stop", move || stop_session.stop())
-            .style(move |s| s.color(REMOVED_TEXT).apply_if(!working.get(), |s| s.hide())),
+        button("Stop", move || stop_session.stop()).style(move |s| {
+            s.color(color::removed_text())
+                .apply_if(!working.get(), |s| s.hide())
+        }),
     ))
     .style(|s| {
         s.width_full()
@@ -646,21 +681,21 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
             .items_center()
             .flex_shrink(0.0_f32)
             .border_bottom(1)
-            .border_color(BORDER)
+            .border_color(color::border())
     });
     let timeline_state = state.clone();
     let timeline_session = session.clone();
     let empty = Stack::vertical((
         Label::new("π").style(|s| {
             s.font_size(36)
-                .color(ACCENT)
+                .color(color::accent())
                 .font_family(CODE_FONT.to_string())
         }),
-        Label::new("What should Pi work on?").style(|s| s.color(TEXT).font_bold()),
+        Label::new("What should Pi work on?").style(|s| s.color(color::text()).font_bold()),
         Label::new(
             "Pi's edits stream into your open files as it writes them.\nUnsaved work is merged, never overwritten.",
         )
-        .style(|s| s.color(MUTED).text_wrap().line_height(1.5)),
+        .style(|s| s.color(color::muted()).text_wrap().line_height(1.5)),
     ))
     .style(move |s| {
         s.width_full()
@@ -704,7 +739,12 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
         Stack::vertical((header, timeline, composer)).style(|s| s.size_full().min_height(0)),
         model_menu(session, menu_open),
     ))
-    .style(|s| s.size_full().min_width(0).min_height(0).background(BG))
+    .style(|s| {
+        s.size_full()
+            .min_width(0)
+            .min_height(0)
+            .background(color::bg())
+    })
 }
 
 /// The active session's conversation, or a prompt to start one.
@@ -718,7 +758,7 @@ pub(super) fn conversation(state: Rc<Workbench>) -> impl IntoView {
         move |key| match key.and_then(|key| sessions.find(key)) {
             Some(session) => session_view(state.clone(), session).into_any(),
             None => Label::new("No session open. Press Ctrl+N to start one.")
-                .style(|s| s.color(MUTED).padding(40))
+                .style(|s| s.color(color::muted()).padding(40))
                 .into_any(),
         },
     )

@@ -35,6 +35,9 @@ use workbench_core::{
 pub enum Finder {
     Files,
     Search,
+    /// The workbench's commands and Pi's slash commands.
+    Commands,
+    Themes,
 }
 
 /// Creates `<repository>-worktrees/pi-<time>` beside the repository on a new
@@ -134,7 +137,6 @@ pub struct Workbench {
     layout_writable: bool,
     status: RwSignal<String>,
     confirm: RwSignal<Option<Confirm>>,
-    palette: RwSignal<bool>,
     finder: RwSignal<Option<Finder>>,
     /// The window's shell, started the first time the panel opens.
     terminal: RwSignal<Option<Rc<crate::terminal::Terminal>>>,
@@ -214,7 +216,6 @@ impl Workbench {
             status,
             layout: RwSignal::new(layout),
             confirm: RwSignal::new(None),
-            palette: RwSignal::new(false),
             finder: RwSignal::new(None),
             terminal: RwSignal::new(None),
             terminal_visible: RwSignal::new(false),
@@ -260,24 +261,66 @@ impl Workbench {
     pub fn confirmation(&self) -> ReadSignal<Option<Confirm>> {
         self.confirm.read_only()
     }
-    pub fn palette(&self) -> ReadSignal<bool> {
-        self.palette.read_only()
-    }
+    /// Opens the command picker, or closes it if it is open.
     pub fn toggle_palette(&self) {
-        self.palette.update(|shown| *shown = !*shown);
+        if self.finder.get_untracked() == Some(Finder::Commands) {
+            self.dismiss_finder();
+        } else {
+            self.open_finder(Finder::Commands);
+        }
     }
     pub fn finder(&self) -> ReadSignal<Option<Finder>> {
         self.finder.read_only()
     }
     pub fn open_finder(&self, mode: Finder) {
-        self.palette.set(false);
+        if self.finder.get_untracked() == Some(Finder::Themes) && mode != Finder::Themes {
+            crate::ui::color::revert();
+        }
         self.finder.set(Some(mode));
     }
+    /// Closes the picker; a theme only previewed is put back.
     pub fn dismiss_finder(&self) {
+        if self.finder.get_untracked() == Some(Finder::Themes) {
+            crate::ui::color::revert();
+        }
         self.finder.set(None);
     }
-    pub fn dismiss_palette(&self) {
-        self.palette.set(false);
+
+    /// Makes a theme the one in use and records it in the settings file.
+    pub fn choose_theme(&self, name: &str) {
+        match crate::ui::color::load(name) {
+            // Only a theme the settings file records is chosen; otherwise the
+            // next read of the file would put the old one back.
+            Ok(theme) => match workbench_core::settings::set_string("theme", name) {
+                Ok(()) => {
+                    crate::ui::color::choose(theme.clone());
+                    self.status.set(format!("Theme: {}", theme.name));
+                }
+                Err(err) => {
+                    crate::ui::color::revert();
+                    self.status.set(format!("Settings: {err:#}"));
+                }
+            },
+            Err(err) => self.status.set(format!("{err:#}")),
+        }
+    }
+
+    /// Puts a Pi slash command in the active session's composer, ready for
+    /// its arguments.
+    pub fn start_pi_command(&self, name: &str) {
+        let session = self
+            .sessions
+            .active_untracked()
+            .unwrap_or_else(|| self.sessions.create());
+        // In front of anything already typed, which may be its arguments.
+        let text = format!("/{name} ");
+        session.draft.edit_single(
+            Selection::caret(0, CursorAffinity::Forward),
+            &text,
+            EditType::InsertChars,
+        );
+        self.show_conversation();
+        session.focus_composer(text.len());
     }
     pub fn dismiss_confirmation(&self) {
         self.confirm.set(None);
@@ -923,6 +966,8 @@ impl Workbench {
     }
 
     fn finish_quit(&self) {
+        // A theme only previewed must not stay on in the other windows.
+        self.dismiss_finder();
         match self.persist_layout() {
             Ok(()) => (self.close_window)(),
             Err(err) => self.status.set(format!("Could not save layout: {err}")),

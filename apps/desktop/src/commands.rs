@@ -38,6 +38,7 @@ pub enum Command {
     FindInFiles,
     Explorer,
     Terminal,
+    ColorTheme,
     MoveExplorer,
     Refresh,
     ResetLayout,
@@ -88,6 +89,7 @@ pub const COMMANDS: &[Command] = &[
     Command::OpenSettings,
     Command::Explorer,
     Command::Terminal,
+    Command::ColorTheme,
     Command::MoveExplorer,
     Command::Refresh,
     Command::ResetLayout,
@@ -213,7 +215,7 @@ impl Command {
         ];
         const DIGITS: [&str; 9] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
         match self {
-            Self::Palette => ("Toggle command palette", ctrl_shift("p")),
+            Self::Palette => ("Show all commands", ctrl_shift("p")),
             Self::Quit => ("Close workspace window", ctrl("q")),
             Self::OpenFolder => ("Open folder in new window", None),
             Self::Save => ("Save active file", ctrl("s")),
@@ -250,6 +252,7 @@ impl Command {
             Self::FindInFiles => ("Search in files", ctrl_shift("f")),
             Self::Explorer => ("Toggle explorer", ctrl("b")),
             Self::Terminal => ("Toggle terminal", ctrl("`")),
+            Self::ColorTheme => ("Colour theme…", ctrl("t")),
             Self::MoveExplorer => ("Move explorer to opposite side", None),
             Self::Refresh => ("Refresh expanded folders", None),
             Self::ResetLayout => ("Reset panel layout", None),
@@ -319,6 +322,7 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::FindInFiles => state.open_finder(Finder::Search),
         Command::Explorer => state.toggle_explorer(),
         Command::Terminal => state.toggle_terminal(),
+        Command::ColorTheme => state.open_finder(Finder::Themes),
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
         Command::ResetLayout => state.reset_layout(),
