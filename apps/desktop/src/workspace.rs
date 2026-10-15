@@ -1,5 +1,10 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{documents::Documents, explorer::Explorer, lens::Lens, sessions::Sessions};
+use crate::{
+    documents::Documents,
+    explorer::Explorer,
+    lens::{Comparison, Lens},
+    sessions::Sessions,
+};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
 use floem::reactive::{Effect, ReadSignal, Scope};
@@ -19,9 +24,7 @@ use std::{
     rc::Rc,
 };
 use workbench_core::{
-    MAX_OPEN_DOCUMENTS,
-    diff::Hunk,
-    files,
+    MAX_OPEN_DOCUMENTS, files,
     git::FileStatus,
     layout::{self, Layout},
 };
@@ -272,6 +275,8 @@ impl Workbench {
     }
 
     pub fn open(self: &Rc<Self>, path: PathBuf, pane: Pane) {
+        // Pi and git spell paths differently; one file must have one document.
+        let path = path.canonicalize().unwrap_or(path);
         if pane == Pane::Primary {
             self.conversation.set(false);
         }
@@ -324,11 +329,23 @@ impl Workbench {
                 }
                 self.status.set("Ready".into());
             }
-            Err(err) => self.status.set(err),
+            Err(err) => {
+                // A jump into a file that never opened must not fire later.
+                if self
+                    .jump
+                    .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
+                {
+                    self.jump.set(None);
+                }
+                self.status.set(err)
+            }
         }
     }
 
     pub fn select_document(&self, pane: Pane, path: PathBuf) {
+        if self.jump.with_untracked(Option::is_some) {
+            self.jump.set(None);
+        }
         if self.documents.get(&path).is_some() {
             if pane == Pane::Primary {
                 self.conversation.set(false);
@@ -367,46 +384,66 @@ impl Workbench {
         self.active(pane).get_untracked().map(|path| (pane, path))
     }
 
-    /// The hunks of an open file under the lens; seen ones only if asked.
-    pub fn hunks(&self, path: &Path, include_seen: bool) -> Vec<Hunk> {
-        let (Some(file), Some(doc)) = (self.lens.file(path), self.documents.get(path)) else {
+    /// The lines of an open file's unseen changes, in order.
+    pub fn change_lines(&self, path: &Path) -> Vec<usize> {
+        let Some(comparison) = self
+            .lens
+            .file(path)
+            .and_then(|file| file.comparison().get_untracked())
+        else {
             return Vec::new();
         };
-        let Some(diff) = file.diff().get_untracked() else {
-            return Vec::new();
-        };
-        let text = doc.text().text().to_string();
         let seen = self.lens.seen().get_untracked();
-        diff.hunks_iter()
-            .filter(|hunk| include_seen || !seen.contains(&self.lens.hunk_key(&file, hunk, &text)))
+        comparison
+            .hunks
+            .iter()
+            .filter(|(_, key)| !seen.contains(key))
+            .map(|(hunk, _)| comparison.line_of(hunk))
             .collect()
     }
 
-    /// The hunk under the cursor of the focused pane.
-    fn hunk_at_cursor(&self) -> Option<(PathBuf, Hunk)> {
-        let (pane, path) = self.focused_file()?;
-        let line = self.cursor_line[pane.index()].get_untracked();
-        let hunk = self.hunks(&path, true).into_iter().find(|hunk| {
-            hunk.current.contains(&line) || (hunk.current.is_empty() && hunk.current.start == line)
-        })?;
-        Some((path, hunk))
+    /// The change under the cursor of the focused pane, compared against the
+    /// text as it is now. Reports why when there is none.
+    fn change_at_cursor(&self, action: &str) -> Option<(PathBuf, Rc<Comparison>, usize)> {
+        let found = self.focused_file().and_then(|(pane, path)| {
+            let file = self.lens.file(&path)?;
+            let line = self.cursor_line[pane.index()].get_untracked();
+            let Some(comparison) = file.current() else {
+                return Some(Err(()));
+            };
+            let index = comparison.at_line(line)?;
+            Some(Ok((path, comparison, index)))
+        });
+        match found {
+            Some(Ok(found)) => Some(found),
+            Some(Err(())) => {
+                self.status
+                    .set("Still comparing the latest edit; try again in a moment.".into());
+                None
+            }
+            None => {
+                self.status
+                    .set(format!("Put the cursor on a change to {action}."));
+                None
+            }
+        }
     }
 
     /// Moves to the next unseen change, continuing into the next changed file.
     pub fn next_change(self: &Rc<Self>, forward: bool) {
         if let Some((pane, path)) = self.focused_file() {
             let line = self.cursor_line[pane.index()].get_untracked();
-            let hunks = self.hunks(&path, false);
+            let lines = self.change_lines(&path);
             let target = if forward {
-                hunks.iter().find(|h| h.current.start > line)
+                lines.iter().find(|l| **l > line)
             } else {
-                hunks.iter().rev().find(|h| h.current.start < line)
+                lines.iter().rev().find(|l| **l < line)
             };
-            if let Some(hunk) = target {
+            if let Some(&target) = target {
                 self.jump.set(Some(Jump {
                     pane,
                     path,
-                    to: JumpTo::Line(hunk.current.start),
+                    to: JumpTo::Line(target),
                 }));
                 return;
             }
@@ -448,32 +485,24 @@ impl Workbench {
 
     /// Puts the baseline's lines back in place of the change under the cursor.
     pub fn revert_change(&self) {
-        let Some((path, hunk)) = self.hunk_at_cursor() else {
-            self.status
-                .set("Put the cursor on a change to revert it.".into());
+        let Some((path, comparison, index)) = self.change_at_cursor("revert it") else {
             return;
         };
-        let (Some(file), Some(doc)) = (self.lens.file(&path), self.documents.get(&path)) else {
+        let Some(doc) = self.documents.get(&path) else {
             return;
         };
-        let base = file
-            .base_text()
-            .and_then(|b| (*b).clone())
-            .unwrap_or_default();
-        let base_lines: Vec<&str> = base.split('\n').map(|l| l.trim_end_matches('\r')).collect();
-        let restored = base_lines.get(hunk.base.clone()).unwrap_or_default();
-        replace_lines(&doc.text(), hunk.current.clone(), restored);
+        let hunk = &comparison.hunks[index].0;
+        replace_lines(&doc.text(), hunk.current.clone(), &comparison.removed(hunk));
         self.status
             .set("Reverted the change; undo brings it back.".into());
     }
 
     /// Puts the change under the cursor into the active session's composer.
     pub fn ask_about_change(&self) {
-        let Some((path, hunk)) = self.hunk_at_cursor() else {
-            self.status
-                .set("Put the cursor on a change to ask Pi about it.".into());
+        let Some((path, comparison, index)) = self.change_at_cursor("ask Pi about it") else {
             return;
         };
+        let hunk = comparison.hunks[index].0.clone();
         let Some(doc) = self.documents.get(&path) else {
             return;
         };
@@ -503,16 +532,10 @@ impl Workbench {
     }
 
     pub fn mark_change_seen(self: &Rc<Self>) {
-        let Some((path, hunk)) = self.hunk_at_cursor() else {
-            self.status
-                .set("Put the cursor on a change to mark it seen.".into());
+        let Some((_, comparison, index)) = self.change_at_cursor("mark it seen") else {
             return;
         };
-        let (Some(file), Some(doc)) = (self.lens.file(&path), self.documents.get(&path)) else {
-            return;
-        };
-        let text = doc.text().text().to_string();
-        self.lens.mark_seen(self.lens.hunk_key(&file, &hunk, &text));
+        self.lens.mark_seen(comparison.hunks[index].1);
         self.next_change(true);
     }
 

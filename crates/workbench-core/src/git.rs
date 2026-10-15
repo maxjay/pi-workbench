@@ -8,18 +8,23 @@
 use crate::files;
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsStr,
     fs,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Output, Stdio},
+    sync::{Arc, Mutex},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// A hung git (a lock, a network filesystem) must not leave the view loading forever.
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A file modified this recently might change again within the timestamp's
+/// resolution, so its hash is not reused.
+const SETTLED: Duration = Duration::from_secs(2);
 
 /// Inherited from a hook or wrapper script, these would point every call at another repository.
 const REPOSITORY_ENV: [&str; 5] = [
@@ -30,10 +35,27 @@ const REPOSITORY_ENV: [&str; 5] = [
     "GIT_OBJECT_DIRECTORY",
 ];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Repo {
     root: PathBuf,
+    /// Object ids of files hashed before, by path, size and modification time.
+    hashed: Arc<Mutex<HashMap<Vec<u8>, Hashed>>>,
 }
+
+#[derive(Debug)]
+struct Hashed {
+    size: u64,
+    modified: SystemTime,
+    id: String,
+}
+
+impl PartialEq for Repo {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root
+    }
+}
+
+impl Eq for Repo {}
 
 /// Something the workspace can be compared with.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,6 +129,7 @@ impl Repo {
             .with_context(|| format!("Cannot open repository {}", top.display()))?;
         Ok(Some(Repo {
             root: plain_path(&root),
+            hashed: Arc::default(),
         }))
     }
 
@@ -165,6 +188,17 @@ impl Repo {
     /// files, plus untracked files that are not ignored. The user's index and
     /// files are left alone, and only new objects are written.
     pub fn snapshot(&self) -> Result<String> {
+        self.snapshot_once().or_else(|_| {
+            // A remembered object may have been pruned since; hash everything again.
+            self.hashed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            self.snapshot_once()
+        })
+    }
+
+    fn snapshot_once(&self) -> Result<String> {
         let staged = self.staged()?;
         let untracked = self.git(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         let paths: BTreeSet<&[u8]> = staged
@@ -172,21 +206,61 @@ impl Repo {
             .map(Vec::as_slice)
             .chain(fields(&untracked))
             .collect();
+        let now = SystemTime::now();
         let mut entries = Vec::new();
         let mut unhashed = Vec::new();
-        for path in paths {
-            let Some(full) = native_path(&self.root, path) else {
-                continue;
-            };
-            let Some((mode, id)) = entry(&full, staged.get(path)) else {
-                continue;
-            };
-            if id.is_none() {
-                unhashed.push(path);
+        {
+            let hashed = self.hashed.lock().unwrap_or_else(|e| e.into_inner());
+            for path in paths {
+                let Some(full) = native_path(&self.root, path) else {
+                    continue;
+                };
+                let staged_entry = staged.get(path);
+                let Some(Entry { mode, id, stamp }) = entry(&full, staged_entry) else {
+                    continue;
+                };
+                // Large untracked files (builds, data) cannot be compared,
+                // and hashing them would copy them into the object store.
+                if staged_entry.is_none()
+                    && stamp.as_ref().is_some_and(|s| s.0 > files::MAX_FILE_BYTES)
+                {
+                    continue;
+                }
+                let known = stamp.as_ref().and_then(|(size, modified)| {
+                    hashed
+                        .get(path)
+                        .filter(|h| h.size == *size && h.modified == *modified)
+                        .map(|h| h.id.clone())
+                });
+                let id = id.or(known);
+                if id.is_none() {
+                    unhashed.push((path, stamp));
+                }
+                entries.push((mode, id, path));
             }
-            entries.push((mode, id, path));
         }
-        let mut hashes = self.hash(&unhashed)?.into_iter();
+        let paths: Vec<&[u8]> = unhashed.iter().map(|(path, _)| *path).collect();
+        let hashes = self.hash(&paths)?;
+        {
+            let mut hashed = self.hashed.lock().unwrap_or_else(|e| e.into_inner());
+            for ((path, stamp), id) in unhashed.iter().zip(&hashes) {
+                let settled = stamp.as_ref().is_some_and(|(_, modified)| {
+                    now.duration_since(*modified)
+                        .is_ok_and(|age| age >= SETTLED)
+                });
+                if let (Some((size, modified)), true) = (stamp, settled) {
+                    hashed.insert(
+                        path.to_vec(),
+                        Hashed {
+                            size: *size,
+                            modified: *modified,
+                            id: id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        let mut hashes = hashes.into_iter();
         let mut info = Vec::new();
         for (mode, id, path) in entries {
             let id = match id {
@@ -237,6 +311,7 @@ impl Repo {
             "--no-renames",
             "--no-ext-diff",
             "--no-textconv",
+            "--ignore-cr-at-eol",
             "--raw",
             "--numstat",
             base,
@@ -268,7 +343,15 @@ impl Repo {
         let mut changes: Vec<FileChange> = statuses
             .into_iter()
             .filter_map(|(path, status)| {
-                let (added, removed) = counts.get(path).copied().unwrap_or_default();
+                // Git counts no lines for a file whose only difference is
+                // line endings; the line diff ignores those too, so it is
+                // not a change.
+                let (added, removed) = match counts.get(path).copied() {
+                    Some((Some(0), Some(0))) if status == FileStatus::Modified => return None,
+                    Some(counts) => counts,
+                    None if status == FileStatus::Modified => return None,
+                    None => (Some(0), Some(0)),
+                };
                 Some(FileChange {
                     path: native_path(&self.root, path)?,
                     status,
@@ -421,20 +504,35 @@ struct Staged {
     id: String,
 }
 
-/// The mode and, unless git must hash it, the object for one snapshot path.
+/// One snapshot path: its mode, its object unless git must hash it, and for
+/// regular files the size and modification time.
+struct Entry {
+    mode: String,
+    id: Option<String>,
+    stamp: Option<(u64, SystemTime)>,
+}
+
 /// Deleted files and anything else without a usable version are skipped.
-fn entry(full: &Path, staged: Option<&Staged>) -> Option<(String, Option<String>)> {
+fn entry(full: &Path, staged: Option<&Staged>) -> Option<Entry> {
     let metadata = fs::symlink_metadata(full).ok()?;
     let kind = metadata.file_type();
     if kind.is_file() {
-        return Some((file_mode(&metadata, staged).to_owned(), None));
+        return Some(Entry {
+            mode: file_mode(&metadata, staged).to_owned(),
+            id: None,
+            stamp: metadata.modified().ok().map(|m| (metadata.len(), m)),
+        });
     }
     // Hashing would follow a symlink or fail on a submodule, so keep what the
     // index records for them rather than reporting them deleted.
     let staged = staged?;
     let kept = (kind.is_symlink() && staged.mode == "120000")
         || (kind.is_dir() && staged.mode == "160000");
-    kept.then(|| (staged.mode.clone(), Some(staged.id.clone())))
+    kept.then(|| Entry {
+        mode: staged.mode.clone(),
+        id: Some(staged.id.clone()),
+        stamp: None,
+    })
 }
 
 #[cfg(unix)]
@@ -793,6 +891,32 @@ mod tests {
         assert!(repo.read(&snapshot, &root.join("../outside.txt")).is_err());
     }
 
+    #[test]
+    fn snapshot_reuses_settled_hashes_and_skips_large_untracked_files() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "one\n");
+        commit(&root, "base");
+        let old = std::time::SystemTime::now() - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(root.join("a.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let big = "x".repeat(files::MAX_FILE_BYTES as usize + 1);
+        write(&root, "big.bin", &big);
+        let repo = open(&root);
+        let first = repo.snapshot().unwrap();
+        assert_eq!(repo.hashed.lock().unwrap().len(), 1);
+        assert_eq!(repo.snapshot().unwrap(), first);
+        assert_eq!(repo.changes(&Rev::Tree(first.clone())).unwrap(), []);
+        let listed = succeeded(git(&root, &["ls-tree", "--name-only", &first]).unwrap()).unwrap();
+        assert_eq!(String::from_utf8_lossy(&listed).trim(), "a.txt");
+        // A changed file has a new size or time, so it is hashed again.
+        write(&root, "a.txt", "two!\n");
+        assert_ne!(repo.snapshot().unwrap(), first);
+    }
+
     #[cfg(unix)]
     #[test]
     fn snapshot_keeps_the_executable_bit() {
@@ -834,6 +958,18 @@ mod tests {
         );
         let now = Rev::Tree(repo.snapshot().unwrap());
         assert_eq!(repo.changes(&now).unwrap(), []);
+    }
+
+    #[test]
+    fn line_ending_only_differences_are_not_changes() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "one\ntwo\n");
+        let base = Rev::Commit(commit(&root, "base"));
+        write(&root, "a.txt", "one\r\ntwo\r\n");
+        assert_eq!(open(&root).changes(&base).unwrap(), []);
+        write(&root, "a.txt", "one\r\nTWO\r\n");
+        let changes = open(&root).changes(&base).unwrap();
+        assert_eq!((changes[0].added, changes[0].removed), (1, 1));
     }
 
     #[test]
