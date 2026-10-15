@@ -15,7 +15,7 @@ use floem::{
             EditorStyle,
             id::EditorId,
             layout::{LineExtraStyle, TextLayoutLine},
-            text::{SimpleStyling, Styling, WrapMethod, default_dark_color},
+            text::{SimpleStyling, Styling, WrapMethod},
             text_document::TextDocument,
         },
     },
@@ -106,7 +106,7 @@ pub(super) fn incoming_styling(diff: Rc<LineDiff>) -> Rc<dyn Styling> {
 
 fn side_editor(doc: Rc<TextDocument>, diff: ReadSignal<Rc<LineDiff>>, side: Side) -> TextEditor {
     let editor = text_editor("")
-        .editor_style(default_dark_color)
+        .editor_style(super::editor_colors)
         // Unwrapped lines keep both sides on the same line height for scroll sync.
         .editor_style(|s| {
             s.scroll_beyond_last_line(false)

@@ -43,9 +43,22 @@ const REMOVED_TEXT: Color = Color::from_rgb8(236, 135, 135);
 const CODE_FONT: &str =
     "'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
 const CODE_SIZE: usize = 14;
+/// Floem's editor background, which its style API does not let us change.
+const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
+
+/// Editor colours from the app palette, shared by every editor.
+fn editor_colors(style: floem::views::EditorCustomStyle) -> floem::views::EditorCustomStyle {
+    floem::views::editor::text::default_dark_color(style)
+        .cursor_color(ACCENT)
+        .selection_color(ACCENT.with_alpha(0.25))
+        .current_line_color(Color::from_rgb8(46, 51, 61))
+        .gutter_current_color(Color::from_rgb8(46, 51, 61))
+        .gutter_dim_color(Color::from_rgb8(84, 94, 110))
+        .indent_guide_color(BORDER)
+}
 
 /// Editor styling shared by every code view.
 fn code_styling() -> floem::views::editor::text::SimpleStyling {

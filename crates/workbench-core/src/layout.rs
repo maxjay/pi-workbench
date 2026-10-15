@@ -26,7 +26,7 @@ impl Default for Layout {
             explorer_visible: true,
             explorer_right: false,
             explorer_width: 240.0,
-            split: true,
+            split: false,
             split_fraction: 0.5,
             open_files: Vec::new(),
             active: [None, None],

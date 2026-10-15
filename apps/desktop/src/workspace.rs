@@ -584,6 +584,8 @@ mod tests {
             let second = state.root.join("second.rs");
             state.documents.insert(first.clone(), "first".into());
             state.documents.insert(second.clone(), "second".into());
+            // The second pane starts hidden; show it, then hide it again.
+            state.toggle_split();
             state.select_document(Pane::Primary, first);
             state.select_document(Pane::Secondary, second.clone());
             state.toggle_split();

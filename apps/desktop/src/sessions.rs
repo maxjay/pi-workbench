@@ -6,7 +6,7 @@ use crate::{
 use floem::{
     ext_event::create_ext_action,
     prelude::*,
-    reactive::{ReadSignal, Scope},
+    reactive::{Effect, ReadSignal, Scope},
 };
 use pi_client::{
     Launch,
@@ -90,6 +90,11 @@ impl Sessions {
             .with(|open| open.iter().find(|s| s.key == key).cloned())
     }
 
+    pub fn find(&self, key: u64) -> Option<Rc<Session>> {
+        self.open
+            .with_untracked(|open| open.iter().find(|s| s.key == key).cloned())
+    }
+
     pub fn active_untracked(&self) -> Option<Rc<Session>> {
         let key = self.active.get_untracked()?;
         self.open
@@ -108,8 +113,11 @@ impl Sessions {
             self.hooks.clone(),
             resume,
         );
-        self.open.update(|open| open.push(session.clone()));
-        self.active.set(Some(key));
+        // One update, so views showing the active session rebuild once.
+        Effect::batch(|| {
+            self.open.update(|open| open.push(session.clone()));
+            self.active.set(Some(key));
+        });
         session
     }
 
@@ -179,16 +187,18 @@ impl Sessions {
             .open
             .with_untracked(|open| open.iter().position(|s| s.key == key));
         let Some(index) = index else { return };
-        self.open.update(|open| {
-            open.remove(index);
-        });
-        if self.active.get_untracked() == Some(key) {
-            let next = self.open.with_untracked(|open| {
-                open.get(index.min(open.len().saturating_sub(1)))
-                    .map(|s| s.key)
+        Effect::batch(|| {
+            self.open.update(|open| {
+                open.remove(index);
             });
-            self.active.set(next);
-        }
+            if self.active.get_untracked() == Some(key) {
+                let next = self.open.with_untracked(|open| {
+                    open.get(index.min(open.len().saturating_sub(1)))
+                        .map(|s| s.key)
+                });
+                self.active.set(next);
+            }
+        });
     }
 
     /// Re-reads Pi's session store off the UI thread.

@@ -1,7 +1,7 @@
 //! The conversation: a Pi session's timeline, its questions, and the composer.
 use super::{
-    ACCENT, ADDED, ADDED_TEXT, BG, BORDER, CAPTURE, CODE_FONT, INFO, MUTED, PANEL, REMOVED,
-    REMOVED_TEXT, SURFACE, TEXT, WARN, button,
+    ACCENT, ADDED, ADDED_TEXT, BG, BORDER, CAPTURE, CODE_FONT, EDITOR_BG, INFO, MUTED, PANEL,
+    REMOVED, REMOVED_TEXT, SURFACE, TEXT, WARN, button,
 };
 use crate::{
     markdown::{self, Block, Inline, Style},
@@ -19,7 +19,7 @@ use floem::{
         TextInput, TextInputEnter, dyn_container,
         editor::{
             core::{cursor::CursorAffinity, editor::EditType, selection::Selection},
-            text::{Document, SimpleStyling, WrapMethod, default_dark_color},
+            text::{Document, SimpleStyling, WrapMethod},
         },
         rich_text,
     },
@@ -193,13 +193,17 @@ fn preview(body: RwSignal<String>) -> impl IntoView {
                 Some('-') => (REMOVED, REMOVED_TEXT),
                 _ => (Color::TRANSPARENT, MUTED),
             };
+            // Diff lines keep their shape; command output and errors wrap.
+            let diff = background != Color::TRANSPARENT;
             Label::new(line).style(move |s| {
                 s.width_full()
+                    .min_width(0)
                     .padding_horiz(10)
                     .padding_vert(1)
                     .background(background)
                     .color(color)
-                    .text_clip()
+                    .apply_if(diff, |s| s.text_clip())
+                    .apply_if(!diff, |s| s.text_wrap())
             })
         },
     )
@@ -516,8 +520,12 @@ fn composer(session: Rc<Session>) -> impl IntoView {
     let working = session.working();
     let editor = text_editor("")
         .styling(SimpleStyling::builder().font_size(13).build())
-        .editor_style(default_dark_color)
-        .editor_style(|s| s.wrap_method(WrapMethod::EditorWidth).hide_gutter(true))
+        .editor_style(super::editor_colors)
+        .editor_style(|s| {
+            s.wrap_method(WrapMethod::EditorWidth)
+                .hide_gutter(true)
+                .current_line_color(EDITOR_BG)
+        })
         .placeholder("Ask Pi…")
         .style(|s| s.width_full().height(84).min_width(0));
     let handle = editor.editor().clone();
@@ -572,7 +580,7 @@ fn composer(session: Rc<Session>) -> impl IntoView {
                 .border(1)
                 .border_color(BORDER)
                 .border_radius(10)
-                .background(BG)
+                .background(EDITOR_BG)
         }),
         Label::derived(move || {
             if working.get() {
@@ -612,21 +620,17 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
         ),
         Empty::new().style(|s| s.flex_grow(1.0_f32)),
         Label::derived(move || stats.get()).style(|s| s.color(MUTED).font_size(11)),
-        Label::derived(move || {
-            model
-                .get()
-                .map_or("Choose model".into(), |m| format!("{} ▾", m.name))
-        })
-        .style(|s| {
-            s.color(TEXT)
-                .font_size(12)
-                .padding_horiz(10)
-                .padding_vert(5)
-                .border_radius(6)
-                .cursor(CursorStyle::Pointer)
-                .hover(|s| s.background(BORDER))
-        })
-        .on_event_stop(el::Click, move |_, _| menu_open.update(|o| *o = !*o)),
+        Label::derived(move || model.get().map_or("Choose model".into(), |m| m.name))
+            .style(|s| {
+                s.color(TEXT)
+                    .font_size(12)
+                    .padding_horiz(10)
+                    .padding_vert(5)
+                    .border_radius(6)
+                    .cursor(CursorStyle::Pointer)
+                    .hover(|s| s.background(BORDER))
+            })
+            .on_event_stop(el::Click, move |_, _| menu_open.update(|o| *o = !*o)),
         button("Stop", move || stop_session.stop())
             .style(move |s| s.color(REMOVED_TEXT).apply_if(!working.get(), |s| s.hide())),
     ))
@@ -703,12 +707,11 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
 pub(super) fn conversation(state: Rc<Workbench>) -> impl IntoView {
     let sessions = state.sessions.clone();
     let active = state.sessions.active_key();
+    // Rebuild only when the front session changes: rebuilding twice in one
+    // frame leaves Floem with a stale layout listener for the removed editor.
     dyn_container(
-        move || {
-            active.track();
-            sessions.active()
-        },
-        move |session| match session {
+        move || active.get(),
+        move |key| match key.and_then(|key| sessions.find(key)) {
             Some(session) => session_view(state.clone(), session).into_any(),
             None => Label::new("No session open. Press Ctrl+N to start one.")
                 .style(|s| s.color(MUTED).padding(40))

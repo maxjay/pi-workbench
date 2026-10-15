@@ -5,10 +5,7 @@ use crate::{
 };
 use floem::reactive::Scope;
 use floem::{
-    prelude::*,
-    reactive::Effect,
-    style::CursorStyle,
-    views::editor::{text::default_dark_color, text_document::TextDocument},
+    prelude::*, reactive::Effect, style::CursorStyle, views::editor::text_document::TextDocument,
 };
 use std::rc::Rc;
 
@@ -108,7 +105,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
 
     let editor = text_editor("")
         .styling(super::code_styling())
-        .editor_style(default_dark_color)
+        .editor_style(super::editor_colors)
         .editor_style(|s| s.scroll_beyond_last_line(false))
         .style(|s| s.size_full().min_width(0).min_height(0));
     let handle = editor.editor().clone();
