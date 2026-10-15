@@ -6,12 +6,14 @@ use nucleo_matcher::{
 };
 use std::{
     cmp::Reverse,
+    collections::HashSet,
     path::{Path, PathBuf},
 };
 
 /// Respects ignore files and shows hidden files, but never enters generated directories.
-pub(crate) fn walk(root: &Path) -> Walk {
-    WalkBuilder::new(root)
+fn builder(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder
         .hidden(false)
         // Ignore files apply even before `git init`.
         .require_git(false)
@@ -22,8 +24,24 @@ pub(crate) fn walk(root: &Path) -> Walk {
                     entry.file_name().to_str(),
                     Some(".git" | "target" | "node_modules")
                 ))
-        })
+        });
+    builder
+}
+
+pub(crate) fn walk(root: &Path) -> Walk {
+    builder(root).build()
+}
+
+/// The direct children of `dir` that ignore files (including those in parent
+/// folders) leave visible, as full paths in the same form as `dir`.
+pub fn visible_children(dir: &Path) -> HashSet<PathBuf> {
+    builder(dir)
+        .max_depth(Some(1))
         .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.depth() == 1)
+        .map(ignore::DirEntry::into_path)
+        .collect()
 }
 
 /// Files under `root`, relative to it and sorted. Walking stops after `limit` files.
@@ -102,6 +120,26 @@ impl FileMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn children_hide_ignored_entries_including_from_parent_ignore_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join(".gitignore"),
+            "*.log
+build/
+",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("src/build")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "").unwrap();
+        std::fs::write(root.join("src/debug.log"), "").unwrap();
+        let visible = visible_children(&root.join("src"));
+        assert!(visible.contains(&root.join("src/a.rs")));
+        assert!(!visible.contains(&root.join("src/debug.log")));
+        assert!(!visible.contains(&root.join("src/build")));
+    }
     use std::fs;
 
     fn workspace() -> tempfile::TempDir {

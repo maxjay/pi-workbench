@@ -1,6 +1,7 @@
 //! The changes lens inside an editor: removed lines appear as ghost lines in
 //! place, changed lines get a bar and a tint, and focus mode dims the rest.
 use super::{ACCENT, ADDED, MUTED, REMOVED, REMOVED_TEXT};
+use crate::syntax::Lines;
 use floem::views::editor::core::xi_rope::Rope;
 use floem::{
     peniko::Color,
@@ -193,6 +194,9 @@ pub struct LensStyling {
     /// Lines Pi just changed; drawn stronger until the next edit.
     incoming: Option<Rc<LineDiff>>,
     overlay: Rc<Overlay>,
+    /// Highlight spans, possibly a few edits old, and the text to clamp them to.
+    syntax: Option<Lines>,
+    text: Rc<TextDocument>,
 }
 
 impl LensStyling {
@@ -201,6 +205,8 @@ impl LensStyling {
         lens: Option<Rc<LineDiff>>,
         incoming: Option<Rc<LineDiff>>,
         overlay: Rc<Overlay>,
+        syntax: Option<Lines>,
+        text: Rc<TextDocument>,
     ) -> Self {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         Self {
@@ -209,6 +215,8 @@ impl LensStyling {
             lens,
             incoming,
             overlay,
+            syntax,
+            text,
         }
     }
 
@@ -248,6 +256,25 @@ impl Styling for LensStyling {
         // unchanged lines instead of folding them.
         if Self::flag(&self.overlay.dimmed, line) {
             *attrs = AttrsList::new(default.color(MUTED.with_alpha(0.3)));
+            return;
+        }
+        let Some(spans) = self.syntax.as_ref().and_then(|lines| lines.get(line)) else {
+            return;
+        };
+        // Spans come from an earlier snapshot; never let one run past the line.
+        let length = self.text.rope_text().line_end_col(line, true);
+        for span in spans {
+            let end = span.end.min(length);
+            if span.start >= end {
+                continue;
+            }
+            if let Some((color, italic)) = super::token_style(span.token) {
+                let mut style = default.clone().color(color);
+                if italic {
+                    style = style.font_style(floem::text::FontStyle::Italic);
+                }
+                attrs.add_span(span.start..end, style);
+            }
         }
     }
     fn apply_layout_styles(

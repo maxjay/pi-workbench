@@ -18,7 +18,7 @@ use floem::{
         text_document::TextDocument,
     },
 };
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
 
 pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     let active = state.active(pane);
@@ -124,6 +124,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     let overlay = RwSignal::new(Rc::new(Overlay::default()));
     let empty = Rc::new(TextDocument::new(Scope::current(), ""));
     let held_document = std::cell::RefCell::new(None::<Rc<OpenDocument>>);
+    // Where each file was left in this pane: cursor offset and scroll position.
+    let positions =
+        std::cell::RefCell::new(std::collections::HashMap::<PathBuf, (usize, f64)>::new());
     let (bind_handle, bind_lens) = (handle.clone(), state.lens.clone());
     Effect::new(move |_| {
         let path = active.get();
@@ -138,13 +141,28 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     .as_ref()
                     .is_none_or(|held| !Rc::ptr_eq(held, doc));
                 if changed {
+                    if let Some(previous) = held_document.borrow().as_ref() {
+                        let offset = bind_handle.cursor.with_untracked(|c| c.offset());
+                        let top = bind_handle.viewport.get_untracked().y0;
+                        positions
+                            .borrow_mut()
+                            .insert(previous.path().clone(), (offset, top));
+                    }
                     bind_lens.track(doc.path(), doc.text(), doc.revision());
-                    bind_handle.cursor.update(|cursor| {
-                        cursor.set_insert(Selection::caret(0, CursorAffinity::Forward))
-                    });
+                    let (offset, top) = positions
+                        .borrow()
+                        .get(doc.path())
+                        .copied()
+                        .unwrap_or_default();
                     let lensed = LensDocument::new(doc.text(), overlay);
                     bind_handle.update_doc(Rc::new(lensed), None);
-                    bind_handle.scroll_to.set(Some(floem::kurbo::Vec2::ZERO));
+                    let offset = offset.min(doc.text().text().len());
+                    bind_handle.cursor.update(|cursor| {
+                        cursor.set_insert(Selection::caret(offset, CursorAffinity::Forward))
+                    });
+                    bind_handle
+                        .scroll_to
+                        .set(Some(floem::kurbo::Vec2::new(0.0, top)));
                     *held_document.borrow_mut() = Some(doc.clone());
                 }
             } else {
@@ -154,7 +172,8 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         });
     });
     // Restyle when the lens diff, focus, seen changes, or Pi's latest edit change.
-    let (styled, lens) = (handle.clone(), state.lens.clone());
+    let (styled, lens, syntax) = (handle.clone(), state.lens.clone(), state.syntax.clone());
+    let blank = Rc::new(TextDocument::new(Scope::current(), ""));
     Effect::new(move |_| {
         let path = active.get();
         let doc = docs.with(|docs| {
@@ -164,7 +183,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         });
         let focus = lens.focus().get();
         let seen = lens.seen().get();
-        let (diff, incoming, view) = match &doc {
+        let (diff, incoming, view, spans, text) = match &doc {
             Some(doc) => {
                 let file = lens.file(doc.path());
                 let diff = file.as_ref().and_then(|f| f.diff().get());
@@ -181,9 +200,10 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     }
                     _ => Overlay::default(),
                 };
-                (diff, doc.incoming().get(), view)
+                let spans = syntax.track(doc.path(), doc.text(), doc.revision()).get();
+                (diff, doc.incoming().get(), view, spans, doc.text())
             }
-            None => (None, None, Overlay::default()),
+            None => (None, None, Overlay::default(), None, blank.clone()),
         };
         let view = Rc::new(view);
         overlay.set(view.clone());
@@ -192,13 +212,21 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             diff,
             incoming,
             view,
+            spans,
+            text,
         )));
     });
     // Keep the workspace informed of the cursor line, for change navigation.
-    let (cursor_handle, cursor_line) = (handle.clone(), state.cursor_line(pane));
+    let (cursor_handle, cursor_line, cursor_col) = (
+        handle.clone(),
+        state.cursor_line(pane),
+        state.cursor_col(pane),
+    );
     Effect::new(move |_| {
         let offset = cursor_handle.cursor.with(|cursor| cursor.offset());
-        cursor_line.set(cursor_handle.line_of_offset(offset));
+        let line = cursor_handle.line_of_offset(offset);
+        cursor_line.set(line);
+        cursor_col.set(offset - cursor_handle.offset_of_line(line));
     });
     // Carry out jumps once the file is showing and its diff is ready.
     let (jump_handle, jump_state) = (handle.clone(), state.clone());

@@ -66,7 +66,18 @@ impl Explorer {
             }
         });
         std::thread::spawn(move || {
-            finish(files::list_directory(&root, &path).map_err(|e| e.to_string()))
+            // Hide what .gitignore and friends hide, as git and the lens do.
+            let visible = workbench_text::index::visible_children(&path);
+            finish(
+                files::list_directory(&root, &path)
+                    .map(|entries| {
+                        entries
+                            .into_iter()
+                            .filter(|e| visible.contains(&e.path))
+                            .collect()
+                    })
+                    .map_err(|e| e.to_string()),
+            )
         });
     }
 

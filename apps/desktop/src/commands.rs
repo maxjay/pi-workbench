@@ -1,5 +1,8 @@
 //! One command list supplies palette labels and actual keyboard bindings.
-use crate::{lens::Since, workspace::Workbench};
+use crate::{
+    lens::Since,
+    workspace::{Finder, Workbench},
+};
 use floem::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -27,6 +30,8 @@ pub enum Command {
     RevertChange,
     AskAboutChange,
     MarkChangeSeen,
+    QuickOpen,
+    FindInFiles,
     Explorer,
     MoveExplorer,
     Refresh,
@@ -37,6 +42,8 @@ pub enum Command {
 
 pub const COMMANDS: &[Command] = &[
     Command::Palette,
+    Command::QuickOpen,
+    Command::FindInFiles,
     Command::Quit,
     Command::OpenFolder,
     Command::Save,
@@ -152,6 +159,8 @@ impl Command {
             Self::RevertChange => ("Revert this change", None),
             Self::AskAboutChange => ("Ask Pi about this change", None),
             Self::MarkChangeSeen => ("Mark this change seen", None),
+            Self::QuickOpen => ("Open file by name", ctrl("p")),
+            Self::FindInFiles => ("Search in files", ctrl_shift("f")),
             Self::Explorer => ("Toggle explorer", ctrl("b")),
             Self::MoveExplorer => ("Move explorer to opposite side", None),
             Self::Refresh => ("Refresh expanded folders", None),
@@ -204,6 +213,8 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::RevertChange => state.revert_change(),
         Command::AskAboutChange => state.ask_about_change(),
         Command::MarkChangeSeen => state.mark_change_seen(),
+        Command::QuickOpen => state.open_finder(Finder::Files),
+        Command::FindInFiles => state.open_finder(Finder::Search),
         Command::Explorer => state.toggle_explorer(),
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
@@ -315,7 +326,7 @@ mod tests {
         );
         assert_eq!(
             for_key(&Key::Character("p".into()), primary_modifier()),
-            None
+            Some(Command::QuickOpen)
         );
         assert_eq!(
             for_key(
