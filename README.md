@@ -28,7 +28,7 @@ tar -xzf pi-workbench-x86_64-linux.tar.gz
 pi-workbench ~/code/my-project
 ```
 
-[install-wsl.sh](scripts/install-wsl.sh) installs to `~/.local/bin`, adds a launcher that WSLg also lists in the Windows Start menu, installs missing runtime libraries with `apt`, and checks that Pi is installed inside Linux with Node.js 22.19 or newer. Run it without arguments to download the latest release itself (with `gh`, or `gh.exe` from Windows). Without a GPU driver the app draws with the CPU; set `FLOEM_FORCE_TINY_SKIA=1` to force that if rendering looks wrong.
+[install-wsl.sh](scripts/install-wsl.sh) installs to `~/.local/bin`, adds a launcher that WSLg also lists in the Windows Start menu, installs missing runtime libraries with `apt`, and checks that Pi is installed inside Linux with Node.js 22.19 or newer. Run it without arguments to download the latest release itself (with `gh`, or `gh.exe` from Windows). On WSL the app renders with Mesa's software OpenGL, because WSLg's GPU-backed OpenGL fails during setup; set `PI_WORKBENCH_GPU=1` to try the GPU anyway.
 
 ## Getting started
 

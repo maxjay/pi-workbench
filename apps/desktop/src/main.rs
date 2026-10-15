@@ -45,7 +45,25 @@ fn open_folder() {
     );
 }
 
+/// WSLg's GPU-backed OpenGL loses the device while wgpu sets up, which Floem
+/// cannot recover from; Mesa's software renderer works. `PI_WORKBENCH_GPU=1`
+/// keeps the GPU for setups where it works.
+#[cfg(target_os = "linux")]
+fn prefer_software_gl_on_wsl() {
+    let wsl = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .is_ok_and(|release| release.to_lowercase().contains("microsoft"));
+    let chosen = ["LIBGL_ALWAYS_SOFTWARE", "PI_WORKBENCH_GPU"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some());
+    if wsl && !chosen {
+        // SAFETY: runs first in main, before any other thread exists.
+        unsafe { std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1") };
+    }
+}
+
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    prefer_software_gl_on_wsl();
     let mut args = std::env::args_os().skip(1);
     let path = args
         .next()
