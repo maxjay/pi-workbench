@@ -7,7 +7,13 @@ use floem::{
     reactive::{Effect, ReadSignal, Scope},
     views::editor::{text::Document, text_document::TextDocument},
 };
-use std::{cell::Cell, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
+};
 use workbench_core::{baseline::BaselineSource, diff::LineDiff};
 
 /// Coalesces bursts of typing into one background diff.
@@ -20,13 +26,17 @@ pub struct Comparison {
     /// Read-only buffer holding the baseline text.
     pub base: Rc<TextDocument>,
     diff: RwSignal<Rc<LineDiff>>,
-    generation: Rc<Cell<u64>>,
+    /// Newest refresh requested and newest applied; results older than the
+    /// applied one are dropped, newer ones always land even while typing.
+    requested: Rc<Cell<u64>>,
+    applied: Rc<Cell<u64>>,
 }
 
 impl Drop for Comparison {
     fn drop(&mut self) {
-        // Pending refreshes check the generation before touching disposed signals.
-        self.generation.set(self.generation.get() + 1);
+        // Pending refreshes check these before touching disposed signals.
+        self.requested.set(u64::MAX);
+        self.applied.set(u64::MAX);
         self.scope.dispose();
     }
 }
@@ -43,17 +53,18 @@ impl Comparison {
         scope.enter(|| {
             let base = Rc::new(TextDocument::new(scope, base_text.clone()));
             let diff = RwSignal::new(Rc::new(loaded.diff));
-            let generation = Rc::new(Cell::new(0));
+            let (requested, applied) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
             let revision = document.revision();
             let text = document.text();
-            let pending = generation.clone();
+            let (pending, landed) = (requested.clone(), applied.clone());
+            let is_new = loaded.base.is_none();
             Effect::new(move |_| {
                 if revision.get() == loaded.revision {
                     return;
                 }
                 let current = pending.get() + 1;
                 pending.set(current);
-                let pending = pending.clone();
+                let (pending, landed) = (pending.clone(), landed.clone());
                 let (text, base_text) = (text.clone(), base_text.clone());
                 exec_after(REFRESH_DELAY, move |_| {
                     if pending.get() != current {
@@ -61,11 +72,18 @@ impl Comparison {
                     }
                     let snapshot = text.text().to_string();
                     let finish = create_ext_action(scope, move |result| {
-                        if pending.get() == current {
+                        if current > landed.get() {
+                            landed.set(current);
                             diff.set(Rc::new(result));
                         }
                     });
-                    std::thread::spawn(move || finish(LineDiff::compute(&base_text, &snapshot)));
+                    std::thread::spawn(move || {
+                        finish(if is_new {
+                            LineDiff::all_added(&snapshot)
+                        } else {
+                            LineDiff::compute(&base_text, &snapshot)
+                        })
+                    });
                 });
             });
             Rc::new(Self {
@@ -74,7 +92,8 @@ impl Comparison {
                 label,
                 base,
                 diff,
-                generation,
+                requested,
+                applied,
             })
         })
     }
@@ -95,6 +114,23 @@ struct Loaded {
     revision: u64,
 }
 
+fn load(
+    source: &dyn BaselineSource,
+    path: &Path,
+    text: &str,
+    revision: u64,
+) -> Result<Loaded, String> {
+    let base = source.load(path).map_err(|err| format!("{err:#}"))?;
+    Ok(Loaded {
+        diff: match &base {
+            Some(base) => LineDiff::compute(base, text),
+            None => LineDiff::all_added(text),
+        },
+        base,
+        revision,
+    })
+}
+
 pub fn summary(diff: &LineDiff, label: &str) -> String {
     match diff.hunks() {
         0 => format!("No changes from {label}"),
@@ -112,8 +148,9 @@ pub struct Changes {
     source: Arc<dyn BaselineSource>,
     status: RwSignal<String>,
     current: RwSignal<Option<Rc<Comparison>>>,
-    /// Only the newest request may open; closing cancels it.
-    loading: RwSignal<Option<PathBuf>>,
+    /// The request allowed to open: only the newest, and closing cancels it.
+    loading: RwSignal<Option<(u64, PathBuf)>>,
+    next_request: Cell<u64>,
 }
 
 impl Changes {
@@ -128,6 +165,7 @@ impl Changes {
             status,
             current: RwSignal::new(None),
             loading: RwSignal::new(None),
+            next_request: Cell::new(0),
         })
     }
 
@@ -144,39 +182,40 @@ impl Changes {
         self.current.with_untracked(Option::is_some) || self.loading.with_untracked(Option::is_some)
     }
 
+    fn start(&self, path: PathBuf) -> u64 {
+        let request = self.next_request.get() + 1;
+        self.next_request.set(request);
+        self.loading.set(Some((request, path)));
+        request
+    }
+
     pub fn show(self: &Rc<Self>, document: Rc<OpenDocument>) {
         let path = document.path().clone();
         let label = self.source.label();
-        self.loading.set(Some(path.clone()));
+        let request = self.start(path.clone());
         self.status.set(format!("Comparing with {label}…"));
         let text = document.text().text().to_string();
         let revision = document.revision().get_untracked();
         let source = self.source.clone();
         let changes = self.clone();
         let finish = create_ext_action(self.scope, move |result| {
-            changes.finish_show(document, label, result)
+            changes.finish_show(request, document, label, result)
         });
-        std::thread::spawn(move || {
-            finish(
-                source
-                    .load(&path)
-                    .map(|base| Loaded {
-                        diff: LineDiff::compute(base.as_deref().unwrap_or(""), &text),
-                        base,
-                        revision,
-                    })
-                    .map_err(|err| err.to_string()),
-            )
-        });
+        std::thread::spawn(move || finish(load(&*source, &path, &text, revision)));
     }
 
     fn finish_show(
         &self,
+        request: u64,
         document: Rc<OpenDocument>,
         label: String,
         result: Result<Loaded, String>,
     ) {
-        if self.loading.get_untracked().as_ref() != Some(document.path()) {
+        if self
+            .loading
+            .with_untracked(|l| l.as_ref().map(|(id, _)| *id))
+            != Some(request)
+        {
             return;
         }
         self.loading.set(None);
@@ -199,28 +238,35 @@ impl Changes {
         self.loading.set(None);
         self.current.set(None);
     }
+
+    /// Drops a comparison of, or a pending request for, a closed document.
+    pub fn forget(&self, path: &Path) {
+        let loading = self
+            .loading
+            .with_untracked(|l| l.as_ref().is_some_and(|(_, p)| p == path));
+        if loading || self.path().as_deref() == Some(path) {
+            self.close();
+        }
+    }
 }
 
 /// Test-only: runs the background half of `show` inline, as there is no event loop.
 #[cfg(test)]
 impl Changes {
-    fn load_now(&self, document: &OpenDocument) -> Result<Loaded, String> {
-        let base = self
-            .source
-            .load(document.path())
-            .map_err(|e| e.to_string())?;
-        let text = document.text().text().to_string();
-        Ok(Loaded {
-            diff: LineDiff::compute(base.as_deref().unwrap_or(""), &text),
-            base,
-            revision: document.revision().get_untracked(),
-        })
+    pub fn show_now(&self, document: Rc<OpenDocument>) {
+        let request = self.start(document.path().clone());
+        self.finish_now(request, document);
     }
 
-    pub fn show_now(&self, document: Rc<OpenDocument>) {
-        self.loading.set(Some(document.path().clone()));
-        let loaded = self.load_now(&document);
-        self.finish_show(document, self.source.label(), loaded);
+    fn finish_now(&self, request: u64, document: Rc<OpenDocument>) {
+        let text = document.text().text().to_string();
+        let loaded = load(
+            &*self.source,
+            document.path(),
+            &text,
+            document.revision().get_untracked(),
+        );
+        self.finish_show(request, document, self.source.label(), loaded);
     }
 }
 
@@ -228,7 +274,6 @@ impl Changes {
 pub mod tests {
     use super::*;
     use crate::documents::Documents;
-    use std::path::Path;
 
     pub struct Fixed(pub Option<&'static str>);
 
@@ -262,24 +307,41 @@ pub mod tests {
             assert_eq!(comparison.diff().get().added(), 1);
             assert!(changes.status.get().contains("1 change from fixed"));
 
+            let pending = changes.start(document.path().clone());
             changes.close();
-            changes.finish_show(
-                document.clone(),
-                "fixed".into(),
-                changes.load_now(&document),
-            );
+            changes.finish_now(pending, document.clone());
             assert!(changes.current().get().is_none());
             assert!(!changes.active());
         });
     }
 
     #[test]
-    fn missing_baseline_is_labelled_as_a_new_file() {
+    fn only_the_newest_request_opens_and_closing_the_file_cancels_it() {
+        with_changes(Fixed(Some("one\n")), |changes, document| {
+            let stale = changes.start(document.path().clone());
+            let newest = changes.start(document.path().clone());
+            changes.finish_now(stale, document.clone());
+            assert!(changes.current().get().is_none());
+
+            changes.forget(document.path());
+            changes.finish_now(newest, document.clone());
+            assert!(changes.current().get().is_none());
+
+            changes.show_now(document.clone());
+            changes.forget(document.path());
+            assert!(!changes.active());
+        });
+    }
+
+    #[test]
+    fn missing_baseline_is_a_new_file_with_every_line_added() {
         with_changes(Fixed(None), |changes, document| {
             changes.show_now(document);
             let comparison = changes.current().get().unwrap();
             assert_eq!(comparison.label, "fixed · new file");
             assert_eq!(comparison.base.text().to_string(), "");
+            let diff = comparison.diff().get();
+            assert_eq!((diff.added(), diff.removed()), (2, 0));
         });
     }
 }

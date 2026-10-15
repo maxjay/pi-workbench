@@ -154,6 +154,13 @@ fn comparison(state: Rc<Workbench>, comparison: Rc<Comparison>) -> impl IntoView
     let diff = comparison.diff();
     let base = side_editor(comparison.base.clone(), diff, Side::Base);
     let current = side_editor(comparison.document.text(), diff, Side::Current);
+    // Typing goes to the working copy, not a pane editor hidden behind this view.
+    let focus = current.editor().editor_view_id;
+    floem::action::exec_after_animation_frame(move |_| {
+        if let Some(id) = focus.get_untracked() {
+            id.request_focus();
+        }
+    });
 
     // The working copy drives the baseline, keeping corresponding lines level.
     let base_editor = base.editor().clone();

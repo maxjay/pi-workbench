@@ -99,7 +99,7 @@ PI_CODING_AGENT_DIR=/tmp/pi-fake PI_WORKBENCH_PI_ARGS="--provider fake --model f
 
 ### Comparison sources
 
-The changes view compares an open document with a [`BaselineSource`](crates/workbench-core/src/baseline.rs). The built-in `GitHead` source reads the committed file with `git cat-file --filters`, so line endings match the working copy. To compare with something else, such as the index, another branch, or a snapshot taken before Pi edits a file, implement the trait and set it in the `Integrations` passed to `Workbench::new` (see [ui/mod.rs](apps/desktop/src/ui/mod.rs)). Sources run off the UI thread and return `None` for files that are new.
+The changes view compares an open document with a [`BaselineSource`](crates/workbench-core/src/baseline.rs). The built-in `GitHead` source reads the committed file as a raw blob; it never runs the repository's filter commands, and line-ending differences are ignored when diffing. To compare with something else, such as the index, another branch, or a snapshot taken before Pi edits a file, implement the trait and set it in the `Integrations` passed to `Workbench::new` (see [ui/mod.rs](apps/desktop/src/ui/mod.rs)). Sources run off the UI thread and return `None` for files that are new.
 
 The working-copy side is the shared document buffer, so edits, undo, and saves behave as in a normal tab. Diffs refresh shortly after each edit; [diff.rs](crates/workbench-core/src/diff.rs) has no UI dependencies.
 

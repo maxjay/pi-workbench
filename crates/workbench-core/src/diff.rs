@@ -74,6 +74,31 @@ impl LineDiff {
         diff
     }
 
+    /// Every line is new, as for a file missing from the baseline.
+    pub fn all_added(current: &str) -> Self {
+        let lines = lines(current);
+        let mut marks = vec![LineChange::Added; lines.len()];
+        // The empty line after a final newline is not content.
+        if lines.last() == Some(&"")
+            && let Some(last) = marks.last_mut()
+        {
+            *last = LineChange::Unchanged;
+        }
+        let changed = marks.contains(&LineChange::Added);
+        Self {
+            base: Vec::new(),
+            current: marks,
+            blocks: changed
+                .then_some(Block {
+                    base: 0..0,
+                    current: 0..lines.len(),
+                    changed: true,
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
+
     /// Number of separate changed regions.
     pub fn hunks(&self) -> usize {
         self.blocks.iter().filter(|block| block.changed).count()
@@ -104,12 +129,14 @@ impl LineDiff {
         };
         let offset = current_line - block.current.start;
         let span = block.base.len().saturating_sub(1);
-        block.base.start
+        let line = block.base.start
             + if block.changed {
                 offset.min(span)
             } else {
                 offset
-            }
+            };
+        // Lines inserted at the end sit past the baseline's last line.
+        line.min(self.base.len().saturating_sub(1))
     }
 }
 
@@ -143,6 +170,18 @@ mod tests {
     }
 
     #[test]
+    fn new_files_count_content_lines_as_added() {
+        let diff = LineDiff::all_added(
+            "one
+two
+",
+        );
+        assert_eq!((diff.added(), diff.removed(), diff.hunks()), (2, 0, 1));
+        assert_eq!(diff.base_line(1), 0);
+        assert_eq!(LineDiff::all_added("").hunks(), 0);
+    }
+
+    #[test]
     fn missing_baseline_marks_every_line_added() {
         let diff = LineDiff::compute("", "one\ntwo");
         assert_eq!(diff.current, [Added, Added]);
@@ -162,5 +201,12 @@ mod tests {
         assert_eq!(diff.base_line(4), 2);
         assert_eq!(diff.base_line(5), 4);
         assert_eq!(diff.base_line(99), 4);
+        // Lines appended at the end map to the baseline's last line.
+        let appended = LineDiff::compute(
+            "a", "a
+b
+c",
+        );
+        assert_eq!(appended.base_line(2), 0);
     }
 }
