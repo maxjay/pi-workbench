@@ -4,11 +4,17 @@
 //! commit, such as the index, another branch, or a snapshot taken before an
 //! agent edited the file.
 use crate::files;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
+
+/// A hung git (a lock, a network filesystem) must not leave the view loading forever.
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub trait BaselineSource: Send + Sync {
     /// Short name shown above the baseline side, such as "HEAD".
@@ -18,7 +24,9 @@ pub trait BaselineSource: Send + Sync {
     fn load(&self, path: &Path) -> Result<Option<String>>;
 }
 
-/// The committed version of the file, converted as `git checkout` would.
+/// The committed version of the file, read as a raw blob. Running the
+/// repository's filter drivers would execute commands from an untrusted
+/// checkout, and the line diff already ignores line-ending differences.
 pub struct GitHead;
 
 impl BaselineSource for GitHead {
@@ -33,22 +41,27 @@ impl BaselineSource for GitHead {
             .file_name()
             .and_then(|name| name.to_str())
             .context("Git comparison needs a UTF-8 file name")?;
+        let inside = git(directory, &["rev-parse", "--is-inside-work-tree"])?;
         ensure!(
-            git(directory, &["rev-parse", "--is-inside-work-tree"])?
-                .status
-                .success(),
-            "Not in a git repository"
+            inside.status.success() && inside.stdout.trim_ascii() == b"true",
+            "Not in a git working tree"
         );
+        // A repository without commits has nothing to compare against.
+        if !git(directory, &["rev-parse", "--verify", "--quiet", "HEAD"])?
+            .status
+            .success()
+        {
+            return Ok(None);
+        }
         let object = format!("HEAD:./{name}");
-        // Also covers repositories without any commits.
+        // The path is not in the last commit.
         if !git(directory, &["cat-file", "-e", &object])?
             .status
             .success()
         {
             return Ok(None);
         }
-        // --filters applies line-ending and smudge conversion to match the working copy.
-        let output = git(directory, &["cat-file", "--filters", &object])?;
+        let output = git(directory, &["cat-file", "blob", &object])?;
         ensure!(
             output.status.success(),
             "git: {}",
@@ -64,7 +77,9 @@ fn git(directory: &Path, args: &[&str]) -> Result<Output> {
         .arg("-C")
         .arg(directory)
         .args(args)
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         // Avoid flashing a console window from the GUI process.
@@ -72,9 +87,41 @@ fn git(directory: &Path, args: &[&str]) -> Result<Output> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command
-        .output()
-        .context("Could not run git. Is it installed?")
+    let mut child = command
+        .spawn()
+        .context("Could not run git. Is it installed?")?;
+    // Drain both pipes on threads so a full pipe cannot stall the wait.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "git did not respond within {} seconds",
+                GIT_TIMEOUT.as_secs()
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
 }
 
 /// Git cannot use the `\\?\` paths that `canonicalize` returns on Windows.
@@ -132,6 +179,56 @@ mod tests {
             Some("committed\n")
         );
         assert_eq!(source.load(&root.join("src/new.rs")).unwrap(), None);
+    }
+
+    #[test]
+    fn git_head_ignores_repository_filter_drivers() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        run(&root, &["init", "-q"]);
+        run(&root, &["config", "core.autocrlf", "false"]);
+        // A filter that would leave a marker file if git ran it.
+        run(
+            &root,
+            &[
+                "config",
+                "filter.evil.smudge",
+                "git hash-object -w --stdin && touch ran",
+            ],
+        );
+        fs::write(
+            root.join(".gitattributes"),
+            "*.rs filter=evil
+",
+        )
+        .unwrap();
+        fs::write(
+            root.join("a.rs"),
+            "text
+",
+        )
+        .unwrap();
+        run(&root, &["add", "a.rs"]);
+        run(
+            &root,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t",
+                "commit",
+                "-qm",
+                "c",
+            ],
+        );
+        assert_eq!(
+            GitHead.load(&root.join("a.rs")).unwrap().as_deref(),
+            Some(
+                "text
+"
+            )
+        );
+        assert!(!root.join("ran").exists());
     }
 
     #[test]

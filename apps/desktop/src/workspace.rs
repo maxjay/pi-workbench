@@ -301,9 +301,7 @@ impl Workbench {
     }
 
     fn remove_file(&self, path: &Path) {
-        if self.changes.path().as_deref() == Some(path) {
-            self.changes.close();
-        }
+        self.changes.forget(path);
         self.documents.remove(path);
         let fallback = self
             .documents
