@@ -4,6 +4,7 @@ use crate::{
     explorer::Explorer,
     lens::{Comparison, Lens},
     sessions::Sessions,
+    syntax::Syntax,
 };
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
@@ -28,6 +29,13 @@ use workbench_core::{
     git::FileStatus,
     layout::{self, Layout},
 };
+
+/// The finder overlay: quick-open by file name, or search file contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Finder {
+    Files,
+    Search,
+}
 
 /// Where a pane's cursor should go once its file and diff are ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,6 +85,7 @@ pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
     pub lens: Rc<Lens>,
+    pub syntax: Rc<Syntax>,
     pub sessions: Rc<Sessions>,
     /// The primary pane shows the active session's conversation instead of a file.
     conversation: RwSignal<bool>,
@@ -92,8 +101,10 @@ pub struct Workbench {
     status: RwSignal<String>,
     confirm: RwSignal<Option<Confirm>>,
     palette: RwSignal<bool>,
+    finder: RwSignal<Option<Finder>>,
     /// Each pane's cursor line, kept by the pane for change navigation.
     cursor_line: [RwSignal<usize>; 2],
+    cursor_col: [RwSignal<usize>; 2],
     jump: RwSignal<Option<Jump>>,
     /// Things that must live as long as the window, such as the file watcher.
     kept: RefCell<Vec<Box<dyn std::any::Any>>>,
@@ -150,6 +161,7 @@ impl Workbench {
             documents,
             explorer,
             lens,
+            syntax: Syntax::new(Scope::current()),
             sessions,
             conversation: RwSignal::new(true),
             scope: Scope::current(),
@@ -164,7 +176,9 @@ impl Workbench {
             layout: RwSignal::new(layout),
             confirm: RwSignal::new(None),
             palette: RwSignal::new(false),
+            finder: RwSignal::new(None),
             cursor_line: [RwSignal::new(0), RwSignal::new(0)],
+            cursor_col: [RwSignal::new(0), RwSignal::new(0)],
             jump: RwSignal::new(None),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
@@ -204,6 +218,16 @@ impl Workbench {
     }
     pub fn toggle_palette(&self) {
         self.palette.update(|shown| *shown = !*shown);
+    }
+    pub fn finder(&self) -> ReadSignal<Option<Finder>> {
+        self.finder.read_only()
+    }
+    pub fn open_finder(&self, mode: Finder) {
+        self.palette.set(false);
+        self.finder.set(Some(mode));
+    }
+    pub fn dismiss_finder(&self) {
+        self.finder.set(None);
     }
     pub fn dismiss_palette(&self) {
         self.palette.set(false);
@@ -294,6 +318,7 @@ impl Workbench {
             self.status.set(format!(
                 "Close a file before opening more ({MAX_OPEN_DOCUMENTS}-document limit)."
             ));
+            self.drop_jump(&path);
             return;
         }
         self.pending.borrow_mut().insert(path.clone());
@@ -309,6 +334,16 @@ impl Workbench {
                     .map_err(|e| e.to_string()),
             );
         });
+    }
+
+    /// A jump into a file that never opened must not fire later.
+    fn drop_jump(&self, path: &Path) {
+        if self
+            .jump
+            .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
+        {
+            self.jump.set(None);
+        }
     }
 
     fn finish_open(&self, path: PathBuf, result: Result<String, String>) {
@@ -330,13 +365,7 @@ impl Workbench {
                 self.status.set("Ready".into());
             }
             Err(err) => {
-                // A jump into a file that never opened must not fire later.
-                if self
-                    .jump
-                    .with_untracked(|j| j.as_ref().is_some_and(|j| j.path == path))
-                {
-                    self.jump.set(None);
-                }
+                self.drop_jump(&path);
                 self.status.set(err)
             }
         }
@@ -370,6 +399,9 @@ impl Workbench {
 
     pub fn cursor_line(&self, pane: Pane) -> RwSignal<usize> {
         self.cursor_line[pane.index()]
+    }
+    pub fn cursor_col(&self, pane: Pane) -> RwSignal<usize> {
+        self.cursor_col[pane.index()]
     }
     pub fn jump(&self) -> RwSignal<Option<Jump>> {
         self.jump
@@ -539,6 +571,18 @@ impl Workbench {
         self.next_change(true);
     }
 
+    /// Opens a file in the focused pane and puts the cursor on `line`.
+    pub fn open_at(self: &Rc<Self>, path: PathBuf, line: usize) {
+        let pane = self.focused.get_untracked();
+        self.open(path.clone(), pane);
+        self.focused.set(pane);
+        self.jump.set(Some(Jump {
+            pane,
+            path,
+            to: JumpTo::Line(line),
+        }));
+    }
+
     /// Opens a file next to the conversation, turning on the second pane.
     pub fn open_beside(self: &Rc<Self>, path: PathBuf) {
         if !self.layout.get_untracked().split {
@@ -578,6 +622,7 @@ impl Workbench {
 
     fn remove_file(&self, path: &Path) {
         self.lens.forget(path);
+        self.syntax.forget(path);
         self.documents.remove(path);
         let fallback = self
             .documents

@@ -14,7 +14,8 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Conversation:** replies render as markdown; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
 - **Changes lens:** everything is read against one baseline you pick in the status bar: where your branch left develop, the start of the session, Pi's last turn, or the last commit. The explorer marks changed files, editors show removed lines as ghost lines in place, and you walk the changes file to file without opening a diff.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
-- File explorer, tabbed editing, a second pane, background saves, and a command palette.
+- **Editor:** syntax highlighting, open by name (Ctrl+P), search across files (Ctrl+Shift+F), cursor and scroll kept per tab, and an explorer that hides what `.gitignore` ignores.
+- A second pane, background saves, and a command palette.
 
 ## Install on WSL or Linux
 
@@ -73,6 +74,12 @@ The lens reads git without running the repository's filters or hooks, and the wo
 
 ![The explorer through the lens](docs/screenshots/lens-explorer.png)
 
+## Finding your way
+
+![Search across files](docs/screenshots/search.png)
+
+**Ctrl+P** opens files by name with fuzzy matching. **Ctrl+Shift+F** searches file contents; Enter runs the search and Enter again opens the selected hit at its line. Both skip what `.gitignore` ignores, and both are in the command palette. Files open highlighted and keep their cursor and scroll as you switch tabs; the footer shows the cursor's line and column.
+
 ## Shortcuts
 
 Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere, because Cmd+Tab switches apps on macOS.
@@ -83,6 +90,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | Ctrl+Tab, Ctrl+Shift+Tab | Next or previous session |
 | Ctrl/Cmd+1 … 9 | Go to session 1 … 9 |
 | Ctrl/Cmd+J | Show the conversation |
+| Ctrl/Cmd+P | Open file by name |
+| Ctrl/Cmd+Shift+F | Search in files |
 | Alt+Down, Alt+Up | Next or previous change, across files |
 | Ctrl/Cmd+Shift+H | Focus on changes |
 | Ctrl/Cmd+Shift+G | Show only changed files |
@@ -105,11 +114,14 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [lens.rs](apps/desktop/src/lens.rs) | The changes lens: baseline, changed files, per-file diffs, seen changes |
 | [watcher.rs](apps/desktop/src/watcher.rs) | Watching the workspace for outside changes |
 | [markdown.rs](apps/desktop/src/markdown.rs) | Reply markdown to timeline blocks |
+| [syntax.rs](apps/desktop/src/syntax.rs) | Highlighting open files off the UI thread |
 | [explorer.rs](apps/desktop/src/explorer.rs) | Directory loading and cache |
 | [commands.rs](apps/desktop/src/commands.rs) | Actions and shortcuts |
 | [ui/](apps/desktop/src/ui) | Views and styling: rail, conversation, panes, changes |
-| [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars and focus inside an editor |
+| [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars, focus and highlighting inside an editor |
+| [ui/finder.rs](apps/desktop/src/ui/finder.rs) | Open by name and search in files |
 | [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, read-only git access |
+| [workbench-text](crates/workbench-text/src) | Syntax highlighting, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |
 
 To add an action, update `Command`, `COMMANDS`, `Command::details`, and `execute` in `commands.rs`. Keep its behavior in the module that owns the relevant state.
@@ -136,7 +148,7 @@ PI_CODING_AGENT_DIR=/tmp/pi-fake PI_WORKBENCH_PI_ARGS="--provider fake --model f
 ## Current limitations
 
 - UTF-8 files only; 4 MiB per file, 64 open documents
-- No syntax highlighting, LSP, or terminal yet
+- No LSP or terminal yet
 - Focus fades unchanged lines rather than folding them; the editor needs equal line heights
 - Tab changes reset cursor and scroll position
 - Sessions share one checkout; two sessions editing the same lines will conflict

@@ -17,6 +17,8 @@ pub(super) fn command_palette(state: Rc<Workbench>) -> impl IntoView {
     let input_id = input.view_id();
     Effect::new(move |_| {
         if shown.get() {
+            // Each opening starts from the full list.
+            query.set(String::new());
             floem::action::exec_after_animation_frame(move |_| {
                 if shown.get_untracked() {
                     input_id.request_focus();
@@ -60,7 +62,7 @@ pub(super) fn command_palette(state: Rc<Workbench>) -> impl IntoView {
     )
     .style(|s| s.flex_col().width_full())
     .scroll()
-    .style(|s| s.width_full().max_height(360));
+    .style(|s| s.width_full().max_height(360).flex_shrink(0.0_f32));
     floating_layer(
         Stack::vertical((
             Label::new("Commands").style(|s| s.color(ACCENT)),

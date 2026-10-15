@@ -1,6 +1,7 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
 mod editor;
 mod explorer;
+mod finder;
 mod lens_doc;
 mod overlays;
 mod rail;
@@ -48,6 +49,22 @@ const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
+
+/// Syntax colours; `true` draws the token in italics.
+fn token_style(token: workbench_text::highlight::Token) -> Option<(Color, bool)> {
+    use workbench_text::highlight::Token;
+    Some(match token {
+        Token::Keyword => (Color::from_rgb8(198, 146, 233), false),
+        Token::String => (Color::from_rgb8(163, 205, 133), false),
+        Token::Comment => (Color::from_rgb8(110, 120, 138), true),
+        Token::Function => (Color::from_rgb8(120, 178, 245), false),
+        Token::Type => (Color::from_rgb8(232, 197, 128), false),
+        Token::Number | Token::Constant => (Color::from_rgb8(222, 160, 110), false),
+        Token::Operator => (Color::from_rgb8(120, 200, 210), false),
+        Token::Attribute | Token::Tag => (Color::from_rgb8(230, 120, 130), false),
+        Token::Variable | Token::Punctuation | Token::Plain => return None,
+    })
+}
 
 /// Editor colours from the app palette, shared by every editor.
 fn editor_colors(style: floem::views::EditorCustomStyle) -> floem::views::EditorCustomStyle {
@@ -269,6 +286,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         )
     });
     let (dot_sessions, label_sessions) = (state.sessions.clone(), state.sessions.clone());
+    let position_state = state.clone();
     let lens_open = RwSignal::new(false);
     let (summary_lens, menu_state) = (state.lens.clone(), state.clone());
     let lens_summary = Label::derived(move || {
@@ -318,8 +336,18 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 })
         })
         .style(|s| s.color(MUTED)),
-        Label::derived(move || format!("Pane {}  ·  UTF-8", focused.get().index() + 1))
-            .style(|s| s.color(MUTED).margin_left(8)),
+        Label::derived(move || {
+            let pane = focused.get();
+            if pane == Pane::Primary && position_state.conversation().get() {
+                return String::new();
+            }
+            let (line, col) = (
+                position_state.cursor_line(pane).get(),
+                position_state.cursor_col(pane).get(),
+            );
+            format!("Ln {}, Col {}  ·  UTF-8", line + 1, col + 1)
+        })
+        .style(|s| s.color(MUTED).margin_left(8)),
     ))
     .style(|s| {
         s.width_full()
@@ -342,6 +370,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        finder::finder(state.clone()),
         command_palette(state.clone()),
         confirmation(state),
     ))
@@ -354,10 +383,16 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     .on_event_with_config(el::KeyDown, CAPTURE, move |cx, event| {
         if event.key == Key::Named(NamedKey::Escape) {
             keyboard_state.dismiss_palette();
+            keyboard_state.dismiss_finder();
             keyboard_state.dismiss_confirmation();
             return EventPropagation::Continue;
         }
         if let Some(command) = commands::for_key(&event.key, event.modifiers) {
+            // While the finder has the keyboard, only finder keys apply.
+            let finding = keyboard_state.finder().get_untracked().is_some();
+            if finding && !matches!(command, Command::QuickOpen | Command::FindInFiles) {
+                return EventPropagation::Continue;
+            }
             commands::execute(&keyboard_state, command);
             cx.prevent_default();
             return EventPropagation::Stop;

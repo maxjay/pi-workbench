@@ -5,6 +5,7 @@ mod lens;
 mod markdown;
 mod session;
 mod sessions;
+mod syntax;
 mod ui;
 mod watcher;
 mod workspace;
