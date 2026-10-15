@@ -3,7 +3,7 @@
 use super::{
     ACCENT, ADDED_TEXT, BORDER, CODE_FONT, MUTED, PANEL, REMOVED_TEXT, TEXT, command_button,
 };
-use crate::{commands::Command, workspace::Workbench};
+use crate::{commands::Command, lens::TurnFiles, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use std::{path::PathBuf, rc::Rc};
 use workbench_core::git::{FileChange, FileStatus};
@@ -126,9 +126,58 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
     .style(|s| s.size_full().min_height(0))
 }
 
-/// Every changed file as a flat list, by path.
+/// One row of the changed-files list.
+#[derive(Clone)]
+enum Row {
+    /// A group: a Pi turn and its prompt, or the changes no turn made.
+    Heading(String, String),
+    File(FileChange),
+}
+
+/// The changed files, grouped by the Pi turn that changed them when the
+/// active session has finished turns, newest first. Only files that still
+/// differ from the baseline are listed, with their counts against it.
+fn rows(changes: &[FileChange], turns: &[TurnFiles]) -> Vec<(usize, Row)> {
+    if turns.is_empty() {
+        return changes.iter().cloned().map(|c| (0, Row::File(c))).collect();
+    }
+    let mut rows = Vec::new();
+    let mut by_turn = std::collections::HashSet::new();
+    for (group, turn) in turns.iter().rev().enumerate() {
+        let files: Vec<&FileChange> = changes
+            .iter()
+            .filter(|change| turn.files.iter().any(|f| f.path == change.path))
+            .collect();
+        if files.is_empty() {
+            continue;
+        }
+        let prompt = turn.prompt.lines().next().unwrap_or_default().trim();
+        rows.push((
+            group,
+            Row::Heading(format!("Turn {}", turn.number), prompt.into()),
+        ));
+        for file in files {
+            by_turn.insert(file.path.clone());
+            rows.push((group, Row::File(file.clone())));
+        }
+    }
+    let rest: Vec<_> = changes
+        .iter()
+        .filter(|c| !by_turn.contains(&c.path))
+        .cloned()
+        .collect();
+    if !rest.is_empty() {
+        let group = turns.len();
+        rows.push((group, Row::Heading("Other changes".into(), String::new())));
+        rows.extend(rest.into_iter().map(|c| (group, Row::File(c))));
+    }
+    rows
+}
+
+/// Every changed file, by path or by Pi turn.
 fn changed_files(state: Rc<Workbench>) -> impl IntoView {
     let changes = state.lens.changes();
+    let turns = state.lens.turn_files();
     let root = state.root().to_path_buf();
     let open_state = state.clone();
     Stack::vertical((
@@ -138,17 +187,26 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
                 .apply_if(!changes.with(Vec::is_empty), |s| s.hide())
         }),
         dyn_stack(
-            move || changes.get(),
-            // Keyed by the whole change, so new counts rebuild the row.
-            |change| {
-                (
+            move || changes.with(|changes| turns.with(|turns| rows(changes, turns))),
+            // Keyed by the whole row, so new counts rebuild it.
+            |(group, row)| match row {
+                Row::Heading(title, detail) => {
+                    (*group, PathBuf::from(title), 0, 0, false, detail.clone())
+                }
+                Row::File(change) => (
+                    *group,
                     change.path.clone(),
                     change.added,
                     change.removed,
                     change.binary,
-                )
+                    String::new(),
+                ),
             },
-            move |change: FileChange| {
+            move |(_, row)| {
+                let change = match row {
+                    Row::Heading(title, detail) => return heading(title, detail).into_any(),
+                    Row::File(change) => change,
+                };
                 let state = open_state.clone();
                 let relative = change
                     .path
@@ -196,6 +254,7 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
                         state.open(path.clone(), state.focused().get_untracked());
                     }
                 })
+                .into_any()
             },
         )
         .style(|s| s.flex_col().width_full()),
@@ -203,6 +262,27 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
     .style(|s| s.width_full())
     .scroll()
     .style(|s| s.size_full().min_height(0))
+}
+
+fn heading(title: String, detail: String) -> impl IntoView {
+    Stack::horizontal((
+        Label::new(title).style(|s| s.color(ACCENT).font_size(11).flex_shrink(0.0_f32)),
+        Label::new(detail).style(|s| {
+            s.color(MUTED)
+                .font_size(11)
+                .min_width(0)
+                .flex_grow(1.0_f32)
+                .text_ellipsis()
+        }),
+    ))
+    .style(|s| {
+        s.width_full()
+            .gap(8)
+            .items_center()
+            .padding_horiz(12)
+            .padding_top(12)
+            .padding_bottom(4)
+    })
 }
 
 pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {

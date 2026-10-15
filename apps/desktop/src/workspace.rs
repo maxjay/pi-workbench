@@ -425,13 +425,15 @@ impl Workbench {
         else {
             return Vec::new();
         };
-        let seen = self.lens.seen().get_untracked();
-        comparison
-            .hunks
-            .iter()
-            .filter(|(_, key)| !seen.contains(key))
-            .map(|(hunk, _)| comparison.line_of(hunk))
-            .collect()
+        Effect::untrack(|| {
+            comparison
+                .hunks
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !self.lens.hidden(&comparison, *index))
+                .map(|(_, (hunk, _))| comparison.line_of(hunk))
+                .collect()
+        })
     }
 
     /// The change under the cursor of the focused pane, compared against the

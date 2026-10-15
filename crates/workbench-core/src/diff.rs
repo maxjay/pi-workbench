@@ -136,6 +136,15 @@ impl LineDiff {
             .count()
     }
 
+    /// The baseline line `current_line` is a copy of, if it is unchanged.
+    pub fn unchanged_base_line(&self, current_line: usize) -> Option<usize> {
+        let block = self
+            .blocks
+            .iter()
+            .find(|block| !block.changed && block.current.contains(&current_line))?;
+        Some(block.base.start + current_line - block.current.start)
+    }
+
     /// The baseline line shown alongside `current_line`, for synchronised scrolling.
     pub fn base_line(&self, current_line: usize) -> usize {
         let Some(block) = self
@@ -162,6 +171,14 @@ impl LineDiff {
 mod tests {
     use super::*;
     use LineChange::*;
+
+    #[test]
+    fn unchanged_lines_map_back_to_the_baseline() {
+        let diff = LineDiff::compute("a\nb\nc\n", "new\na\nc\n");
+        assert_eq!(diff.unchanged_base_line(0), None);
+        assert_eq!(diff.unchanged_base_line(1), Some(0));
+        assert_eq!(diff.unchanged_base_line(2), Some(2));
+    }
 
     #[test]
     fn identical_text_has_no_changes_even_with_different_line_endings() {

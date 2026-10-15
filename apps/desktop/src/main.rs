@@ -3,6 +3,7 @@ mod documents;
 mod explorer;
 mod lens;
 mod markdown;
+mod origins;
 mod session;
 mod sessions;
 mod syntax;

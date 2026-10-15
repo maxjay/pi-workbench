@@ -88,6 +88,25 @@ impl Model {
     }
 }
 
+/// One prompt and the workspace either side of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Turn {
+    pub prompt: String,
+    /// Snapshot taken before the prompt was sent.
+    pub before: String,
+    /// Snapshot taken when the run ended, before held saves were written.
+    pub after: Option<String>,
+}
+
+/// Holds the workspace's saves until dropped.
+struct SaveHold(Rc<Documents>);
+
+impl Drop for SaveHold {
+    fn drop(&mut self) {
+        self.0.release_saves();
+    }
+}
+
 /// Takes a workspace snapshot and hands its tree id to the callback.
 pub type SnapshotHook = Box<dyn Fn(Box<dyn FnOnce(Option<String>)>)>;
 
@@ -207,8 +226,13 @@ pub struct Session {
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
-    /// Workspace snapshots taken before each prompt in this window, oldest first.
-    turns: RwSignal<Vec<String>>,
+    /// Prompts sent from this window with snapshots either side, oldest first.
+    turns: RwSignal<Vec<Turn>>,
+    /// The turn whose run is still going.
+    open_turn: Cell<Option<usize>>,
+    /// The snapshot after a run is still being taken; saves stay held until it is.
+    settling: Cell<bool>,
+    me: Weak<Self>,
     /// The composer's text, kept per session.
     pub draft: Rc<TextDocument>,
     /// Pi runs tools in parallel; reading files while one is still writing
@@ -245,7 +269,8 @@ impl Session {
     ) -> Rc<Self> {
         let scope = scope.create_child();
         let session = scope.enter(|| {
-            Rc::new(Self {
+            Rc::new_cyclic(|me| Self {
+                me: me.clone(),
                 key,
                 scope,
                 root,
@@ -261,6 +286,8 @@ impl Session {
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
                 turns: RwSignal::new(Vec::new()),
+                open_turn: Cell::new(None),
+                settling: Cell::new(false),
                 draft: Rc::new(TextDocument::new(scope, "")),
                 running_tools: Cell::new(0),
                 tree_changed: Cell::new(false),
@@ -319,7 +346,7 @@ impl Session {
     pub fn stats(&self) -> ReadSignal<String> {
         self.stats.read_only()
     }
-    pub fn turns(&self) -> ReadSignal<Vec<String>> {
+    pub fn turns(&self) -> ReadSignal<Vec<Turn>> {
         self.turns.read_only()
     }
 
@@ -448,7 +475,9 @@ impl Session {
     }
 
     fn prompt_when_saved(self: &Rc<Self>, text: String) {
-        if self.documents.any_saving() {
+        // Saves made while the last run settles are written once it has;
+        // Pi must see them.
+        if self.documents.any_saving() || self.settling.get() {
             // Weak, so closing the session meanwhile does not start Pi for it.
             let session = Rc::downgrade(self);
             exec_after(Duration::from_millis(30), move |_| {
@@ -469,8 +498,15 @@ impl Session {
             let Some(session) = session.upgrade() else {
                 return;
             };
-            if let Some(tree) = tree {
-                session.turns.update(|turns| turns.push(tree));
+            if let Some(before) = tree {
+                session.turns.update(|turns| {
+                    session.open_turn.set(Some(turns.len()));
+                    turns.push(Turn {
+                        prompt: text.clone(),
+                        before,
+                        after: None,
+                    });
+                });
             }
             session.send_prompt(text);
         }));
@@ -521,11 +557,28 @@ impl Session {
         self.tools.borrow_mut().clear();
         self.running_tools.set(0);
         self.tree_changed.set(false);
-        if self.holding.replace(false) {
-            self.documents.release_saves();
-        }
+        let hold = self
+            .holding
+            .replace(false)
+            .then(|| SaveHold(self.documents.clone()));
         (self.hooks.files_changed)(true);
         (self.hooks.settled)();
+        // Snapshot what Pi did before held saves land on top of it.
+        if let Some(index) = self.open_turn.take() {
+            self.settling.set(true);
+            let session = self.me.clone();
+            (self.hooks.snapshot)(Box::new(move |after| {
+                if let Some(session) = session.upgrade() {
+                    session.turns.update(|turns| {
+                        if let Some(turn) = turns.get_mut(index) {
+                            turn.after = after;
+                        }
+                    });
+                    session.settling.set(false);
+                }
+                drop(hold);
+            }));
+        }
     }
 
     fn expire_asks(&self, label: &str) {

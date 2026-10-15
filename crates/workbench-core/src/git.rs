@@ -73,6 +73,15 @@ pub struct Base {
     pub commit: String,
 }
 
+/// The author of each line of a committed file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blame {
+    /// The file as committed.
+    pub text: String,
+    /// Author email per line of `text`.
+    pub authors: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStatus {
     Added,
@@ -302,8 +311,14 @@ impl Repo {
 
     /// Every file that differs between `base` and the working tree, by path.
     pub fn changes(&self, base: &Rev) -> Result<Vec<FileChange>> {
+        let current = Rev::Tree(self.snapshot()?);
+        self.changes_between(base, &current)
+    }
+
+    /// Every file that differs between two revisions, by path.
+    pub fn changes_between(&self, base: &Rev, current: &Rev) -> Result<Vec<FileChange>> {
         let base = base.object()?;
-        let current = self.snapshot()?;
+        let current = current.object()?;
         let output = self.git(&[
             "diff-tree",
             "-r",
@@ -315,7 +330,7 @@ impl Repo {
             "--raw",
             "--numstat",
             base,
-            &current,
+            current,
         ])?;
         let mut statuses = BTreeMap::new();
         let mut counts = BTreeMap::new();
@@ -363,6 +378,56 @@ impl Repo {
             .collect();
         changes.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(changes)
+    }
+
+    /// The email commits made here are recorded with, if set.
+    pub fn user_email(&self) -> Result<Option<String>> {
+        let output = git(&self.root, &["config", "user.email"])?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(line(&output.stdout)).into_owned())
+            .filter(|email| !email.is_empty()))
+    }
+
+    /// Who last changed each line of `path` as committed at HEAD. Only
+    /// committed content is read, so no filters run on the working tree.
+    /// `None` when HEAD does not have the file.
+    pub fn blame(&self, path: &Path) -> Result<Option<Blame>> {
+        let Some(head) = self.head()? else {
+            return Ok(None);
+        };
+        let head = Rev::Commit(head);
+        let Some(text) = self.read(&head, path)? else {
+            return Ok(None);
+        };
+        let relative = self.relative(path)?;
+        let output = self.git(&[
+            "blame",
+            "--porcelain",
+            "--no-textconv",
+            head.object()?,
+            "--",
+            &relative,
+        ])?;
+        let mut emails: BTreeMap<&[u8], String> = BTreeMap::new();
+        let mut authors = Vec::new();
+        let mut commit: &[u8] = b"";
+        for record in output.split(|&byte| byte == b'\n') {
+            if record.first() == Some(&b'\t') {
+                authors.push(emails.get(commit).cloned().unwrap_or_default());
+            } else if let Some(mail) = record.strip_prefix(b"author-mail ") {
+                let mail = String::from_utf8_lossy(mail);
+                let mail = mail.trim().trim_start_matches('<').trim_end_matches('>');
+                emails.insert(commit, mail.to_owned());
+            } else if let Some(id) = record.split(|&byte| byte == b' ').next()
+                && id.len() >= 40
+                && id.iter().all(u8::is_ascii_hexdigit)
+            {
+                commit = id;
+            }
+        }
+        Ok(Some(Blame { text, authors }))
     }
 
     fn git(&self, args: &[&str]) -> Result<Vec<u8>> {
@@ -637,7 +702,12 @@ fn command(directory: &Path, args: &[&str]) -> Command {
             "core.fsmonitor=false",
             "-c",
             "core.hooksPath=/dev/null",
+            // A partial clone would fetch missing objects, running whatever
+            // transport command the repository's config names.
+            "-c",
+            "protocol.allow=never",
         ])
+        .env("GIT_NO_LAZY_FETCH", "1")
         .arg("-C")
         .arg(directory)
         .args(args)
@@ -656,7 +726,17 @@ fn command(directory: &Path, args: &[&str]) -> Command {
     command
 }
 
-fn run(mut command: Command, input: Option<Vec<u8>>) -> Result<Output> {
+fn run(command: Command, input: Option<Vec<u8>>) -> Result<Output> {
+    run_for(command, input, GIT_TIMEOUT, "git")
+}
+
+/// Runs a program to completion, stopping it after `timeout`.
+pub(crate) fn run_for(
+    mut command: Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    name: &str,
+) -> Result<Output> {
     command.stdin(if input.is_some() {
         Stdio::piped()
     } else {
@@ -664,7 +744,7 @@ fn run(mut command: Command, input: Option<Vec<u8>>) -> Result<Output> {
     });
     let mut child = command
         .spawn()
-        .context("Could not run git. Is it installed?")?;
+        .with_context(|| format!("Could not run {name}. Is it installed?"))?;
     // Feed and drain the pipes on threads so a full pipe cannot stall the wait.
     let stdin = child.stdin.take();
     let writer = input.map(|bytes| {
@@ -686,7 +766,7 @@ fn run(mut command: Command, input: Option<Vec<u8>>) -> Result<Output> {
     };
     let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
     let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
-    let deadline = Instant::now() + GIT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -695,8 +775,8 @@ fn run(mut command: Command, input: Option<Vec<u8>>) -> Result<Output> {
             let _ = child.kill();
             let _ = child.wait();
             bail!(
-                "git did not respond within {} seconds",
-                GIT_TIMEOUT.as_secs()
+                "{name} did not respond within {} seconds",
+                timeout.as_secs()
             );
         }
         thread::sleep(Duration::from_millis(10));
@@ -958,6 +1038,65 @@ mod tests {
         );
         let now = Rev::Tree(repo.snapshot().unwrap());
         assert_eq!(repo.changes(&now).unwrap(), []);
+    }
+
+    #[test]
+    fn blame_names_the_author_of_each_committed_line() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "one\ntwo\n");
+        commit(&root, "base");
+        write(&root, "a.txt", "one\nTWO\nthree\n");
+        let ok = |args: &[&str]| succeeded(git(&root, args).unwrap()).unwrap();
+        ok(&["add", "-A"]);
+        ok(&[
+            "-c",
+            "user.email=other@example.com",
+            "-c",
+            "user.name=Other",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "theirs",
+        ]);
+        write(&root, "a.txt", "uncommitted\n");
+        run(&root, &["config", "user.email", "test@example.com"]);
+        let repo = open(&root);
+        let blame = repo.blame(&root.join("a.txt")).unwrap().unwrap();
+        assert_eq!(blame.text, "one\nTWO\nthree\n");
+        assert_eq!(
+            repo.user_email().unwrap().as_deref(),
+            Some("test@example.com")
+        );
+        assert_eq!(
+            blame.authors,
+            ["test@example.com", "other@example.com", "other@example.com"]
+        );
+        assert_eq!(repo.blame(&root.join("missing.txt")).unwrap(), None);
+    }
+
+    #[test]
+    fn changes_between_compares_two_snapshots() {
+        let (_dir, root) = init();
+        write(&root, "a.txt", "one\n");
+        commit(&root, "base");
+        let repo = open(&root);
+        let before = Rev::Tree(repo.snapshot().unwrap());
+        write(&root, "a.txt", "one\ntwo\n");
+        write(&root, "b.txt", "new\n");
+        let after = Rev::Tree(repo.snapshot().unwrap());
+        let changes = repo.changes_between(&before, &after).unwrap();
+        let summary: Vec<_> = changes
+            .iter()
+            .map(|c| (c.path.file_name().unwrap().to_owned(), c.status, c.added))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("a.txt".into(), FileStatus::Modified, 1),
+                ("b.txt".into(), FileStatus::Added, 1)
+            ]
+        );
     }
 
     #[test]

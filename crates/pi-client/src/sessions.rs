@@ -158,6 +158,114 @@ pub fn summarize(path: &Path) -> Option<SessionSummary> {
     })
 }
 
+/// What Pi wrote with its edit and write tools in one session: the session's
+/// working directory and, per successful tool call, the path as Pi gave it and
+/// the lines it added. An edit's new text repeats context from its old text;
+/// only lines the old text did not have count.
+pub fn written(path: &Path) -> (Option<PathBuf>, Vec<(String, String)>) {
+    let Ok(file) = fs::File::open(path) else {
+        return (None, Vec::new());
+    };
+    let mut cwd = None;
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    let mut failed = std::collections::HashSet::new();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        // Most lines are not tool calls or results; skip parsing them.
+        if !line.contains("\"toolCall\"")
+            && !line.contains("\"isError\":true")
+            && !line.contains("\"type\":\"session\"")
+        {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if entry["type"] == "session" {
+            cwd = entry["cwd"].as_str().map(PathBuf::from);
+            continue;
+        }
+        let message = &entry["message"];
+        if message["role"] == "toolResult" && message["isError"] == true {
+            failed.extend(message["toolCallId"].as_str().map(String::from));
+            continue;
+        }
+        let Some(content) = message["content"].as_array() else {
+            continue;
+        };
+        for call in content.iter().filter(|c| c["type"] == "toolCall") {
+            let arguments = &call["arguments"];
+            let (Some(id), Some(target)) = (call["id"].as_str(), arguments["path"].as_str()) else {
+                continue;
+            };
+            let mut texts = Vec::new();
+            match call["name"].as_str() {
+                Some("write") => texts.extend(arguments["content"].as_str().map(String::from)),
+                Some("edit") => {
+                    let edits = arguments["edits"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .chain(std::iter::once(arguments));
+                    texts.extend(edits.filter_map(|edit| {
+                        let new = edit["newText"].as_str()?;
+                        Some(added_lines(
+                            edit["oldText"].as_str().unwrap_or_default(),
+                            new,
+                        ))
+                    }));
+                }
+                _ => {}
+            }
+            calls.extend(
+                texts
+                    .into_iter()
+                    .map(|text| (id.to_owned(), target.to_owned(), text)),
+            );
+        }
+    }
+    let written = calls
+        .into_iter()
+        .filter(|(id, _, _)| !failed.contains(id))
+        .map(|(_, target, text)| (target, text))
+        .collect();
+    (cwd, written)
+}
+
+/// The lines of `new` that `old` does not have, compared without indentation.
+fn added_lines(old: &str, new: &str) -> String {
+    let old: std::collections::HashSet<&str> = old.lines().map(str::trim).collect();
+    new.lines()
+        .filter(|line| !old.contains(line.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Session files for `cwd` with when they last changed, without reading them.
+/// Files from other projects in a shared folder are filtered out later, by
+/// the working directory [`written`] reports.
+pub fn files(cwd: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let Some(dir) = session_dir(cwd) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+            Some((path, modified))
+        })
+        .collect()
+}
+
+/// Whether a session started in `session_cwd` belongs to the project at `cwd`.
+pub fn belongs(session_cwd: &Path, cwd: &Path) -> bool {
+    same_dir(&session_cwd.to_string_lossy(), &plain_cwd(cwd))
+}
+
 fn same_dir(a: &str, b: &str) -> bool {
     let normal = |p: &str| {
         let p = p.replace('\\', "/");
@@ -191,6 +299,31 @@ pub fn list(cwd: &Path) -> Vec<SessionSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_collects_edit_and_write_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let lines = [
+            r#"{"type":"session","id":"1","cwd":"/work"}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"1","name":"edit","arguments":{"path":"src/a.rs","edits":[{"oldText":"keep\nx","newText":"keep\ny\nz"}]}},{"type":"toolCall","id":"2","name":"bash","arguments":{"command":"ls"}}]}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"3","name":"write","arguments":{"path":"/work/b.md","content":"Bee"}}]}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"4","name":"edit","arguments":{"path":"c.rs","oldText":"a","newText":"b"}}]}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"5","name":"edit","arguments":{"path":"d.rs","oldText":"a","newText":"failed"}}]}}"#,
+            r#"{"type":"message","message":{"role":"toolResult","toolCallId":"5","isError":true,"content":[]}}"#,
+        ];
+        fs::write(&path, lines.join("\n")).unwrap();
+        let (cwd, written) = written(&path);
+        assert_eq!(cwd, Some(PathBuf::from("/work")));
+        assert_eq!(
+            written,
+            [
+                ("src/a.rs".to_owned(), "y\nz".to_owned()),
+                ("/work/b.md".to_owned(), "Bee".to_owned()),
+                ("c.rs".to_owned(), "b".to_owned()),
+            ]
+        );
+    }
 
     #[test]
     fn summaries_prefer_the_session_name_then_the_first_prompt() {
