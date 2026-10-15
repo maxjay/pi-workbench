@@ -140,7 +140,14 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
         dyn_stack(
             move || changes.get(),
             // Keyed by the whole change, so new counts rebuild the row.
-            |change| (change.path.clone(), change.added, change.removed, change.binary),
+            |change| {
+                (
+                    change.path.clone(),
+                    change.added,
+                    change.removed,
+                    change.binary,
+                )
+            },
             move |change: FileChange| {
                 let state = open_state.clone();
                 let relative = change
