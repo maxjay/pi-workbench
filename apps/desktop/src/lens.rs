@@ -455,6 +455,7 @@ impl Lens {
             .map(|file| (file.path.clone(), self.relative(&file.path)))
             .collect();
         let (records, root) = (self.records.clone(), self.root.clone());
+        let preferred = crate::settings::get().base_branch.clone();
         let (authors, turn_cache) = (self.authorship.clone(), self.turn_cache.clone());
         let lens = self.clone();
         let finish = create_ext_action(self.scope, move |found: Refreshed| {
@@ -466,7 +467,7 @@ impl Lens {
         });
         std::thread::spawn(move || {
             let head = repo.head().ok().flatten();
-            let branch_base = repo.default_base().ok().flatten();
+            let branch_base = repo.base(preferred.as_deref()).ok().flatten();
             let rev = match since {
                 Since::Branch => branch_base.as_ref().map(|b| Rev::Commit(b.commit.clone())),
                 Since::Head => head.clone().map(Rev::Commit),

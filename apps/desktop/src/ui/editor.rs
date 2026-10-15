@@ -291,11 +291,10 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         Label::derived(move || {
             active
                 .get()
-                .map(|p| {
-                    p.strip_prefix(title_state.root())
-                        .unwrap_or(&p)
-                        .display()
-                        .to_string()
+                .map(|p| match p.strip_prefix(title_state.root()) {
+                    Ok(relative) => relative.display().to_string(),
+                    // Files outside the workspace, such as the settings file.
+                    Err(_) => pi_client::sessions::plain_cwd(&p),
                 })
                 .unwrap_or_else(|| format!("Pane {}", pane.index() + 1))
         })

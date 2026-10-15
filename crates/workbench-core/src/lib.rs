@@ -6,6 +6,7 @@ pub mod files;
 pub mod git;
 pub mod layout;
 pub mod merge;
+pub mod settings;
 pub mod structure;
 
 pub const MAX_OPEN_DOCUMENTS: usize = 64;

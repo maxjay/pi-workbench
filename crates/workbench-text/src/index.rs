@@ -28,11 +28,10 @@ fn builder(
         .parents(repository)
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(move |entry| {
-            let generated = entry.file_type().is_some_and(|ty| ty.is_dir())
-                && matches!(
-                    entry.file_name().to_str(),
-                    Some(".git" | "target" | "node_modules")
-                );
+            // A linked worktree's `.git` is a file.
+            let generated = entry.file_name() == ".git"
+                || (entry.file_type().is_some_and(|ty| ty.is_dir())
+                    && matches!(entry.file_name().to_str(), Some("target" | "node_modules")));
             !generated && enter(entry)
         });
     builder

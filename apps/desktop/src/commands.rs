@@ -16,6 +16,7 @@ pub enum Command {
     Conversation,
     StopSession,
     NewSession,
+    NewWorktreeSession,
     CloseSession,
     NextSession,
     PreviousSession,
@@ -31,9 +32,11 @@ pub enum Command {
     AskAboutChange,
     MarkChangeSeen,
     ShowFormatting,
+    OpenSettings,
     QuickOpen,
     FindInFiles,
     Explorer,
+    Terminal,
     MoveExplorer,
     Refresh,
     ResetLayout,
@@ -55,6 +58,7 @@ pub const COMMANDS: &[Command] = &[
     Command::Conversation,
     Command::StopSession,
     Command::NewSession,
+    Command::NewWorktreeSession,
     Command::CloseSession,
     Command::NextSession,
     Command::PreviousSession,
@@ -79,16 +83,19 @@ pub const COMMANDS: &[Command] = &[
     Command::AskAboutChange,
     Command::MarkChangeSeen,
     Command::ShowFormatting,
+    Command::OpenSettings,
     Command::Explorer,
+    Command::Terminal,
     Command::MoveExplorer,
     Command::Refresh,
     Command::ResetLayout,
 ];
 
-/// A key with Ctrl (Cmd on macOS), optionally Shift; or Alt alone.
-#[derive(Clone, Copy)]
+/// A key with Ctrl (Cmd on macOS), Alt and Shift as given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shortcut {
     key: &'static str,
+    ctrl: bool,
     shift: bool,
     alt: bool,
 }
@@ -96,6 +103,7 @@ pub struct Shortcut {
 const fn ctrl(key: &'static str) -> Option<Shortcut> {
     Some(Shortcut {
         key,
+        ctrl: true,
         shift: false,
         alt: false,
     })
@@ -104,6 +112,7 @@ const fn ctrl(key: &'static str) -> Option<Shortcut> {
 const fn ctrl_shift(key: &'static str) -> Option<Shortcut> {
     Some(Shortcut {
         key,
+        ctrl: true,
         shift: true,
         alt: false,
     })
@@ -112,8 +121,38 @@ const fn ctrl_shift(key: &'static str) -> Option<Shortcut> {
 const fn alt(key: &'static str) -> Option<Shortcut> {
     Some(Shortcut {
         key,
+        ctrl: false,
         shift: false,
         alt: true,
+    })
+}
+
+/// The settings file's name for a command, such as "QuickOpen" or "Session(2)".
+fn setting_name(command: Command) -> String {
+    format!("{command:?}")
+}
+
+/// A shortcut from the settings file. Key names are interned so shortcuts
+/// stay `Copy`; there are only ever a handful.
+fn configured(text: &str) -> Option<Shortcut> {
+    use std::{collections::HashSet, sync::Mutex};
+    static NAMES: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let keys = workbench_core::settings::parse_keys(text)?;
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let names = names.get_or_insert_with(HashSet::new);
+    let key = match names.get(keys.key.as_str()) {
+        Some(key) => *key,
+        None => {
+            let key: &'static str = Box::leak(keys.key.into_boxed_str());
+            names.insert(key);
+            key
+        }
+    };
+    Some(Shortcut {
+        key,
+        ctrl: keys.ctrl,
+        shift: keys.shift,
+        alt: keys.alt,
     })
 }
 
@@ -143,6 +182,7 @@ impl Command {
             Self::Conversation => ("Show conversation", ctrl("j")),
             Self::StopSession => ("Stop Pi in this session", None),
             Self::NewSession => ("New Pi session", ctrl("n")),
+            Self::NewWorktreeSession => ("New Pi session in its own worktree", None),
             Self::CloseSession => ("Close session", None),
             Self::NextSession => ("Next session", ctrl("tab")),
             Self::PreviousSession => ("Previous session", ctrl_shift("tab")),
@@ -162,9 +202,11 @@ impl Command {
             Self::AskAboutChange => ("Ask Pi about this change", None),
             Self::MarkChangeSeen => ("Mark this change seen", None),
             Self::ShowFormatting => ("Show or hide formatting-only changes", None),
+            Self::OpenSettings => ("Open settings file", ctrl(",")),
             Self::QuickOpen => ("Open file by name", ctrl("p")),
             Self::FindInFiles => ("Search in files", ctrl_shift("f")),
             Self::Explorer => ("Toggle explorer", ctrl("b")),
+            Self::Terminal => ("Toggle terminal", ctrl("`")),
             Self::MoveExplorer => ("Move explorer to opposite side", None),
             Self::Refresh => ("Refresh expanded folders", None),
             Self::ResetLayout => ("Reset panel layout", None),
@@ -174,8 +216,16 @@ impl Command {
     pub fn title(self) -> &'static str {
         self.details().0
     }
+    /// The settings file can change or remove the built-in shortcut.
     pub fn shortcut(self) -> Option<Shortcut> {
-        self.details().1
+        self.shortcut_in(&crate::settings::get().keys)
+    }
+
+    fn shortcut_in(self, keys: &std::collections::BTreeMap<String, String>) -> Option<Shortcut> {
+        match keys.get(&setting_name(self)) {
+            Some(text) => configured(text),
+            None => self.details().1,
+        }
     }
     pub fn shortcut_label(self) -> String {
         self.shortcut().map(Shortcut::label).unwrap_or_default()
@@ -200,6 +250,7 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
             state.sessions.create();
             state.show_conversation();
         }
+        Command::NewWorktreeSession => state.new_worktree_session(),
         Command::CloseSession => {
             if let Some(session) = state.sessions.active_untracked() {
                 state.sessions.close(session.key);
@@ -217,9 +268,11 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::AskAboutChange => state.ask_about_change(),
         Command::MarkChangeSeen => state.mark_change_seen(),
         Command::ShowFormatting => state.lens.toggle_formatting(),
+        Command::OpenSettings => state.open_settings(),
         Command::QuickOpen => state.open_finder(Finder::Files),
         Command::FindInFiles => state.open_finder(Finder::Search),
         Command::Explorer => state.toggle_explorer(),
+        Command::Terminal => state.toggle_terminal(),
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
         Command::ResetLayout => state.reset_layout(),
@@ -238,14 +291,18 @@ fn primary_modifier() -> Modifiers {
 
 impl Shortcut {
     fn modifiers(self) -> Modifiers {
-        let mut modifiers = if self.alt {
-            Modifiers::ALT
-        } else if self.key == "tab" {
+        let mut modifiers = Modifiers::empty();
+        if self.ctrl {
             // Cmd+Tab is the macOS app switcher, so session cycling uses Ctrl everywhere.
-            Modifiers::CONTROL
-        } else {
-            primary_modifier()
-        };
+            modifiers |= if self.key == "tab" {
+                Modifiers::CONTROL
+            } else {
+                primary_modifier()
+            };
+        }
+        if self.alt {
+            modifiers |= Modifiers::ALT;
+        }
         if self.shift {
             modifiers |= Modifiers::SHIFT;
         }
@@ -253,12 +310,31 @@ impl Shortcut {
     }
 
     fn named(self) -> Option<NamedKey> {
-        match self.key {
-            "tab" => Some(NamedKey::Tab),
-            "down" => Some(NamedKey::ArrowDown),
-            "up" => Some(NamedKey::ArrowUp),
-            _ => None,
-        }
+        Some(match self.key {
+            "tab" => NamedKey::Tab,
+            "down" => NamedKey::ArrowDown,
+            "up" => NamedKey::ArrowUp,
+            "left" => NamedKey::ArrowLeft,
+            "right" => NamedKey::ArrowRight,
+            "enter" => NamedKey::Enter,
+            "home" => NamedKey::Home,
+            "end" => NamedKey::End,
+            "pageup" => NamedKey::PageUp,
+            "pagedown" => NamedKey::PageDown,
+            "f1" => NamedKey::F1,
+            "f2" => NamedKey::F2,
+            "f3" => NamedKey::F3,
+            "f4" => NamedKey::F4,
+            "f5" => NamedKey::F5,
+            "f6" => NamedKey::F6,
+            "f7" => NamedKey::F7,
+            "f8" => NamedKey::F8,
+            "f9" => NamedKey::F9,
+            "f10" => NamedKey::F10,
+            "f11" => NamedKey::F11,
+            "f12" => NamedKey::F12,
+            _ => return None,
+        })
     }
 
     fn matches(self, key: &Key, modifiers: Modifiers) -> bool {
@@ -278,23 +354,37 @@ impl Shortcut {
             "tab" => "Tab".to_string(),
             "down" => "Down".to_string(),
             "up" => "Up".to_string(),
+            key if self.named().is_some() => {
+                let mut chars = key.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_uppercase().chain(chars).collect()
+                })
+            }
             key => key.to_uppercase(),
         };
-        let held = if self.alt {
-            "Alt"
-        } else if self.key == "tab" {
-            "Ctrl"
-        } else {
-            "Ctrl/Cmd"
-        };
-        format!("{held}+{}{key}", if self.shift { "Shift+" } else { "" })
+        let mut label = String::new();
+        if self.ctrl {
+            label.push_str(if self.key == "tab" {
+                "Ctrl+"
+            } else {
+                "Ctrl/Cmd+"
+            });
+        }
+        if self.alt {
+            label.push_str("Alt+");
+        }
+        if self.shift {
+            label.push_str("Shift+");
+        }
+        label + &key
     }
 }
 
 pub fn for_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
+    let settings = crate::settings::get();
     COMMANDS.iter().copied().find(|command| {
         command
-            .shortcut()
+            .shortcut_in(&settings.keys)
             .is_some_and(|binding| binding.matches(key, modifiers))
     })
 }

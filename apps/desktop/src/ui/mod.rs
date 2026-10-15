@@ -6,6 +6,7 @@ mod lens_doc;
 mod overlays;
 mod rail;
 mod session;
+mod terminal;
 
 use crate::{
     commands::{self, Command},
@@ -41,9 +42,9 @@ const REMOVED: Color = Color::from_rgba8(210, 90, 90, 46);
 const ADDED_TEXT: Color = Color::from_rgb8(134, 207, 150);
 const REMOVED_TEXT: Color = Color::from_rgb8(236, 135, 135);
 /// CSS-style family list; the first installed font wins.
-const CODE_FONT: &str =
+pub(crate) const CODE_FONT: &str =
     "'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
-const CODE_SIZE: usize = 14;
+pub(crate) const CODE_SIZE: usize = 14;
 /// Floem's editor background, which its style API does not let us change.
 const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
 
@@ -89,8 +90,8 @@ fn editor_colors(style: floem::views::EditorCustomStyle) -> floem::views::Editor
 /// Editor styling shared by every code view.
 fn code_styling() -> floem::views::editor::text::SimpleStyling {
     floem::views::editor::text::SimpleStyling::builder()
-        .font_family(floem::text::FamilyOwned::parse_list(CODE_FONT).collect())
-        .font_size(CODE_SIZE)
+        .font_family(floem::text::FamilyOwned::parse_list(&crate::settings::code_font()).collect())
+        .font_size(crate::settings::code_size())
         .line_height(1.6)
         .build()
 }
@@ -243,13 +244,17 @@ fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl In
 }
 
 pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
+    let (settings, settings_error) = crate::settings::current();
     let integrations = Integrations {
-        pi: Launch::from_env(),
+        pi: Launch::from_settings(settings.pi.command(), &settings.pi.args),
     };
     let state = Workbench::new(root, layout_path, integrations, move || {
         floem::close_window(window)
     });
     state.restore();
+    if let Some(err) = settings_error {
+        state.report(err);
+    }
     state.sessions.refresh_recent();
     state.sessions.create();
     state.lens.start();
@@ -274,12 +279,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     let width = RwSignal::new(1280.0);
     let close_state = state.clone();
     let keyboard_state = state.clone();
-    let editors = Stack::horizontal((
+    let panes = Stack::horizontal((
         pane(state.clone(), Pane::Primary),
         divider(state.clone(), false, width),
         pane(state.clone(), Pane::Secondary),
     ))
     .style(move |s| s.size_full().min_width(0).min_height(0));
+    let editors = Stack::vertical((panes, terminal::terminal_panel(state.clone())))
+        .style(move |s| s.size_full().min_width(0).min_height(0));
     let body = Stack::horizontal((
         explorer(state.clone()),
         divider(state.clone(), true, width),
@@ -427,6 +434,20 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             // While the finder has the keyboard, only finder keys apply.
             let finding = keyboard_state.finder().get_untracked().is_some();
             if finding && !matches!(command, Command::QuickOpen | Command::FindInFiles) {
+                return EventPropagation::Continue;
+            }
+            // The shell gets Ctrl keys such as Ctrl+P and Ctrl+W, except these.
+            let in_terminal = keyboard_state.terminal_focused().get_untracked();
+            if in_terminal
+                && !matches!(
+                    command,
+                    Command::Terminal
+                        | Command::Palette
+                        | Command::NextSession
+                        | Command::PreviousSession
+                        | Command::Session(_)
+                )
+            {
                 return EventPropagation::Continue;
             }
             commands::execute(&keyboard_state, command);

@@ -16,6 +16,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Who changed it:** changed lines are coloured by who wrote them: Pi, you, or someone else on the branch. Reformatting is filtered out, and the changed files are grouped by the Pi turn that changed them.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
 - **Editor:** syntax highlighting, open by name (Ctrl+P), search across files (Ctrl+Shift+F), cursor and scroll kept per tab, and an explorer that hides what `.gitignore` ignores.
+- **Terminal, settings, worktrees:** a terminal panel under the editors, a commented settings file, and sessions that work in their own git worktree.
 - A second pane, background saves, and a command palette.
 
 ## Install on WSL or Linux
@@ -93,6 +94,24 @@ Changes that only reformat (the same text once whitespace is ignored or, with [d
 
 **Ctrl+P** opens files by name with fuzzy matching. **Ctrl+Shift+F** searches file contents; Enter runs the search and Enter again opens the selected hit at its line. Both skip what `.gitignore` ignores, and both are in the command palette. Files open highlighted and keep their cursor and scroll as you switch tabs; the footer shows the cursor's line and column.
 
+## Terminal, settings and worktrees
+
+![The terminal panel under an editor](docs/screenshots/terminal.png)
+
+**Ctrl+`** opens a terminal under the editors, in the workspace folder: PowerShell on Windows, `$SHELL` elsewhere. It is a full terminal emulator (`alacritty_terminal`), so pagers, editors and colours work. While it has focus it keeps Ctrl keys such as Ctrl+C, Ctrl+P and Ctrl+W, except for the terminal toggle, the palette, and session switching. Ctrl+Shift+V pastes, and the wheel scrolls back.
+
+**Ctrl+,** opens the settings file (`settings.json` in the app's configuration folder), created with every setting and a comment explaining it. It sets:
+
+- the editor and terminal font and size;
+- the base branch for "Changes since";
+- how Pi is started;
+- the terminal's shell;
+- shortcuts, by command name, such as `"QuickOpen": "ctrl+o"`, or `""` to remove one. A command's name is its identifier in [commands.rs](apps/desktop/src/commands.rs).
+
+Settings apply as you save, except fonts and shortcuts, which apply to new windows.
+
+**New Pi session in its own worktree** (palette) checks out the current commit as a new branch `pi/pi-<time>` in a sibling folder `<repository>-worktrees/`, and opens it in a new window with a fresh session. Pi then works apart from your checkout, and merging its branch is up to you.
+
 ## Shortcuts
 
 Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere, because Cmd+Tab switches apps on macOS.
@@ -112,6 +131,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | Ctrl/Cmd+W | Close file |
 | Ctrl/Cmd+Q | Close window |
 | Ctrl/Cmd+B | Toggle explorer |
+| Ctrl/Cmd+` | Toggle terminal |
+| Ctrl/Cmd+, | Open settings file |
 | Ctrl/Cmd+\ | Toggle second pane |
 | Ctrl/Cmd+Shift+P | Command palette |
 | Escape | Dismiss palette or dialog |
@@ -129,12 +150,15 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [watcher.rs](apps/desktop/src/watcher.rs) | Watching the workspace for outside changes |
 | [markdown.rs](apps/desktop/src/markdown.rs) | Reply markdown to timeline blocks |
 | [syntax.rs](apps/desktop/src/syntax.rs) | Highlighting open files off the UI thread |
+| [terminal.rs](apps/desktop/src/terminal.rs) | The shell, its screen, and key encoding |
+| [settings.rs](apps/desktop/src/settings.rs) | The settings in effect, re-read when the file changes |
 | [explorer.rs](apps/desktop/src/explorer.rs) | Directory loading and cache |
 | [commands.rs](apps/desktop/src/commands.rs) | Actions and shortcuts |
 | [ui/](apps/desktop/src/ui) | Views and styling: rail, conversation, panes, changes |
 | [ui/lens_doc.rs](apps/desktop/src/ui/lens_doc.rs) | Ghost lines, change bars, focus and highlighting inside an editor |
 | [ui/finder.rs](apps/desktop/src/ui/finder.rs) | Open by name and search in files |
-| [workbench-core](crates/workbench-core/src) | File operations, layout storage, line diffs, merges, read-only git access and blame, difftastic |
+| [ui/terminal.rs](apps/desktop/src/ui/terminal.rs) | The terminal panel |
+| [workbench-core](crates/workbench-core/src) | File operations, layout storage, settings, line diffs, merges, git access (read-only, plus worktrees), blame, difftastic |
 | [workbench-text](crates/workbench-text/src) | Syntax highlighting, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |
 
@@ -162,8 +186,8 @@ PI_CODING_AGENT_DIR=/tmp/pi-fake PI_WORKBENCH_PI_ARGS="--provider fake --model f
 ## Current limitations
 
 - UTF-8 files only; 4 MiB per file, 64 open documents
-- No LSP or terminal yet
+- No LSP yet; one colour theme
+- The terminal has no text selection or copy yet
 - Focus fades unchanged lines rather than folding them; the editor needs equal line heights
-- Tab changes reset cursor and scroll position
-- Sessions share one checkout; two sessions editing the same lines will conflict
+- Sessions in one window share its checkout; two sessions editing the same lines will conflict (use a worktree session to keep them apart)
 - Workspace layouts are saved on normal close; unsaved edits have no crash recovery

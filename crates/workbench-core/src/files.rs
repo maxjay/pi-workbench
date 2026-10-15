@@ -24,11 +24,10 @@ pub fn list_directory(root: &Path, directory: &Path) -> Result<Vec<Entry>> {
         if ty.is_symlink() || !(ty.is_dir() || ty.is_file()) {
             continue;
         }
-        if ty.is_dir()
-            && matches!(
-                item.file_name().to_str(),
-                Some(".git" | "target" | "node_modules")
-            )
+        // A linked worktree's `.git` is a file.
+        let name = item.file_name();
+        if name == ".git"
+            || (ty.is_dir() && matches!(name.to_str(), Some("target" | "node_modules")))
         {
             continue;
         }
