@@ -122,6 +122,8 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
         },
     )
     .style(|s| s.flex_col().width_full())
+    .scroll()
+    .style(|s| s.size_full().min_height(0))
 }
 
 /// Every changed file as a flat list, by path.
@@ -137,7 +139,8 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
         }),
         dyn_stack(
             move || changes.get(),
-            |change| change.path.clone(),
+            // Keyed by the whole change, so new counts rebuild the row.
+            |change| (change.path.clone(), change.added, change.removed, change.binary),
             move |change: FileChange| {
                 let state = open_state.clone();
                 let relative = change
@@ -191,6 +194,8 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
         .style(|s| s.flex_col().width_full()),
     ))
     .style(|s| s.width_full())
+    .scroll()
+    .style(|s| s.size_full().min_height(0))
 }
 
 pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
@@ -200,8 +205,6 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
         tree(state.clone()).style(move |s| s.apply_if(changed_only.get(), |s| s.hide())),
         changed_files(state.clone()).style(move |s| s.apply_if(!changed_only.get(), |s| s.hide())),
     ))
-    .style(|s| s.width_full())
-    .scroll()
     .style(|s| s.size_full().min_height(0));
     Stack::vertical((
         Stack::horizontal((
