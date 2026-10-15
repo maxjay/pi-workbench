@@ -99,6 +99,7 @@ pub(super) fn terminal_view(
     state: Rc<Workbench>,
     slot: Rc<TerminalSlot>,
     visible: Memo<bool>,
+    wanted: Memo<bool>,
     zoom: f64,
 ) -> impl IntoView {
     let key = slot.key;
@@ -222,6 +223,12 @@ pub(super) fn terminal_view(
                     body_id.request_focus();
                 }
             });
+        }
+    });
+    // Its pane focused by keyboard: the keys come here.
+    Effect::new(move |_| {
+        if wanted.get() {
+            floem::action::exec_after_animation_frame(move |_| body_id.request_focus());
         }
     });
     let focus_in = state.clone();

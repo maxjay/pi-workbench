@@ -82,7 +82,14 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
     // A session can be dragged into a pane, or onto its edge to split it.
     .on_event_cont(el::PointerDown, {
         let state = select_state.clone();
-        move |_, _| state.press_tab(None, Tab::Session(key))
+        move |_, event| {
+            if event
+                .button
+                .is_none_or(|b| b == floem::ui_events::pointer::PointerButton::Primary)
+            {
+                state.press_tab(None, Tab::Session(key))
+            }
+        }
     })
     .on_event_stop(el::Click, move |_, _| {
         select_state.show_session(key);

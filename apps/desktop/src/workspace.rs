@@ -91,6 +91,9 @@ pub struct PopupMenu {
     pub items: Vec<MenuItem>,
 }
 
+/// A file dropped before it was read: its pane, place and whether split off.
+type Dropped = (PathBuf, PaneId, Option<usize>, bool);
+
 /// The zoom steps, as in a browser.
 const ZOOMS: [f64; 13] = [
     0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
@@ -228,6 +231,10 @@ pub struct Workbench {
     bar_views: RefCell<BTreeMap<PaneId, floem::ViewId>>,
     tab_views: RefCell<Vec<(PaneId, Tab, floem::ViewId)>>,
     menu: RwSignal<Option<PopupMenu>>,
+    /// A file dropped before it was read: the pane it goes to, its place in
+    /// the tabs, and whether that pane was split off for it (and so closes
+    /// if the file cannot be opened).
+    dropped: RefCell<Option<Dropped>>,
     /// Text the picker opens with.
     prefill: RefCell<Option<String>>,
     jump: RwSignal<Option<Jump>>,
@@ -343,6 +350,7 @@ impl Workbench {
             bar_views: RefCell::new(BTreeMap::new()),
             tab_views: RefCell::new(Vec::new()),
             menu: RwSignal::new(None),
+            dropped: RefCell::new(None),
             prefill: RefCell::new(None),
             jump: RwSignal::new(None),
             start_session: Cell::new(false),
@@ -584,6 +592,16 @@ impl Workbench {
         }
     }
 
+    /// Whether keys go to a terminal: one has the keyboard, and the focused
+    /// pane shows a terminal. A terminal left by keyboard, or replaced while
+    /// it had the keys, does not keep them.
+    pub fn keys_in_terminal(&self) -> bool {
+        self.terminal_focused.get_untracked()
+            && matches!(
+                self.panes.focused_pane().active.get_untracked(),
+                Some(Tab::Terminal(_))
+            )
+    }
     pub fn terminal_focused(&self) -> ReadSignal<bool> {
         self.terminal_focused.read_only()
     }
@@ -823,6 +841,18 @@ impl Workbench {
     fn make_file(&self, text: &str) -> Result<PathBuf, String> {
         let (relative, exists) = self.describe_new_file(text)?;
         let path = self.root.join(&relative);
+        // A link inside the workspace must not lead the new file out of it.
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let existing = path
+            .ancestors()
+            .find(|p| p.exists())
+            .and_then(|p| p.canonicalize().ok());
+        if !existing.is_some_and(|p| p.starts_with(&root)) {
+            return Err(format!("{} is outside the workspace", relative.display()));
+        }
         if !exists {
             let made = path
                 .parent()
@@ -883,12 +913,33 @@ impl Workbench {
                         self.panes.show(pane.id, Tab::File(path.clone()));
                     }
                 }
+                self.forget_drop(&path, true);
                 self.status.set("Ready".into());
             }
             Err(err) => {
                 self.drop_jump(&path);
+                self.forget_drop(&path, false);
                 self.status.set(err)
             }
+        }
+    }
+
+    /// A dropped file has opened (it takes its place among the tabs) or has
+    /// not (a pane split off for it closes again).
+    fn forget_drop(&self, path: &Path, opened: bool) {
+        let Some((dropped, pane, index, split)) = self.dropped.borrow_mut().take() else {
+            return;
+        };
+        if dropped != path {
+            *self.dropped.borrow_mut() = Some((dropped, pane, index, split));
+            return;
+        }
+        if opened {
+            if index.is_some() {
+                self.panes.move_tab(pane, &Tab::File(dropped), pane, index);
+            }
+        } else if split {
+            self.close_if_empty(pane);
         }
     }
 
@@ -1618,12 +1669,20 @@ impl Workbench {
             None => {
                 match &tab {
                     Tab::File(path) if self.documents.get(path).is_none() => {
+                        *self.dropped.borrow_mut() =
+                            Some((path.clone(), target, index, side.is_some()));
                         self.open(path.clone(), target);
+                        // Refused at once, as past the open-file limit.
+                        if !self.pending.borrow().contains(path) {
+                            self.forget_drop(path, false);
+                        }
                     }
-                    _ => self.panes.show(target, tab.clone()),
-                }
-                if let Some(index) = index {
-                    self.panes.move_tab(target, &tab, target, Some(index));
+                    _ => {
+                        self.panes.show(target, tab.clone());
+                        if let Some(index) = index {
+                            self.panes.move_tab(target, &tab, target, Some(index));
+                        }
+                    }
                 }
                 if let Tab::Session(key) = tab {
                     self.sessions.select(key);
@@ -2021,6 +2080,46 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_file_that_cannot_open_takes_its_split_with_it() {
+        with_workspace(|state, _| {
+            let pane = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            state.select_tab(pane, Tab::File(a.clone()));
+            let unread = state.root.join("unread.rs");
+            state.pending.borrow_mut().insert(unread.clone());
+            let right = state.panes.split(pane, Direction::Right).id;
+            *state.dropped.borrow_mut() = Some((unread.clone(), right, None, true));
+            state.finish_open(unread, Err("binary".into()));
+            assert!(state.panes.pane(right).is_none());
+            assert_eq!(state.panes.all().len(), 1);
+            // Opened, it goes where it was dropped among the tabs.
+            let b = file(&state, "b.rs", "b");
+            state.select_tab(pane, Tab::File(b.clone()));
+            let late = state.root.join("late.rs");
+            state.pending.borrow_mut().insert(late.clone());
+            *state.dropped.borrow_mut() = Some((late.clone(), pane, Some(0), false));
+            focused(&state).requested.set(Some(late.clone()));
+            state.finish_open(late.clone(), Ok("late".into()));
+            assert_eq!(focused(&state).tabs.get_untracked()[0], Tab::File(late));
+        });
+    }
+
+    #[test]
+    fn keys_leave_a_terminal_when_its_pane_does_not_show_it() {
+        with_workspace(|state, _| {
+            let pane = focused(&state).id;
+            let key = state.new_terminal(pane);
+            state.set_terminal_focused(true);
+            assert!(state.keys_in_terminal());
+            let a = file(&state, "a.rs", "a");
+            state.select_tab(pane, Tab::File(a));
+            assert!(!state.keys_in_terminal(), "the terminal tab was left");
+            state.select_tab(pane, Tab::Terminal(key));
+            assert!(state.keys_in_terminal());
+        });
+    }
+
+    #[test]
     fn new_files_are_made_inside_the_workspace() {
         with_workspace(|state, _| {
             assert!(state.describe_new_file("../out.rs").is_err());
@@ -2040,6 +2139,16 @@ mod tests {
                 Ok((PathBuf::from("src/new.rs"), true))
             );
             assert!(state.describe_new_file("src").is_err(), "a folder");
+            // Through a link that leads out of the workspace: refused.
+            let outside = tempfile::tempdir().unwrap();
+            #[cfg(unix)]
+            let linked = std::os::unix::fs::symlink(outside.path(), state.root.join("link"));
+            #[cfg(windows)]
+            let linked = std::os::windows::fs::symlink_dir(outside.path(), state.root.join("link"));
+            if linked.is_ok() {
+                assert!(state.make_file("link/escape.rs").is_err());
+                assert!(!outside.path().join("escape.rs").exists());
+            }
         });
     }
 

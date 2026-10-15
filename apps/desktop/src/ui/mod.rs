@@ -724,7 +724,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 return EventPropagation::Continue;
             }
             // The shell gets Ctrl keys such as Ctrl+P and Ctrl+W, except these.
-            let in_terminal = keyboard_state.terminal_focused().get_untracked();
+            let in_terminal = keyboard_state.keys_in_terminal();
             if in_terminal
                 && !matches!(
                     command,

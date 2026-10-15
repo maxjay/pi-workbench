@@ -551,6 +551,19 @@ fn file_area(
     });
     // Carry out jumps once the file is showing and its diff is ready.
     let (jump_handle, jump_state) = (handle.clone(), state.clone());
+    // Moving here by keyboard from a terminal brings the keys along, so
+    // typing stops going to the shell.
+    let (rescue_state, editor_view) = (state.clone(), handle.editor_view_id);
+    Effect::new(move |_| {
+        let here = rescue_state.focused().get() == id && active.get().is_some();
+        if here && rescue_state.terminal_focused().get_untracked() {
+            floem::action::exec_after_animation_frame(move |_| {
+                if let Some(view) = editor_view.try_get_untracked().flatten() {
+                    view.request_focus();
+                }
+            });
+        }
+    });
     let jump = state.jump();
     Effect::new(move |_| {
         let Some(request) = jump.get() else { return };
@@ -641,6 +654,26 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
     });
     let session_state = state.clone();
     let session_visible = Memo::new(move |_| session_key.get().is_some());
+    // Keys left in a terminal follow focus here, to the composer; an empty
+    // pane takes them from the terminal too.
+    let keys_state = state.clone();
+    Effect::new(move |_| {
+        if focused.get() != id || !keys_state.terminal_focused().get_untracked() {
+            return;
+        }
+        match active_tab.get() {
+            Some(Tab::Session(key)) => {
+                if let Some(session) = keys_state.sessions.find(key) {
+                    session.focus_composer(session.draft.text().len());
+                }
+            }
+            None => {
+                floem::action::clear_focus();
+                keys_state.set_terminal_focused(false);
+            }
+            _ => {}
+        }
+    });
     let zoom = pane.zoom;
     // A new zoom lays the session or terminal out afresh at the new size.
     let session = dyn_container(
@@ -664,6 +697,8 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
     });
     let terminal_state = state.clone();
     let terminal_visible = Memo::new(move |_| terminal_key.get().is_some());
+    // The terminal takes the keys when its pane is focused, as by keyboard.
+    let terminal_wanted = Memo::new(move |_| focused.get() == id && terminal_key.get().is_some());
     let terminal = dyn_container(
         move || (terminal_key.get(), zoom.get().to_bits()),
         move |(key, zoom)| match key.and_then(|key| terminal_state.terminal(key)) {
@@ -671,6 +706,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
                 terminal_state.clone(),
                 slot,
                 terminal_visible,
+                terminal_wanted,
                 f64::from_bits(zoom),
             )
             .into_any(),

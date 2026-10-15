@@ -115,8 +115,12 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
             // A file can be dragged into a pane, or onto its edge to split it.
             .on_event_cont(el::PointerDown, {
                 let (state, path) = (action_state.clone(), path.clone());
-                move |_, _| {
-                    if !directory {
+                move |_, event| {
+                    if !directory
+                        && event
+                            .button
+                            .is_none_or(|b| b == floem::ui_events::pointer::PointerButton::Primary)
+                    {
                         state.press_tab(None, Tab::File(path.clone()));
                     }
                 }
