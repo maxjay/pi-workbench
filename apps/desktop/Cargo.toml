@@ -14,6 +14,8 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 notify = "8.2.0"
 workbench-text.workspace = true
 alacritty_terminal = "0.26.0"
+image = { version = "0.25", default-features = false, features = ["png"] }
+floem_renderer = { git = "https://github.com/lapce/floem", rev = "1351ffb162faeb8be983f1301d718a0d5fb59c27" }
 
 [dev-dependencies]
 tempfile.workspace = true

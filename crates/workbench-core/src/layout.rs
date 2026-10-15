@@ -22,6 +22,9 @@ pub struct Layout {
     pub panes: Option<SavedNode>,
     /// The focused pane, by its position among the panes in reading order.
     pub focused: usize,
+    /// The pet is in a window of its own, or hidden.
+    pub pet_popped: bool,
+    pub pet_hidden: bool,
 }
 
 /// A tab as saved: a file relative to the workspace, a Pi session by its
@@ -163,6 +166,8 @@ impl Default for Layout {
             active: [None, None],
             panes: None,
             focused: 0,
+            pet_popped: false,
+            pet_hidden: false,
         }
     }
 }

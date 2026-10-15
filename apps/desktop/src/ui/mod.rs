@@ -5,6 +5,7 @@ mod explorer;
 mod finder;
 mod lens_doc;
 mod overlays;
+mod pet;
 mod rail;
 mod session;
 mod terminal;
@@ -511,6 +512,9 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     });
     state.start_with_session();
     state.restore();
+    state.pet.start();
+    pet::follow_popping(state.clone(), window);
+    let shake = pet::shake(&state.pet);
     if let Some(err) = settings_error.or_else(color::follow_settings) {
         state.report(err);
     }
@@ -677,23 +681,30 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        pet::docked(state.clone()),
         popup_menu(state.clone()),
         drag_ghost(state.clone()),
         finder::finder(state.clone()),
         confirmation(state),
     ))
-    .style(|s| {
+    .style(move |s| {
+        // A /kill shakes everything.
+        let (x, y) = shake.get();
         s.size_full()
             .background(color::bg())
             .color(color::text())
             .font_size(13)
+            .translate_x(x)
+            .translate_y(y)
     })
     // Tab drags are followed here, over the whole window.
     .on_event_cont_with_config(el::PointerMove, CAPTURE, {
         let state = pointer_state.clone();
         move |_, event| {
             let held = !event.current.buttons.is_empty();
-            state.pointer_moved(event.current.logical_point(), held);
+            let at = event.current.logical_point();
+            state.pointer_moved(at, held);
+            state.pet.pointer_at(at);
         }
     })
     .on_event_cont_with_config(el::PointerDown, CAPTURE, {

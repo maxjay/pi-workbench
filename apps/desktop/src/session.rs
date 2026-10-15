@@ -139,6 +139,22 @@ pub struct Hooks {
     pub settled: Box<dyn Fn()>,
     /// Snapshots the workspace before a prompt; the callback gets a tree id.
     pub snapshot: SnapshotHook,
+    /// Something for the pet to do, from this session (by key): an
+    /// extension's `pet` status, such as `kill:<id>` or `say:<text>`.
+    pub cue: Box<dyn Fn(u64, String)>,
+}
+
+/// What a `pet` status asks of the pet, without the part that only makes
+/// each one distinct (`kill:1729…` is a kill).
+pub fn pet_cue(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(match text.split_once(':') {
+        Some(("kill", _)) => "kill".into(),
+        _ => text.to_string(),
+    })
 }
 
 /// Tools whose effects on disk the workbench cannot predict from their arguments.
@@ -490,6 +506,15 @@ impl Session {
         let text = text.trim().to_string();
         if text.is_empty() || self.sending.get() {
             return false;
+        }
+        // A stand-in for a Pi extension's /kill, until one is installed: the
+        // pet takes it here and Pi never sees it.
+        let kill_extension = self
+            .commands
+            .with_untracked(|commands| commands.iter().any(|c| c.name == "kill"));
+        if text == "/kill" && !kill_extension {
+            (self.hooks.cue)(self.key, "kill".into());
+            return true;
         }
         if self.working.get_untracked() {
             let sent = self.with_process(|pi| {
@@ -898,6 +923,13 @@ impl Session {
                     EditType::Other,
                 );
             }
+            Event::Status { key, text } => {
+                if key == "pet"
+                    && let Some(cue) = text.as_deref().and_then(pet_cue)
+                {
+                    (self.hooks.cue)(self.key, cue);
+                }
+            }
             Event::Exited(message) => {
                 self.process.borrow_mut().take();
                 self.pending_asks.set(0);
@@ -925,6 +957,11 @@ mod tests {
     use pi_client::AskKind;
     use serde_json::json;
 
+    thread_local! {
+        /// What sessions in these tests asked of the pet.
+        static CUES: RefCell<Vec<(u64, String)>> = const { RefCell::new(Vec::new()) };
+    }
+
     fn with_session(test: impl FnOnce(Rc<Session>, Rc<RefCell<Vec<bool>>>)) {
         let scope = Scope::new();
         scope.enter(|| {
@@ -936,6 +973,7 @@ mod tests {
                 files_changed: Box::new(move |tree| log.borrow_mut().push(tree)),
                 settled: Box::new(|| {}),
                 snapshot: Box::new(|done| done(None)),
+                cue: Box::new(|key, cue| CUES.with_borrow_mut(|cues| cues.push((key, cue)))),
             });
             let session = Session::new(
                 scope,
@@ -949,6 +987,36 @@ mod tests {
             test(session, changed);
         });
         scope.dispose();
+    }
+
+    #[test]
+    fn pet_cues_come_from_status_lines_and_a_stand_in_kill() {
+        assert_eq!(pet_cue("kill:1729000000"), Some("kill".into()));
+        assert_eq!(pet_cue(" say:hi there "), Some("say:hi there".into()));
+        assert_eq!(pet_cue("  "), None);
+        with_session(|session, _| {
+            CUES.with_borrow_mut(Vec::clear);
+            session.handle(Event::Status {
+                key: "pet".into(),
+                text: Some("kill:42".into()),
+            });
+            // Other extensions' status lines, and cleared ones, are not cues.
+            session.handle(Event::Status {
+                key: "git".into(),
+                text: Some("main".into()),
+            });
+            session.handle(Event::Status {
+                key: "pet".into(),
+                text: None,
+            });
+            // With no Pi extension called kill, the workbench takes /kill.
+            assert!(session.submit("/kill".into(), false));
+            assert!(!session.working.get_untracked(), "Pi never sees it");
+            assert_eq!(
+                CUES.with_borrow(Clone::clone),
+                vec![(1, "kill".to_string()), (1, "kill".to_string())]
+            );
+        });
     }
 
     #[test]

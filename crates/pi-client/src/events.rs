@@ -50,6 +50,11 @@ pub enum Event {
     },
     /// An extension replaced the prompt draft.
     SetDraft(String),
+    /// An extension set (or, with `None`, cleared) a status line by key.
+    Status {
+        key: String,
+        text: Option<String>,
+    },
     /// Emitted by the client, not Pi, when the process stops.
     Exited(String),
     Other,
@@ -127,6 +132,10 @@ fn ui_request(value: &Value) -> Event {
             error: value["notifyType"] == "error",
         },
         "set_editor_text" => Event::SetDraft(string(value, "text")),
+        "setStatus" => Event::Status {
+            key: string(value, "statusKey"),
+            text: value["statusText"].as_str().map(String::from),
+        },
         _ => Event::Other,
     }
 }
@@ -252,6 +261,20 @@ mod tests {
             decode(r#"{"type":"turn_start"}"#).unwrap(),
             Event::TurnStart
         );
+        let status = r#"{"type":"extension_ui_request","id":"u2","method":"setStatus","statusKey":"pet","statusText":"kill:17"}"#;
+        assert_eq!(
+            decode(status).unwrap(),
+            Event::Status {
+                key: "pet".into(),
+                text: Some("kill:17".into())
+            }
+        );
+        let cleared =
+            r#"{"type":"extension_ui_request","id":"u3","method":"setStatus","statusKey":"pet"}"#;
+        assert!(matches!(
+            decode(cleared).unwrap(),
+            Event::Status { text: None, .. }
+        ));
         assert_eq!(decode(r#"{"type":"queue_update"}"#).unwrap(), Event::Other);
         assert!(decode("not json").is_err());
     }

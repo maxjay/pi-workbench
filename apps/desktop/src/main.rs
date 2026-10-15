@@ -5,6 +5,7 @@ mod lens;
 mod markdown;
 mod origins;
 mod panes;
+mod pet;
 mod session;
 mod sessions;
 mod settings;

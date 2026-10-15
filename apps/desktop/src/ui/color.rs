@@ -94,6 +94,12 @@ pub fn follow_settings() -> Option<String> {
     }
 }
 
+/// Whether the theme is dark: its background is nearer black than white.
+pub fn is_dark() -> bool {
+    let c = bg().to_rgba8();
+    0.2126 * f64::from(c.r) + 0.7152 * f64::from(c.g) + 0.0722 * f64::from(c.b) < 128.0
+}
+
 pub fn bg() -> Color {
     read(|t| t.background)
 }

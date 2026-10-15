@@ -293,7 +293,7 @@ fn tool_card(state: Rc<Workbench>, entry: &Entry, zoom: f64) -> impl IntoView {
     })
 }
 
-fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
+pub(super) fn ask_card(session: Rc<Session>, entry: Rc<Entry>) -> impl IntoView {
     let Some(ask) = entry.ask.clone() else {
         return Empty::new().into_any();
     };

@@ -25,6 +25,16 @@ pub struct Sessions {
     active: RwSignal<Option<u64>>,
     next_key: Cell<u64>,
     recent: RwSignal<Vec<SessionSummary>>,
+    cue: RwSignal<Option<Cue>>,
+}
+
+/// Something a session asked the pet to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cue {
+    pub session: u64,
+    pub action: String,
+    /// Counts up, so the same cue twice is two cues.
+    pub serial: u64,
 }
 
 impl Sessions {
@@ -38,11 +48,21 @@ impl Sessions {
         status: RwSignal<String>,
     ) -> Rc<Self> {
         let recent = RwSignal::new(Vec::new());
+        let cue = RwSignal::new(None::<Cue>);
+        let serial = Cell::new(0u64);
         Rc::new_cyclic(|this: &std::rc::Weak<Self>| {
             let this = this.clone();
             Self {
                 scope,
                 hooks: Rc::new(Hooks {
+                    cue: Box::new(move |session, action| {
+                        serial.set(serial.get() + 1);
+                        cue.set(Some(Cue {
+                            session,
+                            action,
+                            serial: serial.get(),
+                        }));
+                    }),
                     files_changed: Box::new(files_changed),
                     snapshot: Box::new(snapshot),
                     settled: Box::new(move || {
@@ -59,10 +79,15 @@ impl Sessions {
                 active: RwSignal::new(None),
                 next_key: Cell::new(0),
                 recent,
+                cue,
             }
         })
     }
 
+    /// The latest thing a session asked the pet to do.
+    pub fn cue(&self) -> ReadSignal<Option<Cue>> {
+        self.cue.read_only()
+    }
     pub fn open(&self) -> ReadSignal<Vec<Rc<Session>>> {
         self.open.read_only()
     }

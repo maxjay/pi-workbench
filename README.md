@@ -19,6 +19,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Panes you arrange:** split any pane right or down as often as you like. Every pane holds tabs of files, Pi sessions and terminals, and tabs drag between panes or onto a pane's edge to split it. The layout is saved per workspace.
 - **Terminals, settings, worktrees:** terminal tabs anywhere, a commented settings file, and sessions that work in their own git worktree.
 - **One quick picker, extended by Pi:** files, commands and colour themes in one VS Code-style picker. Pi's own slash commands are in it too, including the ones your Pi extensions, prompt templates and skills add.
+- **A pet across your sessions:** Glitch keeps an eye on every session. It shows how the one in front is doing, says when the others finish or stop, and brings their questions to you to answer on the spot. It sits in the window or pops out into a little always-on-top window of its own.
 - **Themes:** 30 bundled themes, including Catppuccin, Dracula, Nord, Gruvbox, Solarized, One Half, GitHub and Monokai, or any `.tmTheme` file, with a live preview.
 - Background saves, and nothing on screen you have to learn first: one search box, and controls where they act.
 
@@ -142,6 +143,32 @@ The window is yours to arrange. Every pane is a row of tabs, and a tab is a file
 
 Clicking a session in the rail shows it where it already is, or in the focused pane. The panes, their tabs, sizes and zoom are saved per workspace, and the sessions in them resume when you reopen it.
 
+## Glitch, the pet
+
+![Glitch at the foot of the sessions rail, asking a session's question](docs/screenshots/pet.png)
+
+Glitch lives at the foot of the sessions rail and watches every session in the window.
+
+- **The front session first:** it works while that session works, waits when it needs you, and looks pleased when it finishes.
+- **News from the rest:** its bubble says when any session finishes a run or its Pi stops. Click the news to go to that session.
+- **Questions:** when an extension in any session asks something, the question appears in Glitch's bubble with its answers, so you can reply without going there. The front session's questions come first.
+- **Where it lives:** drag it anywhere in the window. Hover for **Pop out**, which moves it into a small window that stays on top of everything, and **Pop in** to bring it back. Drag that window by Glitch, who runs the way you drag. **Hide**, or *Pet: show or hide* in the command picker, puts it away. Whether it is popped out or hidden is saved per workspace.
+- **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
+
+Glitch also follows the pointer with its eyes, hops when clicked, and waves hello.
+
+**`/kill`** gets Glitch shot. The window shakes and Glitch is thrown across it, or, when popped out, its whole window is thrown across the screen. It lies there for a moment and gets up. Docked, it walks back to where it was; popped out, it stays where it landed. The shot is the one animation kept for this.
+
+The workbench handles `/kill` itself until a Pi extension provides one. [extensions/pet.ts](extensions/pet.ts) is that extension. It adds `/kill` and `/pet-say <text>` by setting Pi's `pet` status line, which any extension can do:
+
+```ts
+ctx.ui.setStatus("pet", `kill:${Date.now()}`); // shot and thrown
+ctx.ui.setStatus("pet", "say:Tests pass");     // said in its bubble
+ctx.ui.setStatus("pet", "wave");               // or "jump"
+```
+
+To install it, copy it into `~/.pi/agent/extensions/`.
+
 ## Terminals, settings and worktrees
 
 ![A terminal tab running git](docs/screenshots/terminal.png)
@@ -217,6 +244,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [ui/terminal.rs](apps/desktop/src/ui/terminal.rs) | A terminal tab |
 | [panes.rs](apps/desktop/src/panes.rs) | The pane tree: splits, tabs, moving, saving |
 | [ui/editor.rs](apps/desktop/src/ui/editor.rs) | A pane: its tab bar, dragging tabs, and what the active tab shows |
+| [pet.rs](apps/desktop/src/pet.rs) | Glitch: its animations, moods, news, questions, and the `/kill` timeline |
+| [ui/pet.rs](apps/desktop/src/ui/pet.rs) | Glitch on screen: the sprite, its bubble, docked or in its own window |
 | [workbench-core](crates/workbench-core/src) | File operations, layout storage, settings, line diffs, merges, git access (read-only, plus worktrees), blame, difftastic |
 | [workbench-text](crates/workbench-text/src) | Syntax highlighting, themes, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |

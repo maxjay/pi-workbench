@@ -5,6 +5,7 @@ use crate::{
     explorer::Explorer,
     lens::{Comparison, Lens},
     panes::{Direction, Pane, PaneId, Panes, Tab},
+    pet::Pet,
     session::Session,
     sessions::Sessions,
     syntax::Syntax,
@@ -195,6 +196,7 @@ pub struct Workbench {
     pub lens: Rc<Lens>,
     pub syntax: Rc<Syntax>,
     pub sessions: Rc<Sessions>,
+    pub pet: Rc<Pet>,
     pub panes: Rc<Panes>,
     scope: Scope,
     pending: RefCell<HashSet<PathBuf>>,
@@ -292,6 +294,7 @@ impl Workbench {
                 .unwrap_or_default();
             turns_lens.set_turns(turns);
         });
+        let pet = Pet::new(Scope::current(), sessions.clone());
         let panes = Panes::new(Scope::current());
         let (last_pane, last_terminal) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
         // The front session is the one in the focused pane, and Ctrl+` keeps
@@ -325,6 +328,7 @@ impl Workbench {
             lens,
             syntax: Syntax::new(Scope::current()),
             sessions,
+            pet,
             panes,
             scope: Scope::current(),
             pending: RefCell::new(HashSet::new()),
@@ -678,6 +682,12 @@ impl Workbench {
         files: Vec<(PathBuf, Result<String, String>)>,
         summaries: Vec<SessionSummary>,
     ) {
+        if self.pet.popped.get_untracked() != layout.pet_popped {
+            self.pet.popped.set(layout.pet_popped);
+        }
+        if self.pet.hidden.get_untracked() != layout.pet_hidden {
+            self.pet.hidden.set(layout.pet_hidden);
+        }
         for (path, result) in files {
             self.pending.borrow_mut().remove(&path);
             match result {
@@ -1743,6 +1753,8 @@ impl Workbench {
         let order = self.panes.tree().with_untracked(|tree| tree.leaves());
         let focused = self.panes.focused().get_untracked();
         layout.focused = order.iter().position(|&id| id == focused).unwrap_or(0);
+        layout.pet_popped = self.pet.popped.get_untracked();
+        layout.pet_hidden = self.pet.hidden.get_untracked();
         layout::save(&self.layout_path, &layout)
     }
 
@@ -1758,7 +1770,13 @@ impl Workbench {
         // A theme only previewed must not stay on in the other windows.
         self.dismiss_finder();
         match self.persist_layout() {
-            Ok(()) => (self.close_window)(),
+            Ok(()) => {
+                // The pet's own window goes with the workbench's.
+                if let Some(id) = self.pet.window.take() {
+                    floem::close_window(id);
+                }
+                (self.close_window)()
+            }
             Err(err) => self.status.set(format!("Could not save layout: {err}")),
         }
         self.dismiss_confirmation();
