@@ -16,12 +16,40 @@ pub struct SessionSummary {
     pub title: String,
     pub prompts: usize,
     pub modified: SystemTime,
+    /// The working directory recorded in the session header.
+    pub cwd: Option<String>,
 }
 
+/// Node's `os.homedir()`: `USERPROFILE` on Windows, `HOME` elsewhere.
 fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    let (first, second) = if cfg!(windows) {
+        ("USERPROFILE", "HOME")
+    } else {
+        ("HOME", "USERPROFILE")
+    };
+    std::env::var_os(first)
+        .or_else(|| std::env::var_os(second))
         .map(PathBuf::from)
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    match (path.strip_prefix('~'), home()) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(path),
+    }
+}
+
+/// The plain form Pi sees: Rust hands child processes `\\server\share`
+/// rather than `\\?\UNC\server\share`, and `C:\x` rather than `\\?\C:\x`.
+pub fn plain_cwd(cwd: &Path) -> String {
+    let cwd = cwd.to_string_lossy();
+    if let Some(unc) = cwd.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        cwd.strip_prefix(r"\\?\").unwrap_or(&cwd).to_string()
+    }
 }
 
 /// `PI_CODING_AGENT_DIR`, or `~/.pi/agent`.
@@ -31,16 +59,26 @@ pub fn agent_dir() -> Option<PathBuf> {
         .or_else(|| home().map(|home| home.join(".pi").join("agent")))
 }
 
-/// Where Pi keeps sessions for `cwd`, mirroring its own encoding: the path
+/// Where Pi keeps sessions for `cwd`. Precedence follows Pi:
+/// `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in the agent
+/// `settings.json`, then the per-folder default, whose name is the path
 /// without its leading separator, with `/`, `\` and `:` turned into `-`.
 pub fn session_dir(cwd: &Path) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_SESSION_DIR") {
-        return Some(PathBuf::from(dir));
+    if let Some(dir) = std::env::var("PI_CODING_AGENT_SESSION_DIR")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+    {
+        return Some(expand_home(&dir));
     }
-    let cwd = cwd.to_string_lossy();
-    // Pi sees the plain path, not the `\\?\` form `canonicalize` returns on Windows.
-    let cwd = cwd.strip_prefix(r"\\?\").unwrap_or(&cwd);
-    let trimmed = cwd.strip_prefix(['/', '\\']).unwrap_or(cwd);
+    let configured = agent_dir()
+        .and_then(|dir| fs::read_to_string(dir.join("settings.json")).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|settings| settings["sessionDir"].as_str().map(expand_home));
+    if configured.is_some() {
+        return configured;
+    }
+    let cwd = plain_cwd(cwd);
+    let trimmed = cwd.strip_prefix(['/', '\\']).unwrap_or(&cwd);
     let encoded: String = trimmed
         .chars()
         .map(|c| {
@@ -81,6 +119,7 @@ pub fn summarize(path: &Path) -> Option<SessionSummary> {
     let file = fs::File::open(path).ok()?;
     let modified = file.metadata().and_then(|m| m.modified()).ok()?;
     let mut id = None;
+    let mut cwd = None;
     let mut name = None;
     let mut first_prompt = None;
     let mut prompts = 0;
@@ -89,7 +128,10 @@ pub fn summarize(path: &Path) -> Option<SessionSummary> {
             continue;
         };
         match entry["type"].as_str() {
-            Some("session") => id = entry["id"].as_str().map(String::from),
+            Some("session") => {
+                id = entry["id"].as_str().map(String::from);
+                cwd = entry["cwd"].as_str().map(String::from);
+            }
             Some("session_info") => name = entry["name"].as_str().map(String::from),
             Some("message") if entry["message"]["role"] == "user" => {
                 prompts += 1;
@@ -112,11 +154,23 @@ pub fn summarize(path: &Path) -> Option<SessionSummary> {
         title,
         prompts,
         modified,
+        cwd,
     })
 }
 
-/// Sessions for `cwd`, newest first.
+fn same_dir(a: &str, b: &str) -> bool {
+    let normal = |p: &str| {
+        let p = p.replace('\\', "/");
+        let p = p.trim_end_matches('/').to_string();
+        if cfg!(windows) { p.to_lowercase() } else { p }
+    };
+    normal(a) == normal(b)
+}
+
+/// Sessions for `cwd`, newest first. A shared session folder can hold other
+/// projects' sessions; resuming one would run Pi there, so those are left out.
 pub fn list(cwd: &Path) -> Vec<SessionSummary> {
+    let plain = plain_cwd(cwd);
     let Some(dir) = session_dir(cwd) else {
         return Vec::new();
     };
@@ -128,6 +182,7 @@ pub fn list(cwd: &Path) -> Vec<SessionSummary> {
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
         .filter_map(|path| summarize(&path))
+        .filter(|s| s.cwd.as_deref().is_none_or(|c| same_dir(c, &plain)))
         .collect();
     sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
     sessions
@@ -178,6 +233,31 @@ mod tests {
     }
 
     #[test]
+    fn listing_skips_other_projects_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = |name: &str, cwd: &str| {
+            let header = serde_json::json!({"type": "session", "id": name, "cwd": cwd});
+            fs::write(
+                dir.path().join(format!("{name}.jsonl")),
+                format!(
+                    "{header}
+"
+                ),
+            )
+            .unwrap();
+        };
+        session("mine", "/work/proj/");
+        session("theirs", "/work/other");
+        let summaries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| summarize(&e.unwrap().path()))
+            .filter(|s| s.cwd.as_deref().is_none_or(|c| same_dir(c, "/work/proj")))
+            .collect();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "mine");
+    }
+
+    #[test]
     fn session_dirs_match_pis_encoding() {
         let encoded = |cwd: &str| {
             session_dir(Path::new(cwd))
@@ -190,6 +270,7 @@ mod tests {
         if std::env::var_os("PI_CODING_AGENT_SESSION_DIR").is_none() {
             assert_eq!(encoded("/home/max/proj"), "--home-max-proj--");
             assert_eq!(encoded(r"\\?\C:\Users\Max\proj"), "--C--Users-Max-proj--");
+            assert_eq!(encoded(r"\\?\UNC\srv\share\p"), "---srv-share-p--");
         }
     }
 }
