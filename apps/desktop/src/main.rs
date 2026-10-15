@@ -1,8 +1,10 @@
-mod agent;
 mod changes;
 mod commands;
 mod documents;
 mod explorer;
+mod markdown;
+mod session;
+mod sessions;
 mod ui;
 mod workspace;
 

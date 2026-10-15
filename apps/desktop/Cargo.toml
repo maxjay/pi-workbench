@@ -10,6 +10,7 @@ workbench-core.workspace = true
 pi-client.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [dev-dependencies]
 tempfile.workspace = true

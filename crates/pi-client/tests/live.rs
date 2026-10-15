@@ -47,7 +47,7 @@ fn pi_edits_a_file_and_reports_each_step() {
         ..Launch::default()
     };
     let (send, events) = mpsc::channel();
-    let mut pi = PiProcess::spawn(&launch, work.path(), move |event| {
+    let mut pi = PiProcess::spawn(&launch, work.path(), None, move |event| {
         let _ = send.send(event);
     })
     .unwrap();

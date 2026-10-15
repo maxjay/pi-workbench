@@ -19,6 +19,28 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
     let layout = state.layout();
     let focus_state = state.clone();
     let tabs_state = state.clone();
+    // Only the primary pane hosts the conversation.
+    let conversation = state.conversation();
+    let showing_conversation = move || pane == Pane::Primary && conversation.get();
+    let conversation_state = state.clone();
+    let conversation_tab = Label::new("π  Conversation")
+        .style(move |s| {
+            s.padding_horiz(14)
+                .height(36)
+                .items_center()
+                .flex_shrink(0.0_f32)
+                .cursor(CursorStyle::Pointer)
+                .border_right(1)
+                .border_bottom(2)
+                .border_color(BORDER)
+                .apply_if(showing_conversation(), |s| {
+                    s.background(BG).border_color(ACCENT)
+                })
+                .apply_if(pane != Pane::Primary, |s| s.hide())
+        })
+        .on_event_stop(el::Click, move |_, _| {
+            conversation_state.show_conversation()
+        });
     let tabs = dyn_stack(
         move || docs.get(),
         |doc| doc.path().clone(),
@@ -66,20 +88,23 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     .border_right(1)
                     .border_bottom(2)
                     .border_color(BORDER)
-                    .apply_if(active.get().as_ref() == Some(&selected_path), |s| {
-                        s.background(BG).border_color(ACCENT)
-                    })
+                    .apply_if(
+                        !showing_conversation() && active.get().as_ref() == Some(&selected_path),
+                        |s| s.background(BG).border_color(ACCENT),
+                    )
             })
         },
     )
-    .style(|s| s.flex_row().height(36))
-    .scroll()
-    .style(|s| {
-        s.width_full()
-            .height(36)
-            .flex_shrink(0.0_f32)
-            .background(PANEL)
-    });
+    .style(|s| s.flex_row().height(36));
+    let tabs = Stack::horizontal((conversation_tab, tabs))
+        .style(|s| s.height(36))
+        .scroll()
+        .style(|s| {
+            s.width_full()
+                .height(36)
+                .flex_shrink(0.0_f32)
+                .background(PANEL)
+        });
 
     let editor = text_editor("")
         .styling(super::code_styling())
@@ -144,7 +169,20 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             .apply_if(active.get().is_some(), |s| s.hide())
     });
     let editor = editor.style(move |s| s.apply_if(active.get().is_none(), |s| s.hide()));
-    let body = Stack::new((editor, empty_hint)).style(|s| s.size_full().min_height(0).min_width(0));
+    let files = Stack::new((editor, empty_hint)).style(move |s| {
+        s.size_full()
+            .min_height(0)
+            .min_width(0)
+            .apply_if(showing_conversation(), |s| s.hide())
+    });
+    let chat = if pane == Pane::Primary {
+        super::session::conversation(state.clone())
+            .style(move |s| s.apply_if(!showing_conversation(), |s| s.hide()))
+            .into_any()
+    } else {
+        Empty::new().into_any()
+    };
+    let body = Stack::new((files, chat)).style(|s| s.size_full().min_height(0).min_width(0));
     let title_state = state.clone();
     Stack::vertical((
         tabs,
@@ -159,8 +197,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                 })
                 .unwrap_or_else(|| format!("Pane {}", pane.index() + 1))
         })
-        .style(|s| {
-            s.color(MUTED)
+        .style(move |s| {
+            s.apply_if(showing_conversation(), |s| s.hide())
+                .color(MUTED)
                 .font_size(11)
                 .height(28)
                 .padding_horiz(12)
