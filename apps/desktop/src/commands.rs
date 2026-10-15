@@ -1,6 +1,7 @@
 //! One command list supplies palette labels and actual keyboard bindings.
 use crate::{
     lens::Since,
+    panes::Direction,
     workspace::{Finder, Workbench},
 };
 use floem::prelude::*;
@@ -13,6 +14,20 @@ pub enum Command {
     CloseFile,
     Reload,
     Split,
+    SplitDown,
+    ClosePane,
+    MaximizePane,
+    /// Moves focus to the pane on one side.
+    FocusPane(Direction),
+    /// Moves the focused tab to the pane on one side.
+    MoveTab(Direction),
+    NextTab,
+    PreviousTab,
+    /// Text size in the focused pane.
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    NewFile,
     Conversation,
     StopSession,
     NewSession,
@@ -38,6 +53,7 @@ pub enum Command {
     FindInFiles,
     Explorer,
     Terminal,
+    NewTerminal,
     ColorTheme,
     MoveExplorer,
     Refresh,
@@ -57,6 +73,23 @@ pub const COMMANDS: &[Command] = &[
     Command::CloseFile,
     Command::Reload,
     Command::Split,
+    Command::SplitDown,
+    Command::ClosePane,
+    Command::MaximizePane,
+    Command::FocusPane(Direction::Left),
+    Command::FocusPane(Direction::Right),
+    Command::FocusPane(Direction::Up),
+    Command::FocusPane(Direction::Down),
+    Command::MoveTab(Direction::Left),
+    Command::MoveTab(Direction::Right),
+    Command::MoveTab(Direction::Up),
+    Command::MoveTab(Direction::Down),
+    Command::NextTab,
+    Command::PreviousTab,
+    Command::ZoomIn,
+    Command::ZoomOut,
+    Command::ZoomReset,
+    Command::NewFile,
     Command::Conversation,
     Command::StopSession,
     Command::NewSession,
@@ -89,6 +122,7 @@ pub const COMMANDS: &[Command] = &[
     Command::OpenSettings,
     Command::Explorer,
     Command::Terminal,
+    Command::NewTerminal,
     Command::ColorTheme,
     Command::MoveExplorer,
     Command::Refresh,
@@ -120,6 +154,34 @@ const fn ctrl_shift(key: &'static str) -> Option<Shortcut> {
         shift: true,
         alt: false,
     })
+}
+
+const fn ctrl_alt(key: &'static str) -> Option<Shortcut> {
+    Some(Shortcut {
+        key,
+        ctrl: true,
+        shift: false,
+        alt: true,
+    })
+}
+
+const fn ctrl_alt_shift(key: &'static str) -> Option<Shortcut> {
+    Some(Shortcut {
+        key,
+        ctrl: true,
+        shift: true,
+        alt: true,
+    })
+}
+
+/// Arrow key names for a direction.
+const fn arrow(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Left => "left",
+        Direction::Right => "right",
+        Direction::Up => "up",
+        Direction::Down => "down",
+    }
 }
 
 const fn alt(key: &'static str) -> Option<Shortcut> {
@@ -220,10 +282,37 @@ impl Command {
             Self::OpenFolder => ("Open folder in new window", None),
             Self::Save => ("Save active file", ctrl("s")),
             Self::SaveAll => ("Save all files", None),
-            Self::CloseFile => ("Close active file", ctrl("w")),
+            Self::CloseFile => ("Close tab", ctrl("w")),
             Self::Reload => ("Reload active file from disk", None),
-            Self::Split => ("Toggle second editor pane", ctrl("\\")),
-            Self::Conversation => ("Show conversation", ctrl("j")),
+            Self::Split => ("Split right", ctrl("\\")),
+            Self::SplitDown => ("Split down", ctrl_shift("\\")),
+            Self::ClosePane => ("Close pane", None),
+            Self::MaximizePane => ("Maximise or restore pane", ctrl_shift("m")),
+            Self::FocusPane(direction) => (
+                match direction {
+                    Direction::Left => "Focus the pane to the left",
+                    Direction::Right => "Focus the pane to the right",
+                    Direction::Up => "Focus the pane above",
+                    Direction::Down => "Focus the pane below",
+                },
+                ctrl_alt(arrow(direction)),
+            ),
+            Self::MoveTab(direction) => (
+                match direction {
+                    Direction::Left => "Move tab to the left",
+                    Direction::Right => "Move tab to the right",
+                    Direction::Up => "Move tab up",
+                    Direction::Down => "Move tab down",
+                },
+                ctrl_alt_shift(arrow(direction)),
+            ),
+            Self::NextTab => ("Next tab in the pane", ctrl("pagedown")),
+            Self::PreviousTab => ("Previous tab in the pane", ctrl("pageup")),
+            Self::ZoomIn => ("Zoom in (this pane)", ctrl("=")),
+            Self::ZoomOut => ("Zoom out (this pane)", ctrl("-")),
+            Self::ZoomReset => ("Reset zoom (this pane)", ctrl("0")),
+            Self::NewFile => ("New file…", None),
+            Self::Conversation => ("Show Pi session", ctrl("j")),
             Self::StopSession => ("Stop Pi in this session", None),
             Self::NewSession => ("New Pi session", ctrl("n")),
             Self::NewWorktreeSession => ("New Pi session in its own worktree", None),
@@ -251,7 +340,8 @@ impl Command {
             Self::QuickOpen => ("Open file by name", ctrl("p")),
             Self::FindInFiles => ("Search in files", ctrl_shift("f")),
             Self::Explorer => ("Toggle explorer", ctrl("b")),
-            Self::Terminal => ("Toggle terminal", ctrl("`")),
+            Self::Terminal => ("Terminal, or back to where you were", ctrl("`")),
+            Self::NewTerminal => ("New terminal", ctrl_shift("`")),
             Self::ColorTheme => ("Colour theme…", ctrl("t")),
             Self::MoveExplorer => ("Move explorer to opposite side", None),
             Self::Refresh => ("Refresh expanded folders", None),
@@ -287,26 +377,45 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::SaveAll => state.documents.save_all(),
         Command::CloseFile => state.close_active(),
         Command::Reload => state.reload_active(),
-        Command::Split => state.toggle_split(),
-        Command::Conversation => state.show_conversation(),
+        Command::Split => state.split(Direction::Right),
+        Command::SplitDown => state.split(Direction::Down),
+        Command::ClosePane => state.close_pane(state.focused().get_untracked()),
+        Command::MaximizePane => state.toggle_maximized(),
+        Command::FocusPane(direction) => state.focus_direction(direction),
+        Command::MoveTab(direction) => state.move_tab(direction),
+        Command::NextTab => state.cycle_tab(true),
+        Command::PreviousTab => state.cycle_tab(false),
+        Command::ZoomIn => state.zoom(state.focused().get_untracked(), 1),
+        Command::ZoomOut => state.zoom(state.focused().get_untracked(), -1),
+        Command::ZoomReset => state.zoom(state.focused().get_untracked(), 0),
+        Command::NewFile => state.new_file(),
+        Command::Conversation => {
+            state.show_conversation();
+        }
         Command::StopSession => {
             if let Some(session) = state.sessions.active_untracked() {
                 session.stop();
             }
         }
-        Command::NewSession => {
-            state.sessions.create();
-            state.show_conversation();
-        }
+        Command::NewSession => state.new_session(),
         Command::NewWorktreeSession => state.new_worktree_session(),
         Command::CloseSession => {
             if let Some(session) = state.sessions.active_untracked() {
-                state.sessions.close(session.key);
+                state.close_session(session.key);
             }
         }
-        Command::NextSession => state.sessions.cycle(true),
-        Command::PreviousSession => state.sessions.cycle(false),
-        Command::Session(n) => state.sessions.select_index(usize::from(n) - 1),
+        Command::NextSession | Command::PreviousSession | Command::Session(_) => {
+            match command {
+                Command::NextSession => state.sessions.cycle(true),
+                Command::PreviousSession => state.sessions.cycle(false),
+                Command::Session(n) => state.sessions.select_index(usize::from(n) - 1),
+                _ => {}
+            }
+            // The session switched to comes into view.
+            if let Some(session) = state.sessions.active_untracked() {
+                state.show_session(session.key);
+            }
+        }
         Command::Since(since) => state.lens.set_since(since),
         Command::ChangedOnly => state.lens.toggle_changed_only(),
         Command::Focus => state.lens.toggle_focus(),
@@ -321,7 +430,8 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::QuickOpen => state.open_finder(Finder::Files),
         Command::FindInFiles => state.open_finder(Finder::Search),
         Command::Explorer => state.toggle_explorer(),
-        Command::Terminal => state.toggle_terminal(),
+        Command::Terminal => state.show_terminal(),
+        Command::NewTerminal => state.new_terminal_here(),
         Command::ColorTheme => state.open_finder(Finder::Themes),
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
@@ -380,6 +490,8 @@ impl Shortcut {
             "tab" => "Tab".to_string(),
             "down" => "Down".to_string(),
             "up" => "Up".to_string(),
+            "pagedown" => "PageDown".to_string(),
+            "pageup" => "PageUp".to_string(),
             key if self.named().is_some() => {
                 let mut chars = key.chars();
                 chars.next().map_or_else(String::new, |first| {
@@ -408,6 +520,12 @@ impl Shortcut {
 
 /// Shortcuts from the settings file win over built-in ones they collide with.
 pub fn for_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
+    // "+" zooms in as "=" does, whether it takes Shift or is on the keypad.
+    if let Key::Character(c) = key
+        && c == "+"
+    {
+        return for_key(&Key::Character("=".into()), modifiers - Modifiers::SHIFT);
+    }
     let settings = crate::settings::get();
     let overridden = |command: &Command| settings.keys.contains_key(&setting_name(*command));
     let matching = |command: &Command| {
@@ -510,5 +628,11 @@ mod tests {
             for_key(&Key::Named(NamedKey::ArrowDown), Modifiers::empty()),
             None
         );
+        for shift in [Modifiers::empty(), Modifiers::SHIFT] {
+            assert_eq!(
+                for_key(&Key::Character("+".into()), primary_modifier() | shift),
+                Some(Command::ZoomIn)
+            );
+        }
     }
 }

@@ -4,6 +4,7 @@ mod explorer;
 mod lens;
 mod markdown;
 mod origins;
+mod panes;
 mod session;
 mod sessions;
 mod settings;

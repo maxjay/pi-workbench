@@ -1,6 +1,6 @@
 //! The sessions rail: open Pi sessions to tab between, and recent ones to resume.
 use super::{color, session::status_color};
-use crate::{session::Session, workspace::Workbench};
+use crate::{panes::Tab, session::Session, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use pi_client::sessions::SessionSummary;
 use std::{rc::Rc, time::SystemTime};
@@ -61,7 +61,7 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
                     .cursor(CursorStyle::Pointer)
                     .hover(|s| s.color(color::text()))
             })
-            .on_event_stop(el::Click, move |_, _| close_state.sessions.close(key)),
+            .on_event_stop(el::Click, move |_, _| close_state.close_session(key)),
     ))
     .style(move |s| {
         let selected = active.get() == Some(key);
@@ -79,9 +79,20 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
                 s.background(color::border()).border_color(color::accent())
             })
     })
+    // A session can be dragged into a pane, or onto its edge to split it.
+    .on_event_cont(el::PointerDown, {
+        let state = select_state.clone();
+        move |_, event| {
+            if event
+                .button
+                .is_none_or(|b| b == floem::ui_events::pointer::PointerButton::Primary)
+            {
+                state.press_tab(None, Tab::Session(key))
+            }
+        }
+    })
     .on_event_stop(el::Click, move |_, _| {
-        select_state.sessions.select(key);
-        select_state.show_conversation();
+        select_state.show_session(key);
     })
 }
 
@@ -110,8 +121,8 @@ fn recent_row(state: Rc<Workbench>, summary: SessionSummary) -> impl IntoView {
             })
     })
     .on_event_stop(el::Click, move |_, _| {
-        state.sessions.resume(&summary);
-        state.show_conversation();
+        let session = state.sessions.resume(&summary);
+        state.show_session(session.key);
     })
 }
 
@@ -138,8 +149,7 @@ pub(super) fn rail(state: Rc<Workbench>) -> impl IntoView {
                         .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
-                    new_state.sessions.create();
-                    new_state.show_conversation();
+                    new_state.new_session();
                 }),
         ))
         .style(|s| {

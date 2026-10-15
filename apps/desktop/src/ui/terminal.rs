@@ -1,14 +1,13 @@
-//! The terminal panel under the editors: one shell per window, started the
-//! first time the panel opens.
+//! A terminal tab: one shell, started the first time its tab is shown.
 use super::color;
 use crate::{
     terminal::{Row, Screen, key_bytes},
-    workspace::Workbench,
+    workspace::{TerminalSlot, Workbench},
 };
 use floem::{
     event::{EventPropagation, PointerScrollEventExt},
     prelude::*,
-    reactive::Effect,
+    reactive::{Effect, Memo},
     text::{Attrs, AttrsList, FamilyOwned, FontStyle, FontWeight, LineHeightValue, TextLayout},
     views::rich_text,
 };
@@ -24,11 +23,23 @@ struct Font {
     line_height: f64,
 }
 
-fn font() -> Font {
-    let size = (crate::settings::code_size() as f32 - 1.0).max(9.0);
+fn font(zoom: f64) -> Font {
+    let size = ((crate::settings::code_size() as f32 - 1.0) * zoom as f32)
+        .round()
+        .max(6.0);
     let line_height = (size * 1.4).round();
-    let family: &'static [FamilyOwned] =
-        Box::leak(FamilyOwned::parse_list(&crate::settings::code_font()).collect());
+    // Attrs borrow their family for as long as the text lives; one leaked
+    // list per font name, however often terminals are laid out again.
+    thread_local! {
+        static FAMILIES: std::cell::RefCell<std::collections::HashMap<String, &'static [FamilyOwned]>> =
+            Default::default();
+    }
+    let name = crate::settings::code_font();
+    let family: &'static [FamilyOwned] = FAMILIES.with_borrow_mut(|families| {
+        *families
+            .entry(name.clone())
+            .or_insert_with(|| Box::leak(FamilyOwned::parse_list(&name).collect()))
+    });
     let attrs = Attrs::new()
         .family(family)
         .font_size(size)
@@ -83,10 +94,19 @@ fn backgrounds(screen: &Screen, font: &Font) -> Vec<(f64, f64, f64, Color)> {
     boxes
 }
 
-pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
-    let visible = state.terminal_visible();
-    let terminal = state.terminal();
-    let font = font();
+/// One terminal tab: its screen, keyboard and size.
+pub(super) fn terminal_view(
+    state: Rc<Workbench>,
+    slot: Rc<TerminalSlot>,
+    visible: Memo<bool>,
+    wanted: Memo<bool>,
+    zoom: f64,
+) -> impl IntoView {
+    let key = slot.key;
+    let terminal = slot.terminal;
+    // Whether this terminal, rather than another, has the keyboard.
+    let has_focus = RwSignal::new(false);
+    let font = font(zoom);
     let (cell_width, line_height) = (font.cell_width, font.line_height);
 
     let screen = move || terminal.get().map(|t| t.screen().get()).unwrap_or_default();
@@ -133,7 +153,7 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
         },
     )
     .style(|s| s.absolute().inset(0));
-    let focused = state.terminal_focused();
+    let focused = has_focus;
     let cursor = Empty::new().style(move |s| {
         let at = screen().cursor;
         let (line, column) = at.unwrap_or_default();
@@ -184,27 +204,31 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
         else {
             return;
         };
-        if !size_state.terminal_visible().get_untracked() {
+        if !visible.get_untracked() {
             return;
         }
         let columns = ((size.width - 2.0 * PADDING) / cell_width).floor().max(2.0) as usize;
         let lines = ((size.height - 2.0 * PADDING) / line_height)
             .floor()
             .max(1.0) as usize;
-        size_state.ensure_terminal(columns, lines);
+        size_state.ensure_terminal(key, columns, lines);
     };
     let layout_resize = resize.clone();
-    let open_state = state.clone();
     Effect::new(move |_| {
         if visible.get() {
             let resize = resize.clone();
             floem::action::exec_after_animation_frame(move |_| resize());
-            let focus = open_state.clone();
             floem::action::exec_after_animation_frame(move |_| {
-                if focus.terminal_visible().get_untracked() {
+                if visible.get_untracked() {
                     body_id.request_focus();
                 }
             });
+        }
+    });
+    // Its pane focused by keyboard: the keys come here.
+    Effect::new(move |_| {
+        if wanted.get() {
+            floem::action::exec_after_animation_frame(move |_| body_id.request_focus());
         }
     });
     let focus_in = state.clone();
@@ -212,12 +236,15 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
     let body = body
         .on_event_cont(el::UpdatePhaseLayout, move |_, _| layout_resize())
         .on_event_cont(el::FocusGained, move |_, _| {
+            has_focus.set(true);
             focus_in.set_terminal_focused(true)
         })
         .on_event_cont(el::FocusLost, move |_, _| {
+            has_focus.set(false);
             focus_out.set_terminal_focused(false)
         })
         .on_event_cont(el::PointerDown, move |_, _| {
+            has_focus.set(true);
             click_state.set_terminal_focused(true);
             body_id.request_focus();
         })
@@ -225,7 +252,7 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             let delta = event.resolve_to_points(None, None);
             let lines = (-delta.y / line_height).round() as i32;
             if lines != 0
-                && let Some(terminal) = wheel_state.terminal().get_untracked()
+                && let Some(terminal) = terminal.get_untracked()
             {
                 terminal.scroll(lines);
             }
@@ -234,17 +261,15 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
         .on_event(el::KeyDown, move |cx, event| {
             // Floem also offers unhandled shortcut keys to every view that
             // listens, focused or not; only a focused, visible shell takes them.
-            if !key_state.terminal_visible().get_untracked()
-                || !key_state.terminal_focused().get_untracked()
-            {
+            if !visible.get_untracked() || !has_focus.get_untracked() {
                 return EventPropagation::Continue;
             }
-            let Some(terminal) = key_state.terminal().get_untracked() else {
+            let Some(terminal) = terminal.get_untracked() else {
                 return EventPropagation::Continue;
             };
             if terminal.exited().get_untracked() {
                 if event.key == Key::Named(NamedKey::Enter) {
-                    key_state.restart_terminal();
+                    key_state.restart_terminal(key);
                 }
                 return EventPropagation::Stop;
             }
@@ -272,27 +297,6 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             }
         });
 
-    let close_state = state.clone();
-    let header = Stack::horizontal((
-        Label::new("TERMINAL").style(|s| s.color(color::muted()).font_size(11).flex_grow(1.0_f32)),
-        super::button("Hide", move || close_state.toggle_terminal()),
-    ))
-    .style(|s| {
-        s.width_full()
-            .height(30)
-            .padding_horiz(10)
-            .items_center()
-            .border_bottom(1)
-            .border_color(color::border())
-            .flex_shrink(0.0_f32)
-    });
-    Stack::vertical((header, body)).style(move |s| {
-        s.width_full()
-            .height(280)
-            .flex_shrink(0.0_f32)
-            .background(color::bg())
-            .border_top(1)
-            .border_color(color::border())
-            .apply_if(!visible.get(), |s| s.hide())
-    })
+    let _ = wheel_state;
+    body.style(|s| s.size_full().background(color::bg()))
 }

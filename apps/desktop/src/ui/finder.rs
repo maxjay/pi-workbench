@@ -37,6 +37,8 @@ enum Pick {
     Pi(String),
     /// A theme by name, or the path of a `.tmTheme` file.
     Theme(String),
+    /// Creates the file typed, or opens it if it exists.
+    NewFile(String),
 }
 
 /// One row: what it does, and what it shows.
@@ -157,7 +159,13 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
         open_generation.set(open_generation.get() + 1);
         // Setting the query runs the effect that picks the selection, so the
         // selection is not touched after it.
-        query.set(open_carried.borrow_mut().take().unwrap_or_default());
+        query.set(
+            open_carried
+                .borrow_mut()
+                .take()
+                .or_else(|| open_state.take_prefill())
+                .unwrap_or_default(),
+        );
         hits.set(Vec::new());
         files.set(Vec::new());
         searched.set(String::new());
@@ -258,6 +266,24 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
                         .unwrap_or_default();
                     own.chain(pi).take(200).collect()
                 }
+                Some(Finder::NewFile) => match item_state.describe_new_file(&text) {
+                    Ok((path, exists)) => vec![Item {
+                        pick: Pick::NewFile(text.clone()),
+                        title: if exists { "Open" } else { "Create" }.into(),
+                        detail: path.display().to_string(),
+                        hint: if exists {
+                            "exists".into()
+                        } else {
+                            "Enter".into()
+                        },
+                    }],
+                    Err(problem) => vec![Item {
+                        pick: Pick::NewFile(text.clone()),
+                        title: problem,
+                        detail: String::new(),
+                        hint: String::new(),
+                    }],
+                },
                 Some(Finder::Themes) => {
                     let chosen = color::chosen_name();
                     let named = workbench_text::theme::names()
@@ -366,6 +392,12 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
                 state.choose_theme(&name);
                 state.dismiss_finder();
             }
+            Pick::NewFile(text) => {
+                if state.describe_new_file(&text).is_ok() {
+                    state.dismiss_finder();
+                    state.create_file(&text);
+                }
+            }
         })
     };
 
@@ -449,6 +481,7 @@ pub(super) fn finder(state: Rc<Workbench>) -> impl IntoView {
                 Some(Finder::Themes) => {
                     "Colour theme  ·  arrows preview, Enter keeps, Escape restores"
                 }
+                Some(Finder::NewFile) => "New file  ·  a path in the workspace; folders are made",
                 _ => "Open file  ·  > for commands, / for Pi's commands",
             }
             .to_string()
