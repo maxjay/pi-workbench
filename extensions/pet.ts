@@ -15,8 +15,17 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 /** Sets the `pet` status; the time makes every cue distinct. */
 function cue(ctx: ExtensionContext, text: string) {
-	ctx.ui.setStatus("pet", text);
-	setTimeout(() => ctx.ui.setStatus("pet", undefined), 1500);
+	// Held now: by the time the status clears, the session may have changed
+	// and the context gone stale.
+	const ui = ctx.ui;
+	ui.setStatus("pet", text);
+	setTimeout(() => {
+		try {
+			ui.setStatus("pet", undefined);
+		} catch {
+			// The session it belonged to has gone; nothing to clear.
+		}
+	}, 1500);
 }
 
 export default function (pi: ExtensionAPI) {

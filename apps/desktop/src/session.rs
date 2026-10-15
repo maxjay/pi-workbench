@@ -259,6 +259,8 @@ pub struct Session {
     working: RwSignal<bool>,
     pending_asks: RwSignal<usize>,
     stopped: RwSignal<bool>,
+    /// The current run was stopped from here.
+    stop_requested: Cell<bool>,
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
@@ -322,6 +324,7 @@ impl Session {
                 working: RwSignal::new(false),
                 pending_asks: RwSignal::new(0),
                 stopped: RwSignal::new(false),
+                stop_requested: Cell::new(false),
                 model: RwSignal::new(None),
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
@@ -507,12 +510,16 @@ impl Session {
         if text.is_empty() || self.sending.get() {
             return false;
         }
-        // A stand-in for a Pi extension's /kill, until one is installed: the
-        // pet takes it here and Pi never sees it.
-        let kill_extension = self
-            .commands
-            .with_untracked(|commands| commands.iter().any(|c| c.name == "kill"));
-        if text == "/kill" && !kill_extension {
+        // A stand-in for a Pi extension's /kill, until one is installed, and
+        // while Pi works, when it would not take an extension command: the
+        // pet takes it here and Pi never sees it. Pi numbers commands two
+        // extensions share, as kill:1.
+        let kill_extension = self.commands.with_untracked(|commands| {
+            commands
+                .iter()
+                .any(|c| c.name == "kill" || c.name.starts_with("kill:"))
+        });
+        if text == "/kill" && (!kill_extension || self.working.get_untracked()) {
             (self.hooks.cue)(self.key, "kill".into());
             return true;
         }
@@ -537,6 +544,7 @@ impl Session {
             self.title.set(shorten(&text));
         }
         self.push(EntryKind::User, "", text.clone(), String::new());
+        self.stop_requested.set(false);
         self.working.set(true);
         self.sending.set(true);
         self.documents.save_all();
@@ -598,8 +606,14 @@ impl Session {
 
     pub fn stop(&self) {
         if self.working.get_untracked() {
+            self.stop_requested.set(true);
             self.with_process(PiProcess::abort);
         }
+    }
+
+    /// Whether the last run was stopped rather than finishing.
+    pub fn was_stopped(&self) -> bool {
+        self.stop_requested.get() || self.stopped.get_untracked()
     }
 
     pub fn set_model(&self, model: &Model) {
@@ -932,9 +946,10 @@ impl Session {
             }
             Event::Exited(message) => {
                 self.process.borrow_mut().take();
+                // Stopped first, so the run ending is not taken for it finishing.
+                self.stopped.set(true);
                 self.pending_asks.set(0);
                 self.finish_run();
-                self.stopped.set(true);
                 self.notice(format!("Pi stopped: {message}"), true);
             }
             Event::Other => {}
@@ -1016,6 +1031,16 @@ mod tests {
                 CUES.with_borrow(Clone::clone),
                 vec![(1, "kill".to_string()), (1, "kill".to_string())]
             );
+            // With one (Pi numbers a shared name, as kill:1), Pi gets it,
+            // except while it works, when it would refuse an extension command.
+            session.commands.set(vec![PiCommand {
+                name: "kill:1".into(),
+                description: String::new(),
+                source: "extension".into(),
+            }]);
+            session.working.set(true);
+            assert!(session.submit("/kill".into(), false));
+            assert_eq!(CUES.with_borrow(Vec::len), 3, "taken here while Pi works");
         });
     }
 

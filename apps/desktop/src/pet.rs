@@ -205,6 +205,14 @@ const REVIEW_FOR: Duration = Duration::from_secs(8);
 /// A run this short (a slash command an extension handled, say) is not news.
 const NEWSWORTHY_RUN: Duration = Duration::from_secs(2);
 
+/// The pet's own window: none, asked for but not made yet, or open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PetWindow {
+    Closed,
+    Pending,
+    Open(floem::window::WindowId),
+}
+
 /// What the pet is doing now: the moving parts the views draw from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
@@ -238,13 +246,16 @@ pub struct Pet {
     /// Each session's status, and since when.
     statuses: RefCell<HashMap<u64, (Status, Instant)>>,
     /// The pet's own window while popped out.
-    pub window: Cell<Option<floem::window::WindowId>>,
+    pub window: Cell<PetWindow>,
     /// Docked: the sprite's left edge, and its height above the window's
     /// bottom, in logical pixels.
     pub dock: RwSignal<(f64, f64)>,
     /// The sprite as drawn in the window, to look from.
     pub sprite_view: Cell<Option<floem::ViewId>>,
     pose: std::cell::OnceCell<Memo<Pose>>,
+    /// Waiting questions as (session, entry) keys, the front session's first.
+    asking: std::cell::OnceCell<Memo<Vec<(u64, u64)>>>,
+    mood: std::cell::OnceCell<Memo<Anim>>,
     ticking: Cell<bool>,
 }
 
@@ -273,12 +284,27 @@ impl Pet {
                 next_update: Cell::new(0),
                 finished,
                 statuses: RefCell::new(HashMap::new()),
-                window: Cell::new(None),
+                window: Cell::new(PetWindow::Closed),
                 dock: RwSignal::new((136.0, 34.0)),
                 sprite_view: Cell::new(None),
                 pose: std::cell::OnceCell::new(),
+                asking: std::cell::OnceCell::new(),
+                mood: std::cell::OnceCell::new(),
                 ticking: Cell::new(false),
             });
+            // Questions and mood are worked out when sessions change, not on
+            // every tick of the clock.
+            let this = Rc::downgrade(&pet);
+            let asking = Memo::new(move |_| {
+                this.upgrade()
+                    .map(|pet| pet.find_questions())
+                    .unwrap_or_default()
+            });
+            let _ = pet.asking.set(asking);
+            let this = Rc::downgrade(&pet);
+            let mood =
+                Memo::new(move |_| this.upgrade().map_or(Anim::Idle, |pet| pet.compute_mood()));
+            let _ = pet.mood.set(mood);
             let this = Rc::downgrade(&pet);
             let pose = Memo::new(move |_| match this.upgrade() {
                 Some(pet) => pet.compute_pose(),
@@ -306,7 +332,11 @@ impl Pet {
     /// Advances the clock while the pet is shown, about thirty times a second.
     fn tick(pet: Weak<Pet>) {
         let Some(this) = pet.upgrade() else { return };
-        if !this.hidden.get_untracked() {
+        // Its window closed and its signals with it: the clock stops.
+        let Some(hidden) = this.hidden.try_get_untracked() else {
+            return;
+        };
+        if !hidden {
             // A finished /kill ends before the clock moves on, so the pet is
             // never drawn back where it was shot from for a frame.
             this.expire_updates();
@@ -343,8 +373,9 @@ impl Pet {
                 };
                 let title = session.title().get_untracked();
                 match (before, now) {
+                    // Stopped by you, or by Pi exiting, is not done.
                     (Some((Status::Working, since)), Status::Idle)
-                        if since.elapsed() >= NEWSWORTHY_RUN =>
+                        if since.elapsed() >= NEWSWORTHY_RUN && !session.was_stopped() =>
                     {
                         if Some(session.key) == front {
                             pet.finished.set(Some((session.key, Instant::now())));
@@ -359,9 +390,20 @@ impl Pet {
             }
             previous.retain(|key, _| open.iter().any(|s| s.key == *key));
             drop(previous);
-            for (key, text) in news {
-                pet.tell(Some(key), text);
-            }
+            // News of closed sessions goes with them; all of it in one update,
+            // so the bubble changes once.
+            Effect::batch(|| {
+                let gone = |u: &Update| {
+                    u.session
+                        .is_some_and(|key| !open.iter().any(|s| s.key == key))
+                };
+                if pet.updates.with_untracked(|u| u.iter().any(gone)) {
+                    pet.updates.update(|u| u.retain(|u| !gone(u)));
+                }
+                for (key, text) in news {
+                    pet.tell(Some(key), text);
+                }
+            });
         });
         let pet = Rc::downgrade(self);
         let cue = self.sessions.cue();
@@ -373,7 +415,9 @@ impl Pet {
                 "wave" => pet.play(Anim::Wave),
                 "jump" => pet.play(Anim::Jump),
                 other => {
-                    if let Some(text) = other.strip_prefix("say:") {
+                    if let Some(text) = other.strip_prefix("say:")
+                        && !text.trim().is_empty()
+                    {
                         pet.tell(Some(cue.session), text.trim().to_string());
                     }
                 }
@@ -414,7 +458,7 @@ impl Pet {
                 return still(anim, anim.column(since, false));
             }
         }
-        let mood = self.mood();
+        let mood = self.mood.get().map_or(Anim::Idle, |mood| mood.get());
         if mood == Anim::Idle
             && let Some(direction) = self.look.get()
         {
@@ -427,45 +471,58 @@ impl Pet {
     }
 
     /// What the pet does when nothing in particular is happening: how the
-    /// front session is doing comes first, then any question waiting.
-    pub fn mood(&self) -> Anim {
+    /// front session is doing comes first, then any question waiting. The
+    /// pleased look is cleared by the clock when its time is up.
+    fn compute_mood(&self) -> Anim {
         let front = self.sessions.active();
         match front.as_ref().map(|s| s.status()) {
             Some(Status::NeedsInput) => return Anim::Waiting,
             Some(Status::Working) => return Anim::Working,
             _ => {}
         }
-        if !self.questions().is_empty() {
+        let asking = self.asking.get().is_some_and(|a| a.with(|a| !a.is_empty()));
+        if asking {
             return Anim::Waiting;
         }
-        let pleased = self.finished.with(|f| {
-            f.is_some_and(|(key, at)| {
-                Some(key) == front.as_ref().map(|s| s.key) && at.elapsed() < REVIEW_FOR
-            })
-        });
+        let pleased = self
+            .finished
+            .with(|f| f.is_some_and(|(key, _)| Some(key) == front.as_ref().map(|s| s.key)));
         if pleased { Anim::Review } else { Anim::Idle }
     }
 
-    /// Questions waiting in any session, the front session's first.
-    pub fn questions(&self) -> Vec<(Rc<Session>, Rc<Entry>)> {
+    /// Waiting questions as keys, the front session's first.
+    fn find_questions(&self) -> Vec<(u64, u64)> {
         let front = self.sessions.active_key().get();
-        let mut found: Vec<(Rc<Session>, Rc<Entry>)> = self
-            .sessions
-            .open()
-            .get()
-            .into_iter()
-            .flat_map(|session| {
-                session
-                    .entries()
-                    .get()
-                    .into_iter()
-                    .filter(|e| e.kind == EntryKind::Ask && e.answered.get().is_none())
-                    .map(move |e| (session.clone(), e))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        found.sort_by_key(|(session, _)| Some(session.key) != front);
+        let mut found: Vec<(u64, u64)> = self.sessions.open().with(|open| {
+            open.iter()
+                .flat_map(|session| {
+                    session.entries().with(|entries| {
+                        entries
+                            .iter()
+                            .filter(|e| e.kind == EntryKind::Ask && e.answered.get().is_none())
+                            .map(|e| (session.key, e.id))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect()
+        });
+        found.sort_by_key(|(session, _)| Some(*session) != front);
         found
+    }
+
+    /// Questions waiting in any session, the front session's first. Tracks
+    /// only the questions, not every change to every timeline.
+    pub fn questions(&self) -> Vec<(Rc<Session>, Rc<Entry>)> {
+        let keys = self.asking.get().map(|a| a.get()).unwrap_or_default();
+        keys.into_iter()
+            .filter_map(|(key, id)| {
+                let session = self.sessions.find(key)?;
+                let entry = session
+                    .entries()
+                    .with_untracked(|e| e.iter().find(|e| e.id == id).cloned())?;
+                Some((session, entry))
+            })
+            .collect()
     }
 
     pub fn updates(&self) -> RwSignal<Vec<Update>> {
@@ -496,6 +553,12 @@ impl Pet {
 
     fn expire_updates(&self) {
         let now = Instant::now();
+        if self
+            .finished
+            .with_untracked(|f| f.is_some_and(|(_, at)| at.elapsed() >= REVIEW_FOR))
+        {
+            self.finished.set(None);
+        }
         if self
             .updates
             .with_untracked(|updates| updates.iter().any(|u| u.until <= now))

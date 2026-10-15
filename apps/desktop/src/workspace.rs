@@ -295,6 +295,8 @@ impl Workbench {
             turns_lens.set_turns(turns);
         });
         let pet = Pet::new(Scope::current(), sessions.clone());
+        pet.popped.set(layout.pet_popped);
+        pet.hidden.set(layout.pet_hidden);
         let panes = Panes::new(Scope::current());
         let (last_pane, last_terminal) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
         // The front session is the one in the focused pane, and Ctrl+` keeps
@@ -682,12 +684,6 @@ impl Workbench {
         files: Vec<(PathBuf, Result<String, String>)>,
         summaries: Vec<SessionSummary>,
     ) {
-        if self.pet.popped.get_untracked() != layout.pet_popped {
-            self.pet.popped.set(layout.pet_popped);
-        }
-        if self.pet.hidden.get_untracked() != layout.pet_hidden {
-            self.pet.hidden.set(layout.pet_hidden);
-        }
         for (path, result) in files {
             self.pending.borrow_mut().remove(&path);
             match result {
@@ -1771,8 +1767,11 @@ impl Workbench {
         self.dismiss_finder();
         match self.persist_layout() {
             Ok(()) => {
-                // The pet's own window goes with the workbench's.
-                if let Some(id) = self.pet.window.take() {
+                // The pet's own window goes with the workbench's, or is
+                // called off if it is still being made.
+                if let crate::pet::PetWindow::Open(id) =
+                    self.pet.window.replace(crate::pet::PetWindow::Closed)
+                {
                     floem::close_window(id);
                 }
                 (self.close_window)()

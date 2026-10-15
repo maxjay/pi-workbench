@@ -3,7 +3,7 @@
 //! a small window of its own that a `/kill` throws across the screen.
 use super::{color, session::ask_card};
 use crate::{
-    pet::{CELL, Pet},
+    pet::{CELL, Pet, PetWindow},
     workspace::Workbench,
 };
 use floem::{
@@ -29,6 +29,8 @@ const LIGHT: &[u8] = include_bytes!("../../assets/pet/glitch-light.png");
 /// Docked, the pet is drawn at half size; popped out, a little larger.
 const DOCKED: f64 = 0.5;
 const POPPED: f64 = 0.75;
+const BUBBLE_WIDTH: f64 = 280.0;
+
 /// Space around the pet and its bubble in the popped-out card.
 const CARD_PADDING: f64 = 8.0;
 
@@ -127,7 +129,7 @@ enum Say {
 
 /// The pet's speech bubble: a session's question, answered right there,
 /// or news from any session, which opens it when clicked.
-fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> impl IntoView {
+fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
     let updates = pet.updates();
     let asking = pet.clone();
     let say = Memo::new(move |_| {
@@ -197,10 +199,12 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> impl IntoView {
                 ))
                 .style(|s| s.gap(6).width_full().items_start())
                 .on_event_stop(el::Click, move |_, _| {
-                    if let Some(key) = update.session {
-                        open_state.show_session(key);
-                    }
-                    open_pet.dismiss(id);
+                    Effect::batch(|| {
+                        if let Some(key) = update.session {
+                            open_state.show_session(key);
+                        }
+                        open_pet.dismiss(id);
+                    })
                 })
                 .into_any()
             }
@@ -216,7 +220,7 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> impl IntoView {
         }),
     ))
     .style(move |s| {
-        s.width(280)
+        s.width(BUBBLE_WIDTH)
             .padding(10)
             .gap(4)
             .font_size(12)
@@ -298,6 +302,8 @@ pub(super) fn docked(state: Rc<Workbench>) -> impl IntoView {
     let body_id = body.view_id();
     pet.sprite_view.set(Some(body_id));
     let window_size = move || body_id.root().get_size().unwrap_or_default();
+    // The window's size, to keep the pet and its bubble in it.
+    let window = RwSignal::new(Size::ZERO);
     let (press_state, move_state, up_pet) = (state.clone(), state.clone(), pet.clone());
     let move_pet = pet.clone();
     let body = body
@@ -341,9 +347,26 @@ pub(super) fn docked(state: Rc<Workbench>) -> impl IntoView {
         let thrown = pose.get().thrown;
         s.translate_x(thrown.0).translate_y(thrown.1)
     });
-    Stack::vertical((bubble(&state, &pet), figure))
+    // The bubble moves left to stay in the window when the pet is near its
+    // right edge.
+    let said = bubble(&state, &pet).style(move |s| {
+        let (left, _) = dock.get();
+        let room = window.get().width - left - BUBBLE_WIDTH - 8.0;
+        s.translate_x(room.min(0.0).max(-left))
+    });
+    Stack::vertical((said, figure))
         .style(move |s| {
             let (left, bottom) = dock.get();
+            let size_now = window.get();
+            // Kept in reach however small the window gets.
+            let (left, bottom) = if size_now.width > 0.0 {
+                (
+                    left.min(size_now.width - size.0).max(0.0),
+                    bottom.min(size_now.height - size.1).max(0.0),
+                )
+            } else {
+                (left, bottom)
+            };
             s.absolute()
                 .inset_left(left)
                 .inset_bottom(bottom)
@@ -354,6 +377,12 @@ pub(super) fn docked(state: Rc<Workbench>) -> impl IntoView {
         })
         .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
+        .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
+            let now = window_size();
+            if window.get_untracked() != now {
+                window.set(now);
+            }
+        })
 }
 
 /// Opens and closes the pet's own window as it pops out and in, next to
@@ -364,7 +393,8 @@ pub(super) fn follow_popping(state: Rc<Workbench>, main: WindowId) {
     Effect::new(move |_| {
         let wanted = popped.get() && !hidden.get();
         match (wanted, pet.window.get()) {
-            (true, None) => {
+            (true, PetWindow::Closed) => {
+                pet.window.set(PetWindow::Pending);
                 let size = card_size(None);
                 // Low on the workbench, right of the rail, with room to be
                 // thrown left. (Content bounds give the size, not the place.)
@@ -378,8 +408,18 @@ pub(super) fn follow_popping(state: Rc<Workbench>, main: WindowId) {
                 let state = state.clone();
                 floem::new_window(
                     move |id| {
-                        state.pet.window.set(Some(id));
-                        window_view(state, id)
+                        // Popped back in, or the workbench closed, before
+                        // the window was made: it closes straight away.
+                        let pet = &state.pet;
+                        let wanted = pet.popped.try_get_untracked().unwrap_or(false)
+                            && !pet.hidden.try_get_untracked().unwrap_or(true)
+                            && pet.window.get() == PetWindow::Pending;
+                        if !wanted {
+                            floem::close_window(id);
+                            return Empty::new().into_any();
+                        }
+                        pet.window.set(PetWindow::Open(id));
+                        window_view(state, id).into_any()
                     },
                     Some(
                         WindowConfig::default()
@@ -397,10 +437,11 @@ pub(super) fn follow_popping(state: Rc<Workbench>, main: WindowId) {
                     ),
                 );
             }
-            (false, Some(id)) => {
-                pet.window.set(None);
+            (false, PetWindow::Open(id)) => {
+                pet.window.set(PetWindow::Closed);
                 floem::close_window(id);
             }
+            (false, PetWindow::Pending) => pet.window.set(PetWindow::Closed),
             _ => {}
         }
     });
@@ -423,30 +464,34 @@ fn card_size(content: Option<Size>) -> Size {
 fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
     let pet = state.pet.clone();
     let hovered = RwSignal::new(false);
-    // Where the window was when shot, to throw it from.
-    let shot_from = Rc::new(Cell::new(None::<Point>));
+    // Where the window was when shot, and which shot, to throw it from.
+    let shot_from = Rc::new(Cell::new(None::<(u64, Point)>));
     let shot = pet.shot();
     let pose = pet.pose();
     let throw_pet = pet.clone();
     let from = shot_from.clone();
     Effect::new(move |_| {
         let thrown = pose.get().thrown;
-        if shot.get().is_none() {
+        let Some(began) = shot.get() else {
             from.set(None);
             return;
-        }
-        let Some(start) = from.get().or_else(|| {
-            let start = id.position_on_screen_including_frame()?;
-            // As far left as the screen allows.
-            if let Some(screen) = id.monitor_bounds() {
-                throw_pet
-                    .throw_distance
-                    .set(((start.x - screen.x0) / 1.15).clamp(0.0, 420.0));
+        };
+        let start = match from.get() {
+            Some((shot, start)) if shot == began => start,
+            // A new shot, perhaps while the last was under way.
+            _ => {
+                let Some(start) = id.position_on_screen_including_frame() else {
+                    return;
+                };
+                // As far left as the screen allows.
+                if let Some(screen) = id.monitor_bounds() {
+                    throw_pet
+                        .throw_distance
+                        .set(((start.x - screen.x0) / 1.15).clamp(0.0, 420.0));
+                }
+                from.set(Some((began, start)));
+                start
             }
-            from.set(Some(start));
-            Some(start)
-        }) else {
-            return;
         };
         id.set_outer_location(Point::new(start.x + thrown.0, start.y + thrown.1));
     });
@@ -507,7 +552,8 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
     // It runs the way the window is dragged.
     let last_x = Rc::new(Cell::new(None::<f64>));
     let settle = Rc::new(Cell::new(0u64));
-    let run_pet = pet.clone();
+    let run_pet = Rc::downgrade(&pet);
+    let closed_pet = Rc::downgrade(&pet);
     Stack::new((content,))
         .style(|s| {
             s.size_full()
@@ -520,7 +566,19 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
         .on_event_cont(el::UpdatePhaseLayout, move |_, _| fit())
         .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
+        .on_event_cont(el::WindowClosed, move |_, _| {
+            // Closed by the system (Alt+F4, say) rather than by popping in.
+            if let Some(pet) = closed_pet.upgrade()
+                && pet.window.get() == PetWindow::Open(id)
+            {
+                pet.window.set(PetWindow::Closed);
+                pet.popped.try_update(|p| *p = false);
+            }
+        })
         .on_event_cont(el::WindowMoved, move |_, at| {
+            let Some(run_pet) = run_pet.upgrade() else {
+                return;
+            };
             if run_pet.shot().get_untracked().is_some() {
                 return;
             }
@@ -530,10 +588,12 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
                 run_pet.moving.set(Some(at.x > before));
                 let serial = settle.get() + 1;
                 settle.set(serial);
-                let (pet, settle) = (run_pet.clone(), settle.clone());
+                let (pet, settle) = (Rc::downgrade(&run_pet), settle.clone());
                 floem::action::exec_after(Duration::from_millis(180), move |_| {
-                    if settle.get() == serial {
-                        pet.moving.set(None);
+                    if settle.get() == serial
+                        && let Some(pet) = pet.upgrade()
+                    {
+                        pet.moving.try_update(|m| *m = None);
                     }
                 });
             }
