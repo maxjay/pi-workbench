@@ -472,16 +472,14 @@ C
 
     #[test]
     fn outside_changes_stay_highlighted_until_the_next_edit() {
-        with_text("a
-b
-", |doc| {
-            doc.sync_disk("a
-B
-c
-".into(), "pi");
+        with_text("a\nb\n", |doc| {
+            doc.sync_disk("a\nB\nc\n".into(), "pi");
             let incoming = doc.incoming().get().unwrap();
             assert_eq!(incoming.added(), 2);
-            assert_eq!(incoming.current[0], workbench_core::diff::LineChange::Unchanged);
+            assert_eq!(
+                incoming.current[0],
+                workbench_core::diff::LineChange::Unchanged
+            );
             edit(&doc, "typed");
             assert!(doc.incoming().get().is_none());
         });
