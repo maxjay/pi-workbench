@@ -1,0 +1,20 @@
+[package]
+name = "workbench-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+ignore = "0.4.23"
+nucleo-matcher = "0.3.1"
+# Pure-Rust regex keeps the build free of C dependencies such as oniguruma.
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy"] }
+# bat's syntax collection adds TypeScript, TOML and others missing from syntect's defaults.
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
+
+[dev-dependencies]
+tempfile.workspace = true
