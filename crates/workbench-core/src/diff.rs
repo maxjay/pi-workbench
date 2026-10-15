@@ -104,12 +104,14 @@ impl LineDiff {
         };
         let offset = current_line - block.current.start;
         let span = block.base.len().saturating_sub(1);
-        block.base.start
+        let line = block.base.start
             + if block.changed {
                 offset.min(span)
             } else {
                 offset
-            }
+            };
+        // Lines inserted at the end sit past the baseline's last line.
+        line.min(self.base.len().saturating_sub(1))
     }
 }
 
@@ -162,5 +164,12 @@ mod tests {
         assert_eq!(diff.base_line(4), 2);
         assert_eq!(diff.base_line(5), 4);
         assert_eq!(diff.base_line(99), 4);
+        // Lines appended at the end map to the baseline's last line.
+        let appended = LineDiff::compute(
+            "a", "a
+b
+c",
+        );
+        assert_eq!(appended.base_line(2), 0);
     }
 }
