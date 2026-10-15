@@ -208,6 +208,9 @@ pub struct Workbench {
     /// For Ctrl+`: the last pane that was not showing a terminal, and the
     /// last terminal shown.
     last_pane: Rc<Cell<Option<PaneId>>>,
+    /// The last pane used for files (showing one, or empty), where files
+    /// opened from a session go.
+    last_file_pane: Rc<Cell<Option<PaneId>>>,
     last_terminal: Rc<Cell<Option<u64>>>,
     /// A tab being dragged, from its pane or from outside any (the explorer
     /// or the rail), and where it would land if dropped now.
@@ -288,6 +291,8 @@ impl Workbench {
         // track of where it should go back to.
         let (follow_panes, follow_sessions) = (panes.clone(), sessions.clone());
         let (follow_pane, follow_terminal) = (last_pane.clone(), last_terminal.clone());
+        let last_file_pane: Rc<Cell<Option<PaneId>>> = Rc::default();
+        let follow_file = last_file_pane.clone();
         Effect::new(move |_| {
             let id = follow_panes.focused().get();
             let Some(pane) = follow_panes.pane(id) else {
@@ -301,7 +306,10 @@ impl Workbench {
                     }
                 }
                 Some(Tab::Terminal(key)) => follow_terminal.set(Some(key)),
-                _ => follow_pane.set(Some(id)),
+                _ => {
+                    follow_pane.set(Some(id));
+                    follow_file.set(Some(id));
+                }
             }
         });
         Rc::new(Self {
@@ -324,6 +332,7 @@ impl Workbench {
             next_terminal: Cell::new(0),
             terminal_focused: RwSignal::new(false),
             last_pane,
+            last_file_pane,
             last_terminal,
             dragging: RwSignal::new(None),
             drop_target: RwSignal::new(None),
@@ -1134,11 +1143,36 @@ impl Workbench {
 
     /// Opens a file beside the focused pane, splitting it if there is no pane
     /// to its right, so the conversation stays in view.
+    /// Opens a file from a session without covering it: in the pane last
+    /// used for files, else one already showing it or another file, else
+    /// the pane to the right, else a new one there.
     pub fn open_beside(self: &Rc<Self>, path: PathBuf) {
         let from = self.panes.focused().get_untracked();
+        let path = path.canonicalize().unwrap_or(path);
+        let other = |id: &PaneId| *id != from && self.panes.pane(*id).is_some();
+        let showing_file = |id: &PaneId| {
+            self.panes
+                .pane(*id)
+                .is_some_and(|p| matches!(p.active.get_untracked(), Some(Tab::File(_))))
+        };
         let to = self
-            .panes
-            .neighbour(from, Direction::Right)
+            .last_file_pane
+            .get()
+            .filter(other)
+            .or_else(|| {
+                self.panes
+                    .holding(&Tab::File(path.clone()))
+                    .into_iter()
+                    .find(other)
+            })
+            .or_else(|| {
+                self.panes
+                    .all()
+                    .into_iter()
+                    .map(|p| p.id)
+                    .find(|id| other(id) && showing_file(id))
+            })
+            .or_else(|| self.panes.neighbour(from, Direction::Right))
             .unwrap_or_else(|| self.panes.split(from, Direction::Right).id);
         self.open(path, to);
         self.panes.focus(to);
@@ -1958,6 +1992,31 @@ mod tests {
                 vec![Tab::File(dirty.clone())]
             );
             assert!(state.status().get_untracked().contains("test.rs"));
+        });
+    }
+
+    #[test]
+    fn files_from_a_session_open_in_the_pane_last_used_for_files() {
+        with_workspace(|state, _| {
+            // Files on the left and bottom right, the session top right.
+            let left = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            let b = file(&state, "b.rs", "b");
+            let c = file(&state, "c.rs", "c");
+            state.select_tab(left, Tab::File(a.clone()));
+            let right = state.panes.split(left, Direction::Right).id;
+            let session = Tab::Terminal(state.add_terminal());
+            state.select_tab(right, session);
+            let bottom = state.panes.split(right, Direction::Down).id;
+            state.select_tab(bottom, Tab::File(b.clone()));
+            // The bottom pane was used for files last, then the session.
+            state.focus_pane(left);
+            state.focus_pane(bottom);
+            state.focus_pane(right);
+            state.open_beside(c.clone());
+            assert_eq!(showing(&state, bottom), Some(Tab::File(c.clone())));
+            assert_eq!(showing(&state, left), Some(Tab::File(a.clone())));
+            assert_eq!(state.panes.all().len(), 3, "no new pane");
         });
     }
 
