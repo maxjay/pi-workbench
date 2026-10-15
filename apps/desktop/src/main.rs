@@ -1,3 +1,4 @@
+mod changes;
 mod commands;
 mod documents;
 mod explorer;

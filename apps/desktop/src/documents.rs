@@ -71,6 +71,10 @@ impl OpenDocument {
     pub fn text(&self) -> Rc<TextDocument> {
         self.text.clone()
     }
+    /// Increments on every edit, including reloads.
+    pub fn revision(&self) -> ReadSignal<u64> {
+        self.revision.read_only()
+    }
     pub fn dirty(&self) -> bool {
         self.revision.get() != self.saved_revision.get()
     }

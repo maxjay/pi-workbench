@@ -1,5 +1,5 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{documents::Documents, explorer::Explorer};
+use crate::{changes::Changes, documents::Documents, explorer::Explorer};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
 use floem::reactive::{ReadSignal, Scope};
@@ -8,9 +8,12 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
 };
 use workbench_core::{
-    MAX_OPEN_DOCUMENTS, files,
+    MAX_OPEN_DOCUMENTS,
+    baseline::BaselineSource,
+    files,
     layout::{self, Layout},
 };
 
@@ -41,6 +44,7 @@ pub enum Confirm {
 pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
+    pub changes: Rc<Changes>,
     scope: Scope,
     active: [RwSignal<Option<PathBuf>>; 2],
     requested: [RwSignal<Option<PathBuf>>; 2],
@@ -57,7 +61,12 @@ pub struct Workbench {
 }
 
 impl Workbench {
-    pub fn new(root: PathBuf, layout_path: PathBuf, close_window: impl Fn() + 'static) -> Rc<Self> {
+    pub fn new(
+        root: PathBuf,
+        layout_path: PathBuf,
+        baseline: Arc<dyn BaselineSource>,
+        close_window: impl Fn() + 'static,
+    ) -> Rc<Self> {
         let (layout, message, layout_writable) = match layout::load(&layout_path) {
             Ok(layout) => (layout, "Ready · Open a file from the explorer".into(), true),
             Err(err) => (
@@ -70,6 +79,7 @@ impl Workbench {
         Rc::new(Self {
             documents: Documents::new(Scope::current(), root.clone(), status),
             explorer: Explorer::new(Scope::current(), root.clone(), status),
+            changes: Changes::new(Scope::current(), baseline, status),
             scope: Scope::current(),
             active: [RwSignal::new(None), RwSignal::new(None)],
             requested: [RwSignal::new(None), RwSignal::new(None)],
@@ -183,6 +193,8 @@ impl Workbench {
     }
 
     pub fn open(self: &Rc<Self>, path: PathBuf, pane: Pane) {
+        // Opening from the explorer returns to the panes so the file is visible.
+        self.changes.close();
         self.requested[pane.index()].set(Some(path.clone()));
         if self.documents.get(&path).is_some() {
             self.active[pane.index()].set(Some(path));
@@ -245,7 +257,19 @@ impl Workbench {
     }
 
     fn active_path(&self) -> Option<PathBuf> {
-        self.active(self.focused.get_untracked()).get_untracked()
+        self.changes
+            .path()
+            .or_else(|| self.active(self.focused.get_untracked()).get_untracked())
+    }
+
+    pub fn toggle_changes(&self) {
+        if self.changes.active() {
+            self.changes.close();
+        } else if let Some(doc) = self.active_path().and_then(|p| self.documents.get(&p)) {
+            self.changes.show(doc);
+        } else {
+            self.status.set("Open a file to see its changes.".into());
+        }
     }
 
     pub fn save_active(&self) {
@@ -277,6 +301,7 @@ impl Workbench {
     }
 
     fn remove_file(&self, path: &Path) {
+        self.changes.forget(path);
         self.documents.remove(path);
         let fallback = self
             .documents
@@ -421,6 +446,7 @@ mod tests {
             let state = Workbench::new(
                 dir.path().to_path_buf(),
                 dir.path().join("layout.json"),
+                Arc::new(crate::changes::tests::Fixed(Some("base"))),
                 move || on_close.set(true),
             );
             test(state, closed);
@@ -608,6 +634,27 @@ mod tests {
             let restored = layout::load(&state.layout_path).unwrap();
             assert_eq!(restored.open_files, vec![PathBuf::from("test.rs")]);
             assert_eq!(restored.active[0], Some("test.rs".into()));
+        });
+    }
+
+    #[test]
+    fn changes_need_an_open_file_and_close_with_their_document() {
+        with_workspace(|state, _| {
+            state.toggle_changes();
+            assert!(state.status().get().contains("Open a file"));
+            assert!(!state.changes.active());
+
+            let path = state.root.join("test.rs");
+            state.documents.insert(path.clone(), "text".into());
+            state.select_document(Pane::Primary, path.clone());
+            let doc = state.documents.get(&path).unwrap();
+            state.changes.show_now(doc);
+            assert_eq!(state.changes.path(), Some(path.clone()));
+            state.toggle_changes();
+            assert!(!state.changes.active());
+            state.changes.show_now(state.documents.get(&path).unwrap());
+            state.close_file(path);
+            assert!(!state.changes.active());
         });
     }
 

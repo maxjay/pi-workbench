@@ -1,4 +1,5 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
+mod diff;
 mod editor;
 mod explorer;
 mod overlays;
@@ -17,7 +18,8 @@ use floem::{
     window::WindowId,
 };
 use overlays::{command_palette, confirmation};
-use std::{path::PathBuf, rc::Rc};
+use std::{path::PathBuf, rc::Rc, sync::Arc};
+use workbench_core::baseline::GitHead;
 
 const BG: Color = Color::from_rgb8(21, 24, 30);
 const PANEL: Color = Color::from_rgb8(28, 32, 40);
@@ -25,6 +27,9 @@ const BORDER: Color = Color::from_rgb8(47, 54, 66);
 const TEXT: Color = Color::from_rgb8(218, 224, 233);
 const MUTED: Color = Color::from_rgb8(143, 156, 176);
 const ACCENT: Color = Color::from_rgb8(128, 190, 175);
+/// Line backgrounds in the changes view.
+const ADDED: Color = Color::from_rgba8(80, 170, 110, 46);
+const REMOVED: Color = Color::from_rgba8(210, 90, 90, 46);
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
@@ -64,6 +69,7 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         command_button(state.clone(), "Open folder", Command::OpenFolder),
         command_button(state.clone(), "Save", Command::Save),
         command_button(state.clone(), "Split", Command::Split),
+        command_button(state.clone(), "Changes", Command::Changes),
         command_button(state.clone(), "Explorer", Command::Explorer),
         command_button(state, "Commands", Command::Palette),
     ))
@@ -141,7 +147,9 @@ fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl In
 }
 
 pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
-    let state = Workbench::new(root, layout_path, move || floem::close_window(window));
+    let state = Workbench::new(root, layout_path, Arc::new(GitHead), move || {
+        floem::close_window(window)
+    });
     state.restore();
     let layout = state.layout();
     let status = state.status();
@@ -149,16 +157,23 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     let width = RwSignal::new(1280.0);
     let close_state = state.clone();
     let keyboard_state = state.clone();
+    let comparing = state.changes.current();
     let editors = Stack::horizontal((
         pane(state.clone(), Pane::Primary),
         divider(state.clone(), false, width),
         pane(state.clone(), Pane::Secondary),
     ))
-    .style(|s| s.size_full().min_width(0).min_height(0));
+    .style(move |s| {
+        s.size_full()
+            .min_width(0)
+            .min_height(0)
+            .apply_if(comparing.with(Option::is_some), |s| s.hide())
+    });
     let body = Stack::horizontal((
         explorer(state.clone()),
         divider(state.clone(), true, width),
         editors,
+        diff::changes(state.clone()),
     ))
     .style(move |s| {
         s.size_full().min_width(0).min_height(0).flex_direction(
