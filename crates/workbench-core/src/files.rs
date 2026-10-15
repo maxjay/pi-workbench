@@ -58,6 +58,11 @@ pub fn read_text(path: &Path) -> Result<String> {
     ensure!(file.metadata()?.is_file(), "Not a regular file");
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    decode_text(bytes)
+}
+
+/// Applies the editor's size and encoding limits to text from any source.
+pub fn decode_text(bytes: Vec<u8>) -> Result<String> {
     ensure!(
         bytes.len() as u64 <= MAX_FILE_BYTES,
         "The prototype supports files up to 4 MiB"
