@@ -17,6 +17,19 @@ A small native code editor built with Rust and [Floem](https://github.com/lapce/
 - Resizable panels and saved workspace layouts
 - Command palette and keyboard shortcuts
 
+## Install on WSL or Linux
+
+Release builds come from [the Release workflow](.github/workflows/release.yml) for every `v*` tag. Inside WSL (Windows 11 or Windows 10 with WSLg):
+
+```sh
+gh release download --repo maxjay/pi-workbench --pattern '*linux.tar.gz'
+tar -xzf pi-workbench-x86_64-linux.tar.gz
+./pi-workbench/install-wsl.sh pi-workbench-x86_64-linux.tar.gz
+pi-workbench ~/code/my-project
+```
+
+[install-wsl.sh](scripts/install-wsl.sh) installs to `~/.local/bin`, adds a launcher that WSLg also lists in the Windows Start menu, installs missing runtime libraries with `apt`, and checks that Pi is installed inside Linux with Node.js 22.19 or newer. Run it without arguments to download the latest release itself (with `gh`, or `gh.exe` from Windows). Without a GPU driver the app draws with the CPU; set `FLOEM_FORCE_TINY_SKIA=1` to force that if rendering looks wrong.
+
 ## Getting started
 
 Install [Rust](https://rustup.rs). The repository pins the toolchain.
