@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use workbench_core::files;
+use workbench_core::{files, merge::merge};
 
 pub struct OpenDocument {
     scope: Scope,
@@ -147,6 +147,66 @@ impl OpenDocument {
         self.saved_revision.set(self.revision.get_untracked());
         Ok(())
     }
+
+    /// Brings in a change someone else made on disk, keeping unsaved edits.
+    fn sync_disk(&self, disk: String, source: &str) -> Synced {
+        let baseline = self.baseline.get_untracked();
+        if disk == baseline {
+            return Synced::Unchanged;
+        }
+        if self.saving.get_untracked() {
+            // The save result decides the baseline; the next sync merges.
+            return Synced::Deferred;
+        }
+        let ours = self.text.text().to_string();
+        let merged = merge(&baseline, &ours, &disk, source);
+        // A reload started earlier must not overwrite the merged text.
+        self.read_generation.update(|generation| *generation += 1);
+        replace_changed_region(&self.text, &ours, &merged.text);
+        self.baseline.set(disk);
+        if merged.text == self.baseline.get_untracked() {
+            self.saved_revision.set(self.revision.get_untracked());
+        }
+        if ours == baseline {
+            Synced::Reloaded
+        } else {
+            Synced::Merged {
+                conflicts: merged.conflicts,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Synced {
+    Unchanged,
+    Deferred,
+    Reloaded,
+    Merged { conflicts: usize },
+}
+
+/// Edits only the span that differs, so cursors and undo history elsewhere survive.
+fn replace_changed_region(text: &TextDocument, old: &str, new: &str) {
+    if old == new {
+        return;
+    }
+    let prefix = old
+        .char_indices()
+        .zip(new.chars())
+        .find(|((_, a), b)| a != b)
+        .map_or(old.len().min(new.len()), |((i, _), _)| i);
+    let suffix: usize = old[prefix..]
+        .chars()
+        .rev()
+        .zip(new[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    text.edit_single(
+        Selection::region(prefix, old.len() - suffix, CursorAffinity::Backward),
+        &new[prefix..new.len() - suffix],
+        EditType::Other,
+    );
 }
 
 pub struct Documents {
@@ -256,6 +316,57 @@ impl Documents {
         });
         std::thread::spawn(move || finish(files::read_text(&path).map_err(|e| e.to_string())));
     }
+
+    /// Re-reads open files and merges changes made outside the editor, so a
+    /// file is never both edited here and stale on disk. `source` names who
+    /// made the changes, for the status line and conflict markers.
+    pub fn sync_from_disk(self: &Rc<Self>, source: &'static str) {
+        let docs = self.items.get_untracked();
+        if docs.is_empty() {
+            return;
+        }
+        let paths: Vec<_> = docs.iter().map(|doc| doc.path.clone()).collect();
+        let documents = self.clone();
+        let finish = create_ext_action(self.scope, move |texts| {
+            documents.finish_sync(docs, texts, source)
+        });
+        std::thread::spawn(move || {
+            finish(
+                paths
+                    .iter()
+                    .map(|path| files::read_text(path).ok())
+                    .collect(),
+            )
+        });
+    }
+
+    fn finish_sync(&self, docs: Vec<Rc<OpenDocument>>, texts: Vec<Option<String>>, source: &str) {
+        let mut updated = Vec::new();
+        let mut conflicts = 0;
+        for (doc, disk) in docs.into_iter().zip(texts) {
+            // Skip buffers closed or reopened while reading, and unreadable or deleted files.
+            let current = self.get(&doc.path).is_some_and(|c| Rc::ptr_eq(&c, &doc));
+            let Some(disk) = disk.filter(|_| current) else {
+                continue;
+            };
+            let outcome = doc.sync_disk(disk, source);
+            if let Synced::Merged { conflicts: n } = outcome {
+                conflicts += n;
+            }
+            if matches!(outcome, Synced::Reloaded | Synced::Merged { .. }) {
+                let name = doc.path.strip_prefix(&self.root).unwrap_or(&doc.path);
+                updated.push(name.display().to_string());
+            }
+        }
+        if !updated.is_empty() {
+            let marked = match conflicts {
+                0 => String::new(),
+                n => format!(" · {n} conflict(s) marked in the editor"),
+            };
+            self.status
+                .set(format!("{source} updated {}{marked}", updated.join(", ")));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -270,16 +381,122 @@ mod tests {
         );
     }
 
-    fn with_document(test: impl FnOnce(Rc<OpenDocument>)) {
+    fn with_text(text: &str, test: impl FnOnce(Rc<OpenDocument>)) {
         let scope = Scope::new();
-        scope.enter(|| {
-            test(OpenDocument::new(
-                scope,
-                "test.rs".into(),
-                "original".into(),
-            ))
-        });
+        scope.enter(|| test(OpenDocument::new(scope, "test.rs".into(), text.into())));
         scope.dispose();
+    }
+
+    fn with_document(test: impl FnOnce(Rc<OpenDocument>)) {
+        with_text("original", test);
+    }
+
+    #[test]
+    fn disk_changes_reload_clean_buffers_without_asking() {
+        with_document(|doc| {
+            assert_eq!(doc.sync_disk("original".into(), "pi"), Synced::Unchanged);
+            assert_eq!(doc.sync_disk("from pi".into(), "pi"), Synced::Reloaded);
+            assert_eq!(doc.text.text().to_string(), "from pi");
+            assert!(doc.can_close());
+        });
+    }
+
+    #[test]
+    fn disk_changes_merge_into_unsaved_edits_and_saving_still_works() {
+        with_text(
+            "a
+b
+c
+",
+            |doc| {
+                edit(
+                    &doc, "A
+b
+c
+",
+                );
+                assert_eq!(
+                    doc.sync_disk(
+                        "a
+b
+C
+"
+                        .into(),
+                        "pi"
+                    ),
+                    Synced::Merged { conflicts: 0 }
+                );
+                assert_eq!(
+                    doc.text.text().to_string(),
+                    "A
+b
+C
+"
+                );
+                assert!(doc.dirty());
+                // The next save compares against what is now on disk.
+                assert_eq!(
+                    doc.start_save().unwrap().baseline,
+                    "a
+b
+C
+"
+                );
+                // Changes arriving mid-save wait for the save to settle.
+                assert_eq!(
+                    doc.sync_disk(
+                        "z
+"
+                        .into(),
+                        "pi"
+                    ),
+                    Synced::Deferred
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn overlapping_disk_changes_are_marked_not_prompted() {
+        with_text(
+            "a
+b
+",
+            |doc| {
+                edit(
+                    &doc, "mine
+b
+",
+                );
+                assert_eq!(
+                    doc.sync_disk(
+                        "theirs
+b
+"
+                        .into(),
+                        "pi"
+                    ),
+                    Synced::Merged { conflicts: 1 }
+                );
+                let text = doc.text.text().to_string();
+                assert!(text.contains("<<<<<<< editor") && text.contains(">>>>>>> pi"));
+                assert!(text.ends_with(
+                    "b
+"
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn only_the_changed_span_is_replaced() {
+        with_text("keep λ old tail", |doc| {
+            let before = doc.text.text().to_string();
+            replace_changed_region(&doc.text, &before, "keep λ new tail");
+            assert_eq!(doc.text.text().to_string(), "keep λ new tail");
+            replace_changed_region(&doc.text, "keep λ new tail", "keep λ new tail!");
+            assert_eq!(doc.text.text().to_string(), "keep λ new tail!");
+        });
     }
 
     #[test]

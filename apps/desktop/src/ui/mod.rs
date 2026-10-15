@@ -1,4 +1,5 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
+mod agent;
 mod diff;
 mod editor;
 mod explorer;
@@ -6,7 +7,7 @@ mod overlays;
 
 use crate::{
     commands::{self, Command},
-    workspace::{Pane, Workbench},
+    workspace::{Integrations, Pane, Workbench},
 };
 use editor::pane;
 use explorer::explorer;
@@ -18,6 +19,7 @@ use floem::{
     window::WindowId,
 };
 use overlays::{command_palette, confirmation};
+use pi_client::Launch;
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 use workbench_core::baseline::GitHead;
 
@@ -70,6 +72,7 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         command_button(state.clone(), "Save", Command::Save),
         command_button(state.clone(), "Split", Command::Split),
         command_button(state.clone(), "Changes", Command::Changes),
+        command_button(state.clone(), "Pi", Command::Agent),
         command_button(state.clone(), "Explorer", Command::Explorer),
         command_button(state, "Commands", Command::Palette),
     ))
@@ -147,7 +150,11 @@ fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl In
 }
 
 pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
-    let state = Workbench::new(root, layout_path, Arc::new(GitHead), move || {
+    let integrations = Integrations {
+        baseline: Arc::new(GitHead),
+        pi: Launch::from_env(),
+    };
+    let state = Workbench::new(root, layout_path, integrations, move || {
         floem::close_window(window)
     });
     state.restore();
@@ -203,7 +210,13 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             .border_color(BORDER)
     });
     Stack::new((
-        Stack::vertical((toolbar(state.clone()), body, footer)).style(|s| s.size_full()),
+        Stack::vertical((
+            toolbar(state.clone()),
+            Stack::horizontal((body, agent::agent_panel(state.clone())))
+                .style(|s| s.size_full().min_width(0).min_height(0)),
+            footer,
+        ))
+        .style(|s| s.size_full()),
         command_palette(state.clone()),
         confirmation(state),
     ))

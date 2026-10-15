@@ -7,6 +7,8 @@ rust-version.workspace = true
 [dependencies]
 floem.workspace = true
 workbench-core.workspace = true
+pi-client.workspace = true
+serde_json.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]

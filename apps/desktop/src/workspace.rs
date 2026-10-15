@@ -1,8 +1,14 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{changes::Changes, documents::Documents, explorer::Explorer};
+use crate::{
+    agent::{self, Agent},
+    changes::Changes,
+    documents::Documents,
+    explorer::Explorer,
+};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
 use floem::reactive::{ReadSignal, Scope};
+use pi_client::Launch;
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -41,10 +47,18 @@ pub enum Confirm {
     Reload(PathBuf),
 }
 
+/// External services the workbench uses. Swap these to change what
+/// diffs compare against or how Pi is started.
+pub struct Integrations {
+    pub baseline: Arc<dyn BaselineSource>,
+    pub pi: Launch,
+}
+
 pub struct Workbench {
     pub documents: Rc<Documents>,
     pub explorer: Rc<Explorer>,
     pub changes: Rc<Changes>,
+    pub agent: Rc<Agent>,
     scope: Scope,
     active: [RwSignal<Option<PathBuf>>; 2],
     requested: [RwSignal<Option<PathBuf>>; 2],
@@ -64,7 +78,7 @@ impl Workbench {
     pub fn new(
         root: PathBuf,
         layout_path: PathBuf,
-        baseline: Arc<dyn BaselineSource>,
+        integrations: Integrations,
         close_window: impl Fn() + 'static,
     ) -> Rc<Self> {
         let (layout, message, layout_writable) = match layout::load(&layout_path) {
@@ -76,10 +90,27 @@ impl Workbench {
             ),
         };
         let status = RwSignal::new(message);
+        let documents = Documents::new(Scope::current(), root.clone(), status);
+        let explorer = Explorer::new(Scope::current(), root.clone(), status);
+        let (synced, tree) = (documents.clone(), explorer.clone());
+        let agent = Agent::new(
+            Scope::current(),
+            root.clone(),
+            integrations.pi,
+            documents.clone(),
+            move |tool| {
+                // Pi wrote to disk; fold its changes into open buffers.
+                synced.sync_from_disk("Pi");
+                if agent::tool_changes_tree(tool) {
+                    tree.refresh();
+                }
+            },
+        );
         Rc::new(Self {
-            documents: Documents::new(Scope::current(), root.clone(), status),
-            explorer: Explorer::new(Scope::current(), root.clone(), status),
-            changes: Changes::new(Scope::current(), baseline, status),
+            documents,
+            explorer,
+            changes: Changes::new(Scope::current(), integrations.baseline, status),
+            agent,
             scope: Scope::current(),
             active: [RwSignal::new(None), RwSignal::new(None)],
             requested: [RwSignal::new(None), RwSignal::new(None)],
@@ -448,7 +479,10 @@ mod tests {
             let state = Workbench::new(
                 dir.path().to_path_buf(),
                 dir.path().join("layout.json"),
-                Arc::new(crate::changes::tests::Fixed(Some("base"))),
+                Integrations {
+                    baseline: Arc::new(crate::changes::tests::Fixed(Some("base"))),
+                    pi: Launch::default(),
+                },
                 move || on_close.set(true),
             );
             test(state, closed);
