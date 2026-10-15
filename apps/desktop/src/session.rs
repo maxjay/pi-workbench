@@ -236,6 +236,9 @@ pub struct Session {
     tree_changed: Cell<bool>,
     /// Whether this session holds the workspace's saves for a run.
     holding: Cell<bool>,
+    /// A prompt is on its way to Pi; another submit would overtake it.
+    sending: Cell<bool>,
+    history_loaded: Cell<bool>,
     process: RefCell<Option<PiProcess>>,
     entries: RwSignal<Vec<Rc<Entry>>>,
     next_entry: Cell<u64>,
@@ -281,6 +284,8 @@ impl Session {
                 running_tools: Cell::new(0),
                 tree_changed: Cell::new(false),
                 holding: Cell::new(false),
+                sending: Cell::new(false),
+                history_loaded: Cell::new(false),
                 process: RefCell::new(None),
                 entries: RwSignal::new(Vec::new()),
                 next_entry: Cell::new(0),
@@ -414,34 +419,38 @@ impl Session {
         Ok(())
     }
 
-    fn with_process(&self, act: impl FnOnce(&mut PiProcess) -> anyhow::Result<()>) {
+    /// Returns whether the command reached Pi.
+    fn with_process(&self, act: impl FnOnce(&mut PiProcess) -> anyhow::Result<()>) -> bool {
         let result = match self.process.borrow_mut().as_mut() {
             Some(pi) => act(pi),
             None => Err(anyhow::anyhow!("Pi is not running")),
         };
-        if let Err(err) = result {
+        if let Err(err) = &result {
             self.notice(format!("{err:#}"), true);
         }
+        result.is_ok()
     }
 
     /// Submits the composer. While Pi works, the text steers the run, or
     /// waits for it to finish with `follow_up`. Returns whether it was sent.
     pub fn submit(self: &Rc<Self>, text: String, follow_up: bool) -> bool {
         let text = text.trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() || self.sending.get() {
             return false;
         }
         if self.working.get_untracked() {
-            let tool = if follow_up { "follow-up" } else { "steer" };
-            self.push(EntryKind::User, tool, text.clone(), String::new());
-            self.with_process(|pi| {
+            let sent = self.with_process(|pi| {
                 if follow_up {
                     pi.follow_up(&text)
                 } else {
                     pi.steer(&text)
                 }
             });
-            return true;
+            if sent {
+                let tool = if follow_up { "follow-up" } else { "steer" };
+                self.push(EntryKind::User, tool, text, String::new());
+            }
+            return sent;
         }
         if self
             .entries
@@ -451,6 +460,7 @@ impl Session {
         }
         self.push(EntryKind::User, "", text.clone(), String::new());
         self.working.set(true);
+        self.sending.set(true);
         self.documents.save_all();
         self.prompt_when_saved(text);
         true
@@ -458,9 +468,12 @@ impl Session {
 
     fn prompt_when_saved(self: &Rc<Self>, text: String) {
         if self.documents.any_saving() {
-            let session = self.clone();
+            // Weak, so closing the session meanwhile does not start Pi for it.
+            let session = Rc::downgrade(self);
             exec_after(Duration::from_millis(30), move |_| {
-                session.prompt_when_saved(text)
+                if let Some(session) = session.upgrade() {
+                    session.prompt_when_saved(text)
+                }
             });
             return;
         }
@@ -485,6 +498,7 @@ impl Session {
                 .as_mut()
                 .map_or(Ok(()), |pi| pi.prompt(&text))
         });
+        self.sending.set(false);
         if let Err(err) = result {
             self.finish_run();
             self.notice(format!("{err:#}"), true);
@@ -514,6 +528,8 @@ impl Session {
     /// Ends a run however it stopped: releases held saves and syncs files.
     fn finish_run(&self) {
         self.working.set(false);
+        // Pi stops waiting for questions when a run ends; so does the timeline.
+        self.expire_asks("Expired");
         *self.reply.borrow_mut() = None;
         *self.thinking.borrow_mut() = None;
         self.streaming.borrow_mut().clear();
@@ -525,6 +541,17 @@ impl Session {
         }
         (self.hooks.files_changed)(true);
         (self.hooks.settled)();
+    }
+
+    fn expire_asks(&self, label: &str) {
+        self.entries.with_untracked(|entries| {
+            for entry in entries.iter().filter(|e| e.ask.is_some()) {
+                if entry.answered.get_untracked().is_none() {
+                    entry.answered.set(Some(label.into()));
+                }
+            }
+        });
+        self.pending_asks.set(0);
     }
 
     fn tool_entry(&self, id: &str, tool: &str) -> Rc<Entry> {
@@ -554,9 +581,12 @@ impl Session {
 
     /// Rebuilds the timeline of a resumed session from Pi's messages.
     fn load_history(&self, messages: &[Value]) {
-        if self.entries.with_untracked(|e| !e.is_empty()) {
+        if self.history_loaded.replace(true) {
             return;
         }
+        // Anything that arrived first (an extension notice, a prompt) goes after the history.
+        let arrived = self.entries.get_untracked();
+        self.entries.set(Vec::new());
         for message in messages {
             match message["role"].as_str().unwrap_or_default() {
                 "user" => {
@@ -613,12 +643,26 @@ impl Session {
                     self.notice("Earlier conversation was summarised", false);
                 }
                 "custom" if message["display"] == true => {
-                    self.notice(result_text(message), false);
+                    let text = match &message["content"] {
+                        Value::String(text) => text.clone(),
+                        _ => result_text(message),
+                    };
+                    self.notice(text, false);
                 }
                 _ => {}
             }
         }
+        // A call with no recorded result was interrupted.
+        for call in self.tools.borrow().values() {
+            if call.entry.state.get_untracked() == Some(ToolState::Running) {
+                call.entry.state.set(Some(ToolState::Failed));
+                call.entry
+                    .body
+                    .set("No result was recorded; the session was interrupted.".into());
+            }
+        }
         self.tools.borrow_mut().clear();
+        self.entries.update(|entries| entries.extend(arrived));
     }
 
     fn handle_response(&self, command: &str, data: Value) {
@@ -650,6 +694,10 @@ impl Session {
     pub fn handle(&self, event: Event) {
         match event {
             Event::AgentStart => self.working.set(true),
+            Event::TurnStart => {
+                *self.reply.borrow_mut() = None;
+                *self.thinking.borrow_mut() = None;
+            }
             Event::TextDelta(delta) => {
                 *self.thinking.borrow_mut() = None;
                 let mut reply = self.reply.borrow_mut();
@@ -733,8 +781,23 @@ impl Session {
             Event::Response { command, data, .. } => self.handle_response(&command, data),
             Event::Ask(ask) => {
                 let (title, message) = (ask.title.clone(), ask.message.clone());
-                self.push_entry(EntryKind::Ask, "", title, message, Some(ask));
+                let timeout = ask.timeout;
+                let entry = self.push_entry(EntryKind::Ask, "", title, message, Some(ask));
                 self.pending_asks.update(|n| *n += 1);
+                // Pi answers with its default when the timeout passes, without telling us.
+                if let Some(ms) = timeout {
+                    let pending = self.pending_asks;
+                    exec_after(Duration::from_millis(ms), move |_| {
+                        if entry
+                            .answered
+                            .try_get_untracked()
+                            .is_some_and(|a| a.is_none())
+                        {
+                            entry.answered.set(Some("Timed out".into()));
+                            pending.update(|n| *n = n.saturating_sub(1));
+                        }
+                    });
+                }
             }
             Event::Notice { message, error } => self.notice(message, error),
             Event::SetDraft(text) => {
@@ -909,6 +972,7 @@ mod tests {
                 title: "Allow rm?".into(),
                 message: String::new(),
                 kind: AskKind::Confirm,
+                timeout: None,
             }));
             assert_eq!(session.status(), Status::NeedsInput);
             let entry = session.entries().get()[0].clone();
@@ -917,6 +981,53 @@ mod tests {
             session.answer(&entry, Answer::Confirmed(true), "Yes".into());
             assert_eq!(entry.answered.get().as_deref(), Some("Yes"));
             assert_eq!(session.status(), Status::Idle);
+        });
+    }
+
+    #[test]
+    fn early_entries_follow_the_history_and_runs_expire_questions() {
+        with_session(|session, _| {
+            session.handle(Event::Notice {
+                message: "extension loaded".into(),
+                error: false,
+            });
+            session.handle(Event::Response {
+                command: "get_messages".into(),
+                error: None,
+                handled: false,
+                data: json!({ "messages": [
+                    {"role": "user", "content": "earlier"},
+                    {"role": "assistant", "content": [
+                        {"type": "toolCall", "id": "t9", "name": "bash", "arguments": {"command": "ls"}}
+                    ]}
+                ]}),
+            });
+            let entries = session.entries().get();
+            assert_eq!(entries[0].title.get(), "earlier");
+            assert_eq!(entries[1].state.get(), Some(ToolState::Failed));
+            assert_eq!(entries[2].title.get(), "extension loaded");
+
+            session.handle(Event::Ask(Ask {
+                id: "u2".into(),
+                title: "Pick".into(),
+                message: String::new(),
+                kind: AskKind::Select(vec!["a".into()]),
+                timeout: None,
+            }));
+            assert_eq!(session.status(), Status::NeedsInput);
+            session.handle(Event::Exited("gone".into()));
+            let ask = session.entries().get()[3].clone();
+            assert_eq!(ask.answered.get().as_deref(), Some("Expired"));
+            assert_eq!(session.status(), Status::Stopped);
+        });
+    }
+
+    #[test]
+    fn a_prompt_in_flight_refuses_another_submit() {
+        with_session(|session, _| {
+            session.sending.set(true);
+            assert!(!session.submit("again".into(), false));
+            assert!(session.entries().get().is_empty());
         });
     }
 

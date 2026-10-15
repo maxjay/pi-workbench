@@ -283,9 +283,13 @@ impl Documents {
         self.held.set(self.held.get() + 1);
     }
 
-    /// Held saves run after the next sync has merged Pi's final changes.
-    pub fn release_saves(&self) {
+    /// When the last run ends, merges what Pi wrote and then runs held saves.
+    /// This also covers a session closed mid-run, which never settles.
+    pub fn release_saves(self: &Rc<Self>) {
         self.held.set(self.held.get().saturating_sub(1));
+        if self.held.get() == 0 {
+            self.sync_from_disk("Pi");
+        }
     }
 
     fn flush_deferred(self: &Rc<Self>) {

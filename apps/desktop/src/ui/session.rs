@@ -12,7 +12,7 @@ use floem::{
     AnyView,
     event::EventPropagation,
     prelude::*,
-    reactive::Effect,
+    reactive::{Effect, ReadSignal},
     style::CursorStyle,
     text::{Attrs, AttrsList, FamilyOwned, FontStyle, FontWeight},
     views::{
@@ -516,7 +516,7 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
     })
 }
 
-fn composer(session: Rc<Session>) -> impl IntoView {
+fn composer(session: Rc<Session>, visible: ReadSignal<bool>) -> impl IntoView {
     let working = session.working();
     let editor = text_editor("")
         .styling(SimpleStyling::builder().font_size(13).build())
@@ -526,10 +526,11 @@ fn composer(session: Rc<Session>) -> impl IntoView {
                 .hide_gutter(true)
                 .current_line_color(EDITOR_BG)
         })
-        .placeholder("Ask Pi…")
         .style(|s| s.width_full().height(84).min_width(0));
     let handle = editor.editor().clone();
     handle.update_doc(session.draft.clone(), None);
+    // Placeholders belong to the document, so set it on the session's draft.
+    session.draft.add_placeholder(handle.id(), "Ask Pi…".into());
     let draft = session.draft.clone();
     let submit = move |follow_up: bool| {
         let text = draft.text().to_string();
@@ -551,13 +552,16 @@ fn composer(session: Rc<Session>) -> impl IntoView {
         }
         EventPropagation::Continue
     });
+    // Focus the composer only when it can be seen; a hidden one would take typing.
     let focus = handle.editor_view_id;
     Effect::new(move |_| {
-        floem::action::exec_after_animation_frame(move |_| {
-            if let Some(id) = focus.get_untracked() {
-                id.request_focus();
-            }
-        });
+        if visible.get() {
+            floem::action::exec_after_animation_frame(move |_| {
+                if let Some(id) = focus.try_get_untracked().flatten() {
+                    id.request_focus();
+                }
+            });
+        }
     });
     Stack::vertical((
         Stack::horizontal((
@@ -691,7 +695,7 @@ fn session_view(state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
         100.0
     })
     .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
-    let composer = Stack::vertical((composer(session.clone()),)).style(|s| {
+    let composer = Stack::vertical((composer(session.clone(), state.conversation()),)).style(|s| {
         s.width_full()
             .max_width(860)
             .margin_horiz(floem::unit::LengthAuto::Auto)

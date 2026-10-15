@@ -7,6 +7,8 @@ pub enum Event {
     AgentStart,
     /// The run finished, including retries and queued follow-ups.
     AgentSettled,
+    /// A new model response begins; replies and thinking start fresh.
+    TurnStart,
     TextDelta(String),
     ThinkingDelta(String),
     /// The model began streaming a tool call's arguments.
@@ -70,6 +72,8 @@ pub struct Ask {
     pub title: String,
     pub message: String,
     pub kind: AskKind,
+    /// Pi answers with a default after this many milliseconds.
+    pub timeout: Option<u64>,
 }
 
 fn string(value: &Value, key: &str) -> String {
@@ -97,6 +101,7 @@ fn ui_request(value: &Value) -> Event {
             title: string(value, "title"),
             message: string(value, "message"),
             kind,
+            timeout: value["timeout"].as_u64(),
         })
     };
     match value["method"].as_str().unwrap_or_default() {
@@ -131,6 +136,8 @@ pub fn decode(line: &str) -> Result<Event> {
     Ok(match value["type"].as_str().unwrap_or_default() {
         "agent_start" => Event::AgentStart,
         "agent_settled" => Event::AgentSettled,
+        "turn_start" => Event::TurnStart,
+        "message_start" if value["message"]["role"] == "assistant" => Event::TurnStart,
         "message_update" => {
             let update = &value["assistantMessageEvent"];
             let index = update["contentIndex"].as_u64().unwrap_or_default();
@@ -230,6 +237,7 @@ mod tests {
                 title: "Allow?".into(),
                 message: String::new(),
                 kind: AskKind::Select(vec!["Allow".into(), "Block".into()]),
+                timeout: None,
             })
         );
         let failed = r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"No API key"}}"#;
@@ -240,7 +248,11 @@ mod tests {
                 error: true
             }
         );
-        assert_eq!(decode(r#"{"type":"turn_start"}"#).unwrap(), Event::Other);
+        assert_eq!(
+            decode(r#"{"type":"turn_start"}"#).unwrap(),
+            Event::TurnStart
+        );
+        assert_eq!(decode(r#"{"type":"queue_update"}"#).unwrap(), Event::Other);
         assert!(decode("not json").is_err());
     }
 }
