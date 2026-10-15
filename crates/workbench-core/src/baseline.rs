@@ -3,18 +3,9 @@
 //! Implement [`BaselineSource`] to compare with something other than the last
 //! commit, such as the index, another branch, or a snapshot taken before an
 //! agent edited the file.
-use crate::files;
-use anyhow::{Context, Result, bail, ensure};
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
-
-/// A hung git (a lock, a network filesystem) must not leave the view loading forever.
-const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+use crate::git::{Repo, Rev};
+use anyhow::{Context, Result};
+use std::path::Path;
 
 pub trait BaselineSource: Send + Sync {
     /// Short name shown above the baseline side, such as "HEAD".
@@ -35,110 +26,38 @@ impl BaselineSource for GitHead {
     }
 
     fn load(&self, path: &Path) -> Result<Option<String>> {
-        let path = plain_path(path);
-        let directory = path.parent().context("File has no parent directory")?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("Git comparison needs a UTF-8 file name")?;
-        let inside = git(directory, &["rev-parse", "--is-inside-work-tree"])?;
-        ensure!(
-            inside.status.success() && inside.stdout.trim_ascii() == b"true",
-            "Not in a git working tree"
-        );
+        let repo = Repo::discover(path)?.context("Not in a git working tree")?;
         // A repository without commits has nothing to compare against.
-        if !git(directory, &["rev-parse", "--verify", "--quiet", "HEAD"])?
-            .status
-            .success()
-        {
+        let Some(head) = repo.head()? else {
             return Ok(None);
-        }
-        let object = format!("HEAD:./{name}");
-        // The path is not in the last commit.
-        if !git(directory, &["cat-file", "-e", &object])?
-            .status
-            .success()
-        {
-            return Ok(None);
-        }
-        let output = git(directory, &["cat-file", "blob", &object])?;
-        ensure!(
-            output.status.success(),
-            "git: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-        files::decode_text(output.stdout).map(Some)
+        };
+        repo.read(&Rev::Commit(head), path)
     }
 }
 
-fn git(directory: &Path, args: &[&str]) -> Result<Output> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(directory)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        // Avoid flashing a console window from the GUI process.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = command
-        .spawn()
-        .context("Could not run git. Is it installed?")?;
-    // Drain both pipes on threads so a full pipe cannot stall the wait.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
-        thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = pipe.read_to_end(&mut bytes);
-            }
-            bytes
-        })
-    };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as _));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as _));
-    let deadline = Instant::now() + GIT_TIMEOUT;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "git did not respond within {} seconds",
-                GIT_TIMEOUT.as_secs()
-            );
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    Ok(Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    })
+/// The file at a fixed revision, such as a branch's merge base or a snapshot
+/// taken before an agent turn.
+pub struct GitRev {
+    pub repo: Repo,
+    pub rev: Rev,
+    /// Shown above the baseline side, such as "develop" or "Before last turn".
+    pub label: String,
 }
 
-/// Git cannot use the `\\?\` paths that `canonicalize` returns on Windows.
-fn plain_path(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{unc}"))
-    } else if let Some(local) = text.strip_prefix(r"\\?\") {
-        PathBuf::from(local)
-    } else {
-        path.to_path_buf()
+impl BaselineSource for GitRev {
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn load(&self, path: &Path) -> Result<Option<String>> {
+        self.repo.read(&self.rev, path)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::git;
     use std::fs;
 
     fn run(directory: &Path, args: &[&str]) {
@@ -243,18 +162,23 @@ mod tests {
     }
 
     #[test]
-    fn verbatim_windows_paths_are_simplified() {
+    fn git_rev_loads_files_at_a_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        run(&root, &["init", "-q"]);
+        fs::write(root.join("a.rs"), "before\n").unwrap();
+        let repo = Repo::discover(&root).unwrap().unwrap();
+        let source = GitRev {
+            rev: Rev::Tree(repo.snapshot().unwrap()),
+            repo,
+            label: "Before last turn".into(),
+        };
+        fs::write(root.join("a.rs"), "after\n").unwrap();
+        assert_eq!(source.label(), "Before last turn");
         assert_eq!(
-            plain_path(Path::new(r"\\?\C:\work\a.rs")),
-            PathBuf::from(r"C:\work\a.rs")
+            source.load(&root.join("a.rs")).unwrap().as_deref(),
+            Some("before\n")
         );
-        assert_eq!(
-            plain_path(Path::new(r"\\?\UNC\server\share\a.rs")),
-            PathBuf::from(r"\\server\share\a.rs")
-        );
-        assert_eq!(
-            plain_path(Path::new("/tmp/a.rs")),
-            PathBuf::from("/tmp/a.rs")
-        );
+        assert_eq!(source.load(&root.join("b.rs")).unwrap(), None);
     }
 }

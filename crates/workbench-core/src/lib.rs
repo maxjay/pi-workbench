@@ -3,6 +3,7 @@
 pub mod baseline;
 pub mod diff;
 pub mod files;
+pub mod git;
 pub mod layout;
 pub mod merge;
 
