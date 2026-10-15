@@ -45,11 +45,13 @@ fi
 
 # 2. Runtime libraries (present on most WSLg images).
 ldconfig=$(command -v ldconfig || echo /sbin/ldconfig)
+# Read once: piping into `grep -q` can fail with SIGPIPE under pipefail.
+libraries=$("$ldconfig" -p)
 missing=()
 for pair in libgtk-3.so.0:libgtk-3-0 libxkbcommon.so.0:libxkbcommon0 \
     libxkbcommon-x11.so.0:libxkbcommon-x11-0 libwayland-client.so.0:libwayland-client0 \
     libEGL.so.1:libegl1; do
-    "$ldconfig" -p | grep -q "${pair%%:*}" || missing+=("${pair##*:}")
+    grep -q "${pair%%:*}" <<<"$libraries" || missing+=("${pair##*:}")
 done
 if ((${#missing[@]})); then
     say "Installing runtime libraries: ${missing[*]}"
@@ -77,14 +79,15 @@ esac
 # 4. Check Pi. It must be the Linux install: a Windows pi under /mnt/c
 #    cannot work with Linux paths.
 pi_path=$(command -v pi || true)
-node_major=$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || true)
+node_version=$(node --version 2>/dev/null || true)
+node_ok() { [[ "$(printf '%s\n' v22.19.0 "$1" | sort -V | head -1)" == v22.19.0 ]]; }
 if [[ -z "$pi_path" || "$pi_path" == /mnt/* ]]; then
     warn "Pi is not installed inside Linux${pi_path:+ (found the Windows one at $pi_path)}."
     echo "    Install it with: npm install -g @earendil-works/pi-coding-agent"
     echo "    then sign in by running 'pi' once in a terminal."
 fi
-if [[ -z "$node_major" || "$node_major" -lt 22 ]]; then
-    warn "Pi needs Node.js 22.19 or newer (found ${node_major:+v$node_major}${node_major:-none})."
+if [[ -z "$node_version" ]] || ! node_ok "$node_version"; then
+    warn "Pi needs Node.js 22.19 or newer (found ${node_version:-none})."
     echo "    For example: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs"
 fi
 if [[ -z "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]]; then
