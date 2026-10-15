@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use workbench_core::{files, merge::merge};
+use workbench_core::{diff::LineDiff, files, merge::merge};
 
 pub struct OpenDocument {
     scope: Scope,
@@ -24,6 +24,8 @@ pub struct OpenDocument {
     saved_revision: RwSignal<u64>,
     saving: RwSignal<bool>,
     read_generation: RwSignal<u64>,
+    /// Lines the last outside change touched, highlighted until the next edit.
+    incoming: RwSignal<Option<Rc<LineDiff>>>,
 }
 
 struct SaveSnapshot {
@@ -50,8 +52,12 @@ impl OpenDocument {
         let scope = parent.create_child();
         scope.enter(|| {
             let revision = RwSignal::new(0);
+            let incoming = RwSignal::new(None);
             let text = Rc::new(TextDocument::new(scope, content.clone()));
-            text.add_on_update(move |_| revision.update(|r| *r += 1));
+            text.add_on_update(move |_| {
+                revision.update(|r| *r += 1);
+                incoming.set(None);
+            });
             Rc::new(Self {
                 scope,
                 path,
@@ -61,6 +67,7 @@ impl OpenDocument {
                 saved_revision: RwSignal::new(0),
                 saving: RwSignal::new(false),
                 read_generation: RwSignal::new(0),
+                incoming,
             })
         })
     }
@@ -74,6 +81,9 @@ impl OpenDocument {
     /// Increments on every edit, including reloads.
     pub fn revision(&self) -> ReadSignal<u64> {
         self.revision.read_only()
+    }
+    pub fn incoming(&self) -> ReadSignal<Option<Rc<LineDiff>>> {
+        self.incoming.read_only()
     }
     pub fn dirty(&self) -> bool {
         self.revision.get() != self.saved_revision.get()
@@ -163,6 +173,10 @@ impl OpenDocument {
         // A reload started earlier must not overwrite the merged text.
         self.read_generation.update(|generation| *generation += 1);
         replace_changed_region(&self.text, &ours, &merged.text);
+        if merged.text != ours {
+            self.incoming
+                .set(Some(Rc::new(LineDiff::compute(&ours, &merged.text))));
+        }
         self.baseline.set(disk);
         if merged.text == self.baseline.get_untracked() {
             self.saved_revision.set(self.revision.get_untracked());
@@ -454,6 +468,23 @@ C
                 );
             },
         );
+    }
+
+    #[test]
+    fn outside_changes_stay_highlighted_until_the_next_edit() {
+        with_text("a
+b
+", |doc| {
+            doc.sync_disk("a
+B
+c
+".into(), "pi");
+            let incoming = doc.incoming().get().unwrap();
+            assert_eq!(incoming.added(), 2);
+            assert_eq!(incoming.current[0], workbench_core::diff::LineChange::Unchanged);
+            edit(&doc, "typed");
+            assert!(doc.incoming().get().is_none());
+        });
     }
 
     #[test]

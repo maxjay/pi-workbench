@@ -29,28 +29,66 @@ const BORDER: Color = Color::from_rgb8(47, 54, 66);
 const TEXT: Color = Color::from_rgb8(218, 224, 233);
 const MUTED: Color = Color::from_rgb8(143, 156, 176);
 const ACCENT: Color = Color::from_rgb8(128, 190, 175);
-/// Line backgrounds in the changes view.
+/// Raised cards inside panels.
+const SURFACE: Color = Color::from_rgb8(34, 39, 49);
+const WARN: Color = Color::from_rgb8(229, 184, 100);
+const INFO: Color = Color::from_rgb8(122, 162, 247);
+/// Line backgrounds in the changes view and tool previews.
 const ADDED: Color = Color::from_rgba8(80, 170, 110, 46);
 const REMOVED: Color = Color::from_rgba8(210, 90, 90, 46);
+const ADDED_TEXT: Color = Color::from_rgb8(134, 207, 150);
+const REMOVED_TEXT: Color = Color::from_rgb8(236, 135, 135);
+/// CSS-style family list; the first installed font wins.
+const CODE_FONT: &str =
+    "'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
+const CODE_SIZE: usize = 14;
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
     phases: Phases::CAPTURE,
 };
 
+/// Editor styling shared by every code view.
+fn code_styling() -> floem::views::editor::text::SimpleStyling {
+    floem::views::editor::text::SimpleStyling::builder()
+        .font_family(floem::text::FamilyOwned::parse_list(CODE_FONT).collect())
+        .font_size(CODE_SIZE)
+        .line_height(1.6)
+        .build()
+}
+
 fn button(title: &'static str, action: impl Fn() + 'static) -> impl IntoView {
     Button::new(title).action(action).style(|s| {
         s.padding_horiz(10)
-            .padding_vert(6)
-            .border(1)
-            .border_color(BORDER)
-            .border_radius(4)
-            .background(PANEL)
-            .color(TEXT)
-            .hover(|s| s.background(BORDER))
+            .padding_vert(5)
+            .border(0)
+            .border_radius(6)
+            .background(Color::TRANSPARENT)
+            .color(MUTED)
+            .hover(|s| s.background(BORDER).color(TEXT))
+    })
+}
+
+/// A toolbar button that stays highlighted while its feature is on.
+fn toggle_button(
+    state: Rc<Workbench>,
+    title: &'static str,
+    command: Command,
+    on: impl Fn() -> bool + 'static,
+) -> impl IntoView {
+    button(title, move || commands::execute(&state, command)).style(move |s| {
+        s.apply_if(on(), |s| {
+            s.background(ACCENT.with_alpha(0.16))
+                .color(ACCENT)
+                .hover(|s| s.background(ACCENT.with_alpha(0.26)).color(ACCENT))
+        })
     })
 }
 
 fn command_button(state: Rc<Workbench>, title: &'static str, command: Command) -> impl IntoView {
     button(title, move || commands::execute(&state, command))
+}
+
+fn separator() -> impl IntoView {
+    Empty::new().style(|s| s.width(1).height(20).margin_horiz(4).background(BORDER))
 }
 
 fn toolbar(state: Rc<Workbench>) -> impl IntoView {
@@ -60,27 +98,43 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
         .unwrap_or(state.root().as_os_str())
         .to_string_lossy()
         .into_owned();
+    let layout = state.layout();
+    let comparing = state.changes.current();
+    let agent_open = state.agent.visible();
     Stack::horizontal((
-        Label::new("PI WORKBENCH").style(|s| s.color(ACCENT).font_size(12).padding_right(12)),
+        Label::new("π").style(|s| {
+            s.color(ACCENT)
+                .font_size(20)
+                .font_family(CODE_FONT.to_string())
+        }),
         Label::new(root).style(|s| {
             s.color(TEXT)
+                .font_bold()
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
         }),
         command_button(state.clone(), "Open folder", Command::OpenFolder),
         command_button(state.clone(), "Save", Command::Save),
-        command_button(state.clone(), "Split", Command::Split),
-        command_button(state.clone(), "Changes", Command::Changes),
-        command_button(state.clone(), "Pi", Command::Agent),
-        command_button(state.clone(), "Explorer", Command::Explorer),
-        command_button(state, "Commands", Command::Palette),
+        separator(),
+        toggle_button(state.clone(), "Explorer", Command::Explorer, move || {
+            layout.with(|l| l.explorer_visible)
+        }),
+        toggle_button(state.clone(), "Split", Command::Split, move || {
+            layout.with(|l| l.split)
+        }),
+        toggle_button(state.clone(), "Changes", Command::Changes, move || {
+            comparing.with(Option::is_some)
+        }),
+        separator(),
+        command_button(state.clone(), "Commands", Command::Palette),
+        toggle_button(state, "Pi", Command::Agent, move || agent_open.get()),
     ))
     .style(|s| {
         s.width_full()
-            .height(52)
+            .height(48)
             .padding_horiz(14)
-            .gap(8)
+            .gap(4)
             .items_center()
             .flex_shrink(0.0_f32)
             .background(PANEL)
@@ -191,11 +245,30 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             },
         )
     });
+    let pi_working = state.agent.working();
     let footer = Stack::horizontal((
-        Label::derived(move || status.get())
-            .style(|s| s.flex_grow(1.0_f32).min_width(0).text_ellipsis()),
+        Label::derived(move || status.get()).style(|s| {
+            s.color(MUTED)
+                .flex_grow(1.0_f32)
+                .min_width(0)
+                .text_ellipsis()
+        }),
+        Empty::new().style(move |s| {
+            s.size(7, 7)
+                .border_radius(4)
+                .background(if pi_working.get() { WARN } else { ACCENT })
+        }),
+        Label::derived(move || {
+            if pi_working.get() {
+                "Pi working"
+            } else {
+                "Pi ready"
+            }
+            .to_string()
+        })
+        .style(|s| s.color(MUTED)),
         Label::derived(move || format!("Pane {}  ·  UTF-8", focused.get().index() + 1))
-            .style(|s| s.color(ACCENT)),
+            .style(|s| s.color(MUTED).margin_left(8)),
     ))
     .style(|s| {
         s.width_full()

@@ -37,6 +37,9 @@ pub enum ToolState {
 pub struct Entry {
     pub id: u64,
     pub kind: EntryKind,
+    /// Tool name for tool entries, otherwise empty.
+    pub tool: String,
+    /// The message, or a tool's target file or command.
     pub title: RwSignal<String>,
     pub body: RwSignal<String>,
     pub state: RwSignal<Option<ToolState>>,
@@ -47,16 +50,14 @@ fn may_create_files(tool: &str) -> bool {
     matches!(tool, "write" | "bash" | "powershell")
 }
 
-fn tool_title(tool: &str, args: &serde_json::Value, partial: &str) -> String {
-    let path = args["path"]
+/// The file or command a tool call acts on, from final or streaming arguments.
+fn tool_target(args: &serde_json::Value, partial: &str) -> String {
+    args["command"]
         .as_str()
+        .or(args["path"].as_str())
         .map(String::from)
-        .or_else(|| file_preview(partial).path);
-    match (args["command"].as_str(), path) {
-        (Some(command), _) => format!("{tool}: {command}"),
-        (None, Some(path)) => format!("{tool} {path}"),
-        (None, None) => tool.into(),
-    }
+        .or_else(|| file_preview(partial).path)
+        .unwrap_or_default()
 }
 
 /// A readable view of an edit or write while its arguments stream in.
@@ -74,7 +75,7 @@ fn tool_preview(tool: &str, partial: &str) -> String {
             .map(|(old, new)| format!("{}{}", mark('-', old), mark('+', new)))
             .collect::<Vec<_>>()
             .join("···\n"),
-        "write" => preview.content.unwrap_or_default(),
+        "write" => mark('+', &preview.content.unwrap_or_default()),
         _ => String::new(),
     }
 }
@@ -161,13 +162,14 @@ impl Agent {
         self.visible.update(|visible| *visible = !*visible);
     }
 
-    fn push(&self, kind: EntryKind, title: String, body: String) -> Rc<Entry> {
+    fn push(&self, kind: EntryKind, tool: &str, title: String, body: String) -> Rc<Entry> {
         let id = self.next_entry.get();
         self.next_entry.set(id + 1);
         let entry = self.scope.enter(|| {
             Rc::new(Entry {
                 id,
                 kind,
+                tool: tool.into(),
                 title: RwSignal::new(title),
                 body: RwSignal::new(body),
                 state: RwSignal::new(None),
@@ -178,7 +180,7 @@ impl Agent {
     }
 
     fn notice(&self, message: impl Into<String>) {
-        self.push(EntryKind::Notice, message.into(), String::new());
+        self.push(EntryKind::Notice, "", message.into(), String::new());
     }
 
     /// Saves open files first so Pi reads what the user sees.
@@ -187,7 +189,7 @@ impl Agent {
         if text.is_empty() || self.working.get_untracked() {
             return;
         }
-        self.push(EntryKind::User, text.clone(), String::new());
+        self.push(EntryKind::User, "", text.clone(), String::new());
         self.working.set(true);
         self.documents.save_all();
         self.prompt_when_saved(text);
@@ -245,7 +247,7 @@ impl Agent {
             .or_insert_with(|| Streaming {
                 tool: tool.into(),
                 args: String::new(),
-                entry: self.push(EntryKind::Tool, tool.into(), String::new()),
+                entry: self.push(EntryKind::Tool, tool, String::new(), String::new()),
             })
             .entry
             .clone()
@@ -257,7 +259,7 @@ impl Agent {
             Event::TextDelta(delta) => {
                 let mut reply = self.reply.borrow_mut();
                 let entry = reply.get_or_insert_with(|| {
-                    self.push(EntryKind::Assistant, "Pi".into(), String::new())
+                    self.push(EntryKind::Assistant, "", String::new(), String::new())
                 });
                 entry.body.update(|body| body.push_str(&delta));
             }
@@ -274,14 +276,15 @@ impl Agent {
                 };
                 if let Some(call) = self.tools.borrow_mut().get_mut(&id) {
                     call.args.push_str(&delta);
-                    let title = tool_title(&call.tool, &serde_json::Value::Null, &call.args);
-                    call.entry.title.set(title);
+                    call.entry
+                        .title
+                        .set(tool_target(&serde_json::Value::Null, &call.args));
                     call.entry.body.set(tool_preview(&call.tool, &call.args));
                 }
             }
             Event::ToolStart { id, tool, args } => {
                 let entry = self.tool_entry(&id, &tool);
-                entry.title.set(tool_title(&tool, &args, ""));
+                entry.title.set(tool_target(&args, ""));
                 entry.state.set(Some(ToolState::Running));
             }
             Event::ToolEnd {
@@ -375,7 +378,7 @@ mod tests {
                 });
             }
             let entry = agent.entries().get()[0].clone();
-            assert_eq!(entry.title.get(), "edit src/a.rs");
+            assert_eq!(entry.title.get(), "src/a.rs");
             assert_eq!(entry.body.get(), "- hello\n+ hello pi\n");
             assert_eq!(entry.state.get(), Some(ToolState::Streaming));
 
@@ -421,7 +424,8 @@ mod tests {
                 output: "not found".into(),
             });
             let entry = agent.entries().get()[0].clone();
-            assert_eq!(entry.title.get(), "bash: cargo fmt");
+            assert_eq!(entry.title.get(), "cargo fmt");
+            assert_eq!(entry.tool, "bash");
             assert_eq!(entry.body.get(), "not found");
             assert_eq!(entry.state.get(), Some(ToolState::Failed));
         });

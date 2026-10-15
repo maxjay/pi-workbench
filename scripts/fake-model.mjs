@@ -6,16 +6,19 @@
 //   [{"tool": "edit", "args": {"path": "a.rs", "edits": [{"oldText": "x", "newText": "y"}]}},
 //    {"text": "Done."}]
 // A step may also be {"tools": [{tool, args}, ...]} for parallel calls.
-// Any other prompt gets an echo reply. Tool arguments stream in small chunks
+// Any other prompt runs the steps in the JSON file named by FAKE_MODEL_SCRIPT,
+// or gets an echo reply. Tool arguments stream in small chunks
 // with a delay so clients can observe live tool-call deltas.
 //
 //   node scripts/fake-model.mjs [port]   (default 0 = any free port)
 // Prints "listening <port>" once ready.
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const CHUNK = 12;
 const DELAY_MS = Number(process.env.FAKE_MODEL_DELAY_MS ?? 25);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const SCRIPT = process.env.FAKE_MODEL_SCRIPT;
 
 function text(content) {
 	if (typeof content === "string") return content;
@@ -29,7 +32,8 @@ function nextStep(messages) {
 	try {
 		steps = JSON.parse(prompt);
 	} catch {
-		return { text: `fake model received: ${prompt}` };
+		if (!SCRIPT) return { text: `fake model received: ${prompt}` };
+		steps = JSON.parse(readFileSync(SCRIPT, "utf8"));
 	}
 	if (!Array.isArray(steps)) return { text: "Expected a JSON array of steps." };
 	const answered = messages.slice(lastUser + 1).filter((m) => m.role === "assistant").length;
