@@ -1,6 +1,6 @@
 //! The terminal panel under the editors: one shell per window, started the
 //! first time the panel opens.
-use super::{ACCENT, BG, BORDER, MUTED, PANEL};
+use super::color;
 use crate::{
     terminal::{Row, Screen, key_bytes},
     workspace::Workbench,
@@ -33,7 +33,7 @@ fn font() -> Font {
         .family(family)
         .font_size(size)
         .line_height(LineHeightValue::Pt(line_height))
-        .color(super::TEXT);
+        .color(super::color::text());
     // Monospace: ten cells measure one more precisely than one.
     let sample = TextLayout::new_with_text("MMMMMMMMMM", AttrsList::new(attrs.clone()), None);
     let cell_width = (sample.size().width / 10.0).max(1.0);
@@ -142,8 +142,12 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             .inset_top(line as f64 * line_height)
             .width(cell_width)
             .height(line_height)
-            .apply_if(focused.get(), |s| s.background(ACCENT.with_alpha(0.55)))
-            .apply_if(!focused.get(), |s| s.border(1).border_color(ACCENT))
+            .apply_if(focused.get(), |s| {
+                s.background(color::accent().with_alpha(0.55))
+            })
+            .apply_if(!focused.get(), |s| {
+                s.border(1).border_color(color::accent())
+            })
             .apply_if(at.is_none(), |s| s.hide())
     });
     let exited = Label::new("The shell exited. Press Enter to start another.").style(move |s| {
@@ -152,8 +156,8 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             .inset_bottom(0)
             .inset_left(0)
             .padding(6)
-            .color(MUTED)
-            .background(PANEL)
+            .color(color::muted())
+            .background(color::panel())
             .apply_if(!gone, |s| s.hide())
     });
     let screen_view = Stack::new((fills, rows, cursor, exited))
@@ -270,7 +274,7 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
 
     let close_state = state.clone();
     let header = Stack::horizontal((
-        Label::new("TERMINAL").style(|s| s.color(MUTED).font_size(11).flex_grow(1.0_f32)),
+        Label::new("TERMINAL").style(|s| s.color(color::muted()).font_size(11).flex_grow(1.0_f32)),
         super::button("Hide", move || close_state.toggle_terminal()),
     ))
     .style(|s| {
@@ -279,16 +283,16 @@ pub(super) fn terminal_panel(state: Rc<Workbench>) -> impl IntoView {
             .padding_horiz(10)
             .items_center()
             .border_bottom(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .flex_shrink(0.0_f32)
     });
     Stack::vertical((header, body)).style(move |s| {
         s.width_full()
             .height(280)
             .flex_shrink(0.0_f32)
-            .background(BG)
+            .background(color::bg())
             .border_top(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .apply_if(!visible.get(), |s| s.hide())
     })
 }

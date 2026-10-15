@@ -1,6 +1,6 @@
 //! The changes lens inside an editor: removed lines appear as ghost lines in
 //! place, changed lines get a bar and a tint, and focus mode dims the rest.
-use super::{ADDED, MUTED, REMOVED, REMOVED_TEXT};
+use super::color;
 use crate::{lens::Comparison, origins::Origin, syntax::Lines};
 use floem::views::editor::core::xi_rope::Rope;
 use floem::{
@@ -129,8 +129,8 @@ fn ghost(col: usize, text: String) -> PhantomText {
         affinity: None,
         text,
         font_size: None,
-        fg: Some(REMOVED_TEXT),
-        bg: Some(REMOVED),
+        fg: Some(color::removed_text()),
+        bg: Some(color::removed()),
         under_line: None,
     }
 }
@@ -279,7 +279,7 @@ impl Styling for LensStyling {
         // Floem's editor needs every line the same height, so focus fades
         // unchanged lines instead of folding them.
         if Self::flag(&self.overlay.dimmed, line) {
-            *attrs = AttrsList::new(default.color(MUTED.with_alpha(0.3)));
+            *attrs = AttrsList::new(default.color(color::muted().with_alpha(0.3)));
             return;
         }
         let Some(spans) = self.syntax.as_ref().and_then(|lines| lines.get(line)) else {
@@ -296,7 +296,7 @@ impl Styling for LensStyling {
                 continue;
             }
             let (start, end) = (span.start + shift, end + shift);
-            if let Some((color, italic)) = super::token_style(span.token) {
+            if let Some((color, italic)) = super::color::token(span.token) {
                 let mut style = default.clone().color(color);
                 if italic {
                     style = style.font_style(floem::text::FontStyle::Italic);
@@ -350,9 +350,9 @@ impl Styling for LensStyling {
             // Reformatted only: a hairline, so it can be found but not read as a change.
             layout_line
                 .extra_style
-                .push(mark(Some(1.0), MUTED.with_alpha(0.5)));
+                .push(mark(Some(1.0), color::muted().with_alpha(0.5)));
         } else if added(self.incoming.as_deref(), line) {
-            layout_line.extra_style.push(mark(None, ADDED));
+            layout_line.extra_style.push(mark(None, color::added()));
         } else if added(self.lens.as_ref().map(|c| &c.diff), line) {
             let origin = self
                 .lens

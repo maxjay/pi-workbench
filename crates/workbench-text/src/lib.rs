@@ -4,3 +4,4 @@
 pub mod highlight;
 pub mod index;
 pub mod search;
+pub mod theme;

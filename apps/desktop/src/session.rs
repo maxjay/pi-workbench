@@ -88,6 +88,26 @@ impl Model {
     }
 }
 
+/// A slash command Pi offers: from an extension, a prompt template, or a skill.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PiCommand {
+    /// Without the leading slash.
+    pub name: String,
+    pub description: String,
+    /// "extension", "prompt" or "skill".
+    pub source: String,
+}
+
+impl PiCommand {
+    fn from_json(value: &Value) -> Option<Self> {
+        Some(Self {
+            name: value["name"].as_str()?.to_owned(),
+            description: value["description"].as_str().unwrap_or_default().to_owned(),
+            source: value["source"].as_str().unwrap_or_default().to_owned(),
+        })
+    }
+}
+
 /// One prompt and the workspace either side of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
@@ -226,6 +246,10 @@ pub struct Session {
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
+    /// Slash commands Pi offers in this session, extensions' included.
+    commands: RwSignal<Vec<PiCommand>>,
+    /// Where the composer's caret should go the next time it takes focus.
+    focus_request: RwSignal<Option<usize>>,
     /// Prompts sent from this window with snapshots either side, oldest first.
     turns: RwSignal<Vec<Turn>>,
     /// The turn whose run is still going.
@@ -285,6 +309,8 @@ impl Session {
                 model: RwSignal::new(None),
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
+                commands: RwSignal::new(Vec::new()),
+                focus_request: RwSignal::new(None),
                 turns: RwSignal::new(Vec::new()),
                 open_turn: Cell::new(None),
                 settling: Cell::new(false),
@@ -345,6 +371,24 @@ impl Session {
     }
     pub fn stats(&self) -> ReadSignal<String> {
         self.stats.read_only()
+    }
+    pub fn commands(&self) -> ReadSignal<Vec<PiCommand>> {
+        self.commands.read_only()
+    }
+
+    /// Focuses the composer with the caret at `offset`.
+    pub fn focus_composer(&self, offset: usize) {
+        self.focus_request.set(Some(offset));
+    }
+    pub fn focus_request(&self) -> RwSignal<Option<usize>> {
+        self.focus_request
+    }
+
+    /// Asks Pi again which commands it has; extensions can add them at any time.
+    pub fn refresh_commands(&self) {
+        if self.process.borrow().is_some() {
+            self.with_process(|pi| pi.request("get_commands"));
+        }
     }
     pub fn turns(&self) -> ReadSignal<Vec<Turn>> {
         self.turns.read_only()
@@ -423,6 +467,7 @@ impl Session {
         }
         process.request("get_state")?;
         process.request("get_available_models")?;
+        process.request("get_commands")?;
         *self.process.borrow_mut() = Some(process);
         Ok(())
     }
@@ -724,6 +769,13 @@ impl Session {
                     .set(models.filter_map(Model::from_json).collect());
             }
             "set_model" => self.model.set(Model::from_json(&data)),
+            "get_commands" => {
+                let commands = data["commands"].as_array().into_iter().flatten();
+                let commands: Vec<PiCommand> = commands.filter_map(PiCommand::from_json).collect();
+                if self.commands.with_untracked(|c| *c != commands) {
+                    self.commands.set(commands);
+                }
+            }
             "get_session_stats" => self.stats.set(stats_label(&data)),
             _ => {}
         }

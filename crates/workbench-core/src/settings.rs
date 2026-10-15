@@ -6,6 +6,12 @@ use std::{collections::BTreeMap, fs, io::ErrorKind, path::PathBuf};
 
 /// What a new settings file starts with: every setting, at its default.
 pub const TEMPLATE: &str = r#"{
+  // Colour theme: "Pi Workbench", a bundled theme such as "Catppuccin Mocha",
+  // "Dracula", "Nord" or "Solarized (light)", or the path of a .tmTheme file.
+  // Ctrl+T picks one with a live preview. More .tmTheme files can go in a
+  // "themes" folder next to this file.
+  "theme": "Pi Workbench",
+
   // Editor and terminal font. Changes apply to new windows.
   "font_family": null,
   "font_size": 14,
@@ -29,6 +35,7 @@ pub const TEMPLATE: &str = r#"{
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub theme: Option<String>,
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
     pub base_branch: Option<String>,
@@ -79,6 +86,53 @@ pub fn ensure_file() -> Result<PathBuf> {
         fs::write(&path, TEMPLATE)?;
     }
     Ok(path)
+}
+
+/// Sets a top-level string setting in the file, keeping its comments and
+/// layout: the existing line is rewritten, or a new one added at the top.
+pub fn set_string(key: &str, value: &str) -> Result<()> {
+    let path = ensure_file()?;
+    let text = fs::read_to_string(&path)?;
+    fs::write(&path, with_string(&text, key, value)?)?;
+    Ok(())
+}
+
+fn with_string(text: &str, key: &str, value: &str) -> Result<String> {
+    let entry = format!("\"{key}\": {}", serde_json::to_string(value)?);
+    let quoted = format!("\"{key}\"");
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let existing = lines.iter().position(|line| {
+        let code = strip_comments(line);
+        let code = code.trim_start();
+        code.starts_with(&quoted) && code[quoted.len()..].trim_start().starts_with(':')
+    });
+    match existing {
+        Some(index) => {
+            let line = &lines[index];
+            let indent = &line[..line.len() - line.trim_start().len()];
+            let comma = if strip_comments(line).trim_end().ends_with(',') {
+                ","
+            } else {
+                ""
+            };
+            lines[index] = format!("{indent}{entry}{comma}");
+        }
+        None => {
+            let open = lines
+                .iter()
+                .position(|line| strip_comments(line).trim() == "{")
+                .context("The settings file does not start with {")?;
+            // The next setting needs a comma after this one, unless there is none.
+            let empty = lines[open + 1..]
+                .iter()
+                .all(|line| matches!(strip_comments(line).trim(), "" | "}"));
+            let comma = if empty { "" } else { "," };
+            lines.insert(open + 1, format!("  {entry}{comma}"));
+        }
+    }
+    let joined = lines.join("\n") + "\n";
+    parse(&joined).context("The settings file would not parse after the change")?;
+    Ok(joined)
 }
 
 /// JSON with `//` line comments, which the template uses to explain itself.
@@ -163,6 +217,21 @@ mod tests {
         assert_eq!(settings.base_branch.as_deref(), Some("release//2"));
         assert_eq!(settings.keys["QuickOpen"], "ctrl+o");
         assert!(parse(r#"{ "fontsize": 3 }"#).is_err());
+    }
+
+    #[test]
+    fn setting_a_string_keeps_comments_and_layout() {
+        let changed = with_string(TEMPLATE, "theme", "Nord").unwrap();
+        assert_eq!(parse(&changed).unwrap().theme.as_deref(), Some("Nord"));
+        assert!(changed.contains("// Colour theme"));
+        assert_eq!(changed.lines().count(), TEMPLATE.lines().count());
+        let added = with_string("{\n  \"font_size\": 12\n}\n", "theme", "A \"b\"").unwrap();
+        assert_eq!(parse(&added).unwrap().theme.as_deref(), Some("A \"b\""));
+        assert_eq!(parse(&added).unwrap().font_size, Some(12.0));
+        let empty = with_string("{}\n", "theme", "x");
+        assert!(empty.is_err(), "a one-line object has no line to add to");
+        let alone = with_string("{\n}\n", "theme", "x").unwrap();
+        assert_eq!(parse(&alone).unwrap().theme.as_deref(), Some("x"));
     }
 
     #[test]

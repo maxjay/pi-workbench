@@ -1,8 +1,6 @@
 //! The explorer, read through the changes lens: changed files stand out with
 //! their line counts, the rest fade, and the tree can collapse to just the changes.
-use super::{
-    ACCENT, ADDED_TEXT, BORDER, CODE_FONT, MUTED, PANEL, REMOVED_TEXT, TEXT, command_button,
-};
+use super::{CODE_FONT, color, command_button};
 use crate::{commands::Command, lens::TurnFiles, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use std::{path::PathBuf, rc::Rc};
@@ -21,9 +19,9 @@ fn counts(change: &FileChange) -> String {
 
 fn status_color(status: FileStatus) -> Color {
     match status {
-        FileStatus::Added => ADDED_TEXT,
-        FileStatus::Deleted => REMOVED_TEXT,
-        FileStatus::Modified => ACCENT,
+        FileStatus::Added => color::added_text(),
+        FileStatus::Deleted => color::removed_text(),
+        FileStatus::Modified => color::accent(),
     }
 }
 
@@ -58,7 +56,7 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
                             .iter()
                             .filter(|c| c.path.starts_with(&change_path))
                             .count();
-                        (inside > 0).then(|| (format!("{inside}"), ACCENT))
+                        (inside > 0).then(|| (format!("{inside}"), color::accent()))
                     } else {
                         changes
                             .iter()
@@ -86,15 +84,17 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
                     let changed = label_change().is_some();
                     s.flex_grow(1.0_f32).min_width(0).text_ellipsis().color(
                         if changed || directory {
-                            TEXT
+                            color::text()
                         } else {
-                            MUTED.with_alpha(0.75)
+                            color::muted().with_alpha(0.75)
                         },
                     )
                 }),
                 Label::derived(move || count_change().map(|(c, _)| c).unwrap_or_default()).style(
                     move |s| {
-                        let color = color_change().map(|(_, color)| color).unwrap_or(MUTED);
+                        let color = color_change()
+                            .map(|(_, color)| color)
+                            .unwrap_or(color::muted());
                         s.font_size(11)
                             .font_family(CODE_FONT.to_string())
                             .color(color)
@@ -110,7 +110,7 @@ fn tree(state: Rc<Workbench>) -> impl IntoView {
                     .padding_left((12 + row.depth * 14) as f64)
                     .padding_right(10)
                     .cursor(CursorStyle::Pointer)
-                    .hover(|s| s.background(BORDER))
+                    .hover(|s| s.background(color::border()))
             })
             .on_event_stop(el::Click, move |_, _| {
                 if directory {
@@ -182,7 +182,7 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
     let open_state = state.clone();
     Stack::vertical((
         Label::new("Nothing has changed").style(move |s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .padding(14)
                 .apply_if(!changes.with(Vec::is_empty), |s| s.hide())
         }),
@@ -222,12 +222,12 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
                 let deleted = change.status == FileStatus::Deleted;
                 Stack::horizontal((
                     Label::new(name).style(move |s| {
-                        s.color(TEXT)
+                        s.color(color::text())
                             .flex_shrink(0.0_f32)
-                            .apply_if(deleted, |s| s.color(REMOVED_TEXT))
+                            .apply_if(deleted, |s| s.color(color::removed_text()))
                     }),
                     Label::new(folder).style(|s| {
-                        s.color(MUTED)
+                        s.color(color::muted())
                             .font_size(11)
                             .flex_grow(1.0_f32)
                             .min_width(0)
@@ -247,7 +247,7 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
                         .items_center()
                         .padding_horiz(12)
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(BORDER))
+                        .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
                     if !deleted {
@@ -266,9 +266,9 @@ fn changed_files(state: Rc<Workbench>) -> impl IntoView {
 
 fn heading(title: String, detail: String) -> impl IntoView {
     Stack::horizontal((
-        Label::new(title).style(|s| s.color(ACCENT).font_size(11).flex_shrink(0.0_f32)),
+        Label::new(title).style(|s| s.color(color::accent()).font_size(11).flex_shrink(0.0_f32)),
         Label::new(detail).style(|s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .font_size(11)
                 .min_width(0)
                 .flex_grow(1.0_f32)
@@ -303,7 +303,7 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
                 }
                 .to_string()
             })
-            .style(|s| s.color(MUTED).font_size(11).flex_grow(1.0_f32)),
+            .style(|s| s.color(color::muted()).font_size(11).flex_grow(1.0_f32)),
             command_button(state.clone(), "↔", Command::MoveExplorer),
             command_button(state, "Refresh", Command::Refresh),
         ))
@@ -321,7 +321,7 @@ pub(super) fn explorer(state: Rc<Workbench>) -> impl IntoView {
             .height_full()
             .min_height(0)
             .flex_shrink(0.0_f32)
-            .background(PANEL)
+            .background(color::panel())
             .apply_if(!layout.with(|l| l.explorer_visible), |s| s.hide())
     })
 }

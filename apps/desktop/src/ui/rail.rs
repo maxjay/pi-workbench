@@ -1,5 +1,5 @@
 //! The sessions rail: open Pi sessions to tab between, and recent ones to resume.
-use super::{ACCENT, BORDER, MUTED, PANEL, TEXT, session::status_color};
+use super::{color, session::status_color};
 use crate::{session::Session, workspace::Workbench};
 use floem::{prelude::*, style::CursorStyle};
 use pi_client::sessions::SessionSummary;
@@ -20,7 +20,7 @@ fn age(modified: SystemTime) -> String {
 
 fn heading(text: &'static str) -> impl IntoView {
     Label::new(text).style(|s| {
-        s.color(MUTED)
+        s.color(color::muted())
             .font_size(10)
             .font_bold()
             .padding_horiz(14)
@@ -43,7 +43,7 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
                 .background(status_color(status_session.status()))
         }),
         Label::derived(move || title.get()).style(|s| {
-            s.color(TEXT)
+            s.color(color::text())
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
@@ -53,13 +53,13 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
         } else {
             String::new()
         })
-        .style(|s| s.color(MUTED).font_size(10).flex_shrink(0.0_f32)),
+        .style(|s| s.color(color::muted()).font_size(10).flex_shrink(0.0_f32)),
         Label::new("×")
             .style(|s| {
-                s.color(MUTED)
+                s.color(color::muted())
                     .padding_horiz(4)
                     .cursor(CursorStyle::Pointer)
-                    .hover(|s| s.color(TEXT))
+                    .hover(|s| s.color(color::text()))
             })
             .on_event_stop(el::Click, move |_, _| close_state.sessions.close(key)),
     ))
@@ -74,8 +74,10 @@ fn open_row(state: Rc<Workbench>, session: Rc<Session>, index: usize) -> impl In
             .cursor(CursorStyle::Pointer)
             .border_left(2)
             .border_color(Color::TRANSPARENT)
-            .hover(|s| s.background(BORDER.with_alpha(0.5)))
-            .apply_if(selected, |s| s.background(BORDER).border_color(ACCENT))
+            .hover(|s| s.background(color::border().with_alpha(0.5)))
+            .apply_if(selected, |s| {
+                s.background(color::border()).border_color(color::accent())
+            })
     })
     .on_event_stop(el::Click, move |_, _| {
         select_state.sessions.select(key);
@@ -88,12 +90,12 @@ fn recent_row(state: Rc<Workbench>, summary: SessionSummary) -> impl IntoView {
     let title = summary.title.clone();
     Stack::horizontal((
         Label::new(title).style(|s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
         }),
-        Label::new(when).style(|s| s.color(MUTED).font_size(10).flex_shrink(0.0_f32)),
+        Label::new(when).style(|s| s.color(color::muted()).font_size(10).flex_shrink(0.0_f32)),
     ))
     .style(|s| {
         s.width_full()
@@ -102,7 +104,10 @@ fn recent_row(state: Rc<Workbench>, summary: SessionSummary) -> impl IntoView {
             .padding_horiz(14)
             .items_center()
             .cursor(CursorStyle::Pointer)
-            .hover(|s| s.background(BORDER.with_alpha(0.5)).color(TEXT))
+            .hover(|s| {
+                s.background(color::border().with_alpha(0.5))
+                    .color(color::text())
+            })
     })
     .on_event_stop(el::Click, move |_, _| {
         state.sessions.resume(&summary);
@@ -116,17 +121,21 @@ pub(super) fn rail(state: Rc<Workbench>) -> impl IntoView {
     let recent_sessions = state.sessions.clone();
     Stack::vertical((
         Stack::horizontal((
-            Label::new("SESSIONS")
-                .style(|s| s.color(MUTED).font_size(10).font_bold().flex_grow(1.0_f32)),
+            Label::new("SESSIONS").style(|s| {
+                s.color(color::muted())
+                    .font_size(10)
+                    .font_bold()
+                    .flex_grow(1.0_f32)
+            }),
             Label::new("+ New")
                 .style(|s| {
-                    s.color(ACCENT)
+                    s.color(color::accent())
                         .font_size(12)
                         .padding_horiz(8)
                         .padding_vert(3)
                         .border_radius(6)
                         .cursor(CursorStyle::Pointer)
-                        .hover(|s| s.background(BORDER))
+                        .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
                     new_state.sessions.create();
@@ -167,8 +176,8 @@ pub(super) fn rail(state: Rc<Workbench>) -> impl IntoView {
         s.width(240)
             .height_full()
             .flex_shrink(0.0_f32)
-            .background(PANEL)
+            .background(color::panel())
             .border_right(1)
-            .border_color(BORDER)
+            .border_color(color::border())
     })
 }

@@ -1,93 +1,7 @@
-use super::{ACCENT, BG, BORDER, CAPTURE, MUTED, PANEL, TEXT, button};
-use crate::{
-    commands::{self, COMMANDS},
-    workspace::{Confirm, Workbench},
-};
+use super::{CAPTURE, button, color};
+use crate::workspace::{Confirm, Workbench};
 use floem::{event::EventPropagation, prelude::*, reactive::Effect};
 use std::rc::Rc;
-
-pub(super) fn command_palette(state: Rc<Workbench>) -> impl IntoView {
-    let shown = state.palette();
-    let close_state = state.clone();
-    let dismiss_state = state.clone();
-    let query = RwSignal::new(String::new());
-    let input = TextInput::new(query)
-        .placeholder("Filter commands…")
-        .style(|s| s.width_full().padding(10).background(BG).color(TEXT));
-    let input_id = input.view_id();
-    Effect::new(move |_| {
-        if shown.get() {
-            // Each opening starts from the full list.
-            query.set(String::new());
-            floem::action::exec_after_animation_frame(move |_| {
-                if shown.get_untracked() {
-                    input_id.request_focus();
-                }
-            });
-        }
-    });
-    let commands = dyn_stack(
-        move || {
-            COMMANDS
-                .iter()
-                .filter(|c| {
-                    c.title()
-                        .to_lowercase()
-                        .contains(&query.get().to_lowercase())
-                })
-                .copied()
-                .collect::<Vec<_>>()
-        },
-        |command| *command,
-        move |command| {
-            let state = state.clone();
-            Label::new(format!(
-                "{}    {}",
-                command.title(),
-                command.shortcut_label()
-            ))
-            .button()
-            .action(move || {
-                commands::execute(&state, command);
-                state.dismiss_palette();
-            })
-            .style(|s| {
-                s.width_full()
-                    .padding(10)
-                    .background(PANEL)
-                    .color(TEXT)
-                    .hover(|s| s.background(BORDER))
-            })
-        },
-    )
-    .style(|s| s.flex_col().width_full())
-    .scroll()
-    .style(|s| s.width_full().max_height(360).flex_shrink(0.0_f32));
-    floating_layer(
-        Stack::vertical((
-            Label::new("Commands").style(|s| s.color(ACCENT)),
-            input,
-            commands,
-            button("Close", move || close_state.dismiss_palette()),
-        ))
-        .style(move |s| {
-            s.absolute()
-                .inset_top(70)
-                .inset_left(80)
-                .width(570)
-                .padding(16)
-                .gap(10)
-                .background(PANEL)
-                .border(1)
-                .border_color(BORDER)
-                .border_radius(8)
-                .z_index(20)
-                .apply_if(!shown.get(), |s| s.hide())
-        }),
-        move || shown.get(),
-        move || dismiss_state.dismiss_palette(),
-    )
-}
 
 fn floating_layer(
     content: impl IntoView + 'static,
@@ -151,7 +65,7 @@ pub(super) fn confirmation(state: Rc<Workbench>) -> impl IntoView {
         Stack::vertical((
             title,
             Label::new("Save errors appear in the status bar. Cancel keeps your edits open.")
-                .style(|s| s.color(MUTED).font_size(12)),
+                .style(|s| s.color(color::muted()).font_size(12)),
             Stack::horizontal((
                 button("Save all", move || save_state.documents.save_all()).style(move |s| {
                     s.apply_if(matches!(confirm.get(), Some(Confirm::Reload(_))), |s| {
@@ -175,9 +89,9 @@ pub(super) fn confirmation(state: Rc<Workbench>) -> impl IntoView {
                 .max_width(700)
                 .padding(24)
                 .gap(16)
-                .background(PANEL)
+                .background(color::panel())
                 .border(1)
-                .border_color(ACCENT)
+                .border_color(color::accent())
                 .border_radius(8)
                 .z_index(30)
                 .apply_if(confirm.get().is_none(), |s| s.hide())

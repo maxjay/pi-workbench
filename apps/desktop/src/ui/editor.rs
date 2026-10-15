@@ -1,5 +1,5 @@
 use super::{
-    ACCENT, BG, BORDER, CAPTURE, MUTED, PANEL, TEXT,
+    CAPTURE, color,
     lens_doc::{LensDocument, LensStyling, Overlay, Quiet},
 };
 use crate::{
@@ -40,9 +40,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                 .cursor(CursorStyle::Pointer)
                 .border_right(1)
                 .border_bottom(2)
-                .border_color(BORDER)
+                .border_color(color::border())
                 .apply_if(showing_conversation(), |s| {
-                    s.background(BG).border_color(ACCENT)
+                    s.background(color::bg()).border_color(color::accent())
                 })
                 .apply_if(pane != Pane::Primary, |s| s.hide())
         })
@@ -83,7 +83,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                         s.padding_right(8)
                             .height_full()
                             .items_center()
-                            .color(MUTED)
+                            .color(color::muted())
                             .cursor(CursorStyle::Pointer)
                     })
                     .on_event_stop(el::Click, move |_, _| {
@@ -95,10 +95,10 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                     .flex_shrink(0.0_f32)
                     .border_right(1)
                     .border_bottom(2)
-                    .border_color(BORDER)
+                    .border_color(color::border())
                     .apply_if(
                         !showing_conversation() && active.get().as_ref() == Some(&selected_path),
-                        |s| s.background(BG).border_color(ACCENT),
+                        |s| s.background(color::bg()).border_color(color::accent()),
                     )
             })
         },
@@ -111,14 +111,14 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             s.width_full()
                 .height(36)
                 .flex_shrink(0.0_f32)
-                .background(PANEL)
+                .background(color::panel())
         });
 
     let editor = text_editor("")
         .styling(super::code_styling())
         .editor_style(super::editor_colors)
         .editor_style(|s| s.scroll_beyond_last_line(false))
-        .style(|s| s.size_full().min_width(0).min_height(0));
+        .style(|s| super::editor_surface(s.size_full().min_width(0).min_height(0)));
     let handle = editor.editor().clone();
     // This pane's view of the lens: ghost lines and folds for the file it shows.
     let overlay = RwSignal::new(Rc::new(Overlay::default()));
@@ -186,6 +186,8 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                 .find(|doc| Some(doc.path()) == path.as_ref())
                 .cloned()
         });
+        // Code colours come from the theme.
+        super::color::theme().track();
         let focus = lens.focus().get();
         let seen = lens.seen().get();
         let show_formatting = lens.show_formatting().get();
@@ -266,7 +268,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         s.absolute()
             .inset_left(32)
             .inset_top(55)
-            .color(MUTED)
+            .color(color::muted())
             .line_height(1.8)
             .apply_if(active.get().is_some(), |s| s.hide())
     });
@@ -300,7 +302,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         })
         .style(move |s| {
             s.apply_if(showing_conversation(), |s| s.hide())
-                .color(MUTED)
+                .color(color::muted())
                 .font_size(11)
                 .height(28)
                 .padding_horiz(12)
@@ -328,9 +330,9 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             .min_height(0)
             .border_top(1)
             .border_color(if focused.get() == pane {
-                ACCENT
+                color::accent()
             } else {
-                BORDER
+                color::border()
             })
             .apply_if(pane == Pane::Secondary && !config.split, |s| s.hide())
     })
@@ -378,13 +380,13 @@ fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
         let state = state.clone();
         Label::new(title)
             .style(|s| {
-                s.color(TEXT)
+                s.color(color::text())
                     .font_size(11)
                     .padding_horiz(8)
                     .padding_vert(3)
                     .border_radius(5)
                     .cursor(CursorStyle::Pointer)
-                    .hover(|s| s.background(BORDER))
+                    .hover(|s| s.background(color::border()))
             })
             .on_event_stop(el::Click, move |_, _| commands::execute(&state, command))
     };
@@ -394,7 +396,7 @@ fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
                 .map(|(at, of)| format!("Change {at} of {of}"))
                 .unwrap_or_default()
         })
-        .style(|s| s.color(MUTED).font_size(11).padding_horiz(6)),
+        .style(|s| s.color(color::muted()).font_size(11).padding_horiz(6)),
         action("Revert", Command::RevertChange),
         action("Stage", Command::StageChange),
         action("Ask Pi", Command::AskAboutChange),
@@ -409,9 +411,9 @@ fn change_bar(state: Rc<Workbench>, pane: Pane) -> impl IntoView {
             .gap(2)
             .padding(3)
             .border(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .border_radius(7)
-            .background(PANEL)
+            .background(color::panel())
             .z_index(5)
             .apply_if(shown().is_none(), |s| s.hide())
     })

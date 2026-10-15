@@ -292,7 +292,7 @@ fn snapshot(term: &Term<Listener>) -> Screen {
             background(cell.bg, content.colors),
         );
         if cell.flags.contains(Flags::INVERSE) {
-            let swapped = bg.unwrap_or(BACKGROUND);
+            let swapped = bg.unwrap_or_else(crate::ui::color::bg);
             bg = Some(fg);
             fg = swapped;
         }
@@ -377,32 +377,9 @@ fn cursor_line(point: Point, lines: usize) -> usize {
     (point.line.0.max(0) as usize).min(lines.saturating_sub(1))
 }
 
-const FOREGROUND: Color = Color::from_rgb8(218, 224, 233);
-const BACKGROUND: Color = Color::from_rgb8(21, 24, 30);
-
-/// The first sixteen colours, close to the rest of the app's palette.
-const ANSI: [Color; 16] = [
-    Color::from_rgb8(40, 44, 52),
-    Color::from_rgb8(224, 108, 117),
-    Color::from_rgb8(152, 195, 121),
-    Color::from_rgb8(229, 192, 123),
-    Color::from_rgb8(97, 175, 239),
-    Color::from_rgb8(198, 120, 221),
-    Color::from_rgb8(86, 182, 194),
-    Color::from_rgb8(171, 178, 191),
-    Color::from_rgb8(92, 99, 112),
-    Color::from_rgb8(240, 135, 143),
-    Color::from_rgb8(173, 219, 141),
-    Color::from_rgb8(240, 210, 150),
-    Color::from_rgb8(130, 196, 250),
-    Color::from_rgb8(214, 150, 236),
-    Color::from_rgb8(110, 205, 216),
-    Color::from_rgb8(220, 224, 232),
-];
-
 fn indexed(index: u8) -> Color {
     match index {
-        0..=15 => ANSI[index as usize],
+        0..=15 => crate::ui::color::ansi(index as usize),
         16..=231 => {
             let i = index - 16;
             let level = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
@@ -417,20 +394,20 @@ fn indexed(index: u8) -> Color {
 
 fn named(name: NamedColor) -> Color {
     match name {
-        NamedColor::Foreground | NamedColor::BrightForeground => FOREGROUND,
-        NamedColor::Background => BACKGROUND,
-        NamedColor::DimForeground => FOREGROUND.with_alpha(0.6),
-        NamedColor::Cursor => FOREGROUND,
+        NamedColor::Foreground | NamedColor::BrightForeground => crate::ui::color::text(),
+        NamedColor::Background => crate::ui::color::bg(),
+        NamedColor::DimForeground => crate::ui::color::text().with_alpha(0.6),
+        NamedColor::Cursor => crate::ui::color::text(),
         other => {
             let index = other as usize;
             if index < 16 {
-                ANSI[index]
+                crate::ui::color::ansi(index)
             } else if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize)
                 .contains(&index)
             {
-                ANSI[index - NamedColor::DimBlack as usize].with_alpha(0.7)
+                crate::ui::color::ansi(index - NamedColor::DimBlack as usize).with_alpha(0.7)
             } else {
-                FOREGROUND
+                crate::ui::color::text()
             }
         }
     }
@@ -578,6 +555,6 @@ mod tests {
         assert_eq!(indexed(16), Color::from_rgb8(0, 0, 0));
         assert_eq!(indexed(231), Color::from_rgb8(255, 255, 255));
         assert_eq!(indexed(232), Color::from_rgb8(8, 8, 8));
-        assert_eq!(indexed(1), ANSI[1]);
+        assert_eq!(indexed(1), crate::ui::color::ansi(1));
     }
 }

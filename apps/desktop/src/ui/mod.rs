@@ -1,4 +1,5 @@
 //! Native window composition and styling. User actions are implemented in workspace.rs.
+pub(crate) mod color;
 mod editor;
 mod explorer;
 mod finder;
@@ -22,38 +23,21 @@ use floem::{
     style::CursorStyle,
     window::WindowId,
 };
-use overlays::{command_palette, confirmation};
+use overlays::confirmation;
 use pi_client::Launch;
 use std::{path::PathBuf, rc::Rc};
 
-const BG: Color = Color::from_rgb8(21, 24, 30);
-const PANEL: Color = Color::from_rgb8(28, 32, 40);
-const BORDER: Color = Color::from_rgb8(47, 54, 66);
-const TEXT: Color = Color::from_rgb8(218, 224, 233);
-const MUTED: Color = Color::from_rgb8(143, 156, 176);
-const ACCENT: Color = Color::from_rgb8(128, 190, 175);
-/// Raised cards inside panels.
-const SURFACE: Color = Color::from_rgb8(34, 39, 49);
-const WARN: Color = Color::from_rgb8(229, 184, 100);
-const INFO: Color = Color::from_rgb8(122, 162, 247);
-/// Line backgrounds in the changes view and tool previews.
-const ADDED: Color = Color::from_rgba8(80, 170, 110, 46);
-const REMOVED: Color = Color::from_rgba8(210, 90, 90, 46);
-const ADDED_TEXT: Color = Color::from_rgb8(134, 207, 150);
-const REMOVED_TEXT: Color = Color::from_rgb8(236, 135, 135);
 /// CSS-style family list; the first installed font wins.
 pub(crate) const CODE_FONT: &str =
     "'Cascadia Code', 'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
 pub(crate) const CODE_SIZE: usize = 14;
-/// Floem's editor background, which its style API does not let us change.
-const EDITOR_BG: Color = Color::from_rgb8(40, 44, 52);
 
 /// How the lens marks who added a line.
 fn origin_color(origin: crate::origins::Origin) -> Color {
     match origin {
-        crate::origins::Origin::Pi => ACCENT,
-        crate::origins::Origin::You => INFO,
-        crate::origins::Origin::Others => WARN,
+        crate::origins::Origin::Pi => color::accent(),
+        crate::origins::Origin::You => color::info(),
+        crate::origins::Origin::Others => color::warn(),
     }
 }
 const CAPTURE: EventCallbackConfig = EventCallbackConfig {
@@ -61,30 +45,27 @@ const CAPTURE: EventCallbackConfig = EventCallbackConfig {
 };
 
 /// Syntax colours; `true` draws the token in italics.
-fn token_style(token: workbench_text::highlight::Token) -> Option<(Color, bool)> {
-    use workbench_text::highlight::Token;
-    Some(match token {
-        Token::Keyword => (Color::from_rgb8(198, 146, 233), false),
-        Token::String => (Color::from_rgb8(163, 205, 133), false),
-        Token::Comment => (Color::from_rgb8(110, 120, 138), true),
-        Token::Function => (Color::from_rgb8(120, 178, 245), false),
-        Token::Type => (Color::from_rgb8(232, 197, 128), false),
-        Token::Number | Token::Constant => (Color::from_rgb8(222, 160, 110), false),
-        Token::Operator => (Color::from_rgb8(120, 200, 210), false),
-        Token::Attribute | Token::Tag => (Color::from_rgb8(230, 120, 130), false),
-        Token::Variable | Token::Punctuation | Token::Plain => return None,
-    })
-}
-
-/// Editor colours from the app palette, shared by every editor.
+/// Editor colours from the theme, shared by every editor.
 fn editor_colors(style: floem::views::EditorCustomStyle) -> floem::views::EditorCustomStyle {
     floem::views::editor::text::default_dark_color(style)
-        .cursor_color(ACCENT)
-        .selection_color(ACCENT.with_alpha(0.25))
-        .current_line_color(Color::from_rgb8(46, 51, 61))
-        .gutter_current_color(Color::from_rgb8(46, 51, 61))
-        .gutter_dim_color(Color::from_rgb8(84, 94, 110))
-        .indent_guide_color(BORDER)
+        .cursor_color(color::caret())
+        .selection_color(color::selection())
+        .current_line_color(color::current_line())
+        .gutter_current_color(color::current_line())
+        .gutter_dim_color(color::gutter_text())
+        .gutter_accent_color(color::text())
+        .indent_guide_color(color::border())
+}
+
+/// The editor's own background and text colour, which its custom style
+/// cannot set; they go on the view, and on its gutter.
+fn editor_surface(s: floem::style::Style) -> floem::style::Style {
+    let background = color::editor_bg();
+    s.background(background)
+        .color(color::text())
+        .class(floem::views::editor::gutter::GutterClass, move |s| {
+            s.background(background)
+        })
 }
 
 /// Editor styling shared by every code view.
@@ -103,8 +84,8 @@ fn button(title: &'static str, action: impl Fn() + 'static) -> impl IntoView {
             .border(0)
             .border_radius(6)
             .background(Color::TRANSPARENT)
-            .color(MUTED)
-            .hover(|s| s.background(BORDER).color(TEXT))
+            .color(color::muted())
+            .hover(|s| s.background(color::border()).color(color::text()))
     })
 }
 
@@ -117,9 +98,12 @@ fn toggle_button(
 ) -> impl IntoView {
     button(title, move || commands::execute(&state, command)).style(move |s| {
         s.apply_if(on(), |s| {
-            s.background(ACCENT.with_alpha(0.16))
-                .color(ACCENT)
-                .hover(|s| s.background(ACCENT.with_alpha(0.26)).color(ACCENT))
+            s.background(color::accent().with_alpha(0.16))
+                .color(color::accent())
+                .hover(|s| {
+                    s.background(color::accent().with_alpha(0.26))
+                        .color(color::accent())
+                })
         })
     })
 }
@@ -129,7 +113,12 @@ fn command_button(state: Rc<Workbench>, title: &'static str, command: Command) -
 }
 
 fn separator() -> impl IntoView {
-    Empty::new().style(|s| s.width(1).height(20).margin_horiz(4).background(BORDER))
+    Empty::new().style(|s| {
+        s.width(1)
+            .height(20)
+            .margin_horiz(4)
+            .background(color::border())
+    })
 }
 
 fn toolbar(state: Rc<Workbench>) -> impl IntoView {
@@ -143,12 +132,12 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
     let (changed_only, focus) = (state.lens.changed_only(), state.lens.focus());
     Stack::horizontal((
         Label::new("π").style(|s| {
-            s.color(ACCENT)
+            s.color(color::accent())
                 .font_size(20)
                 .font_family(CODE_FONT.to_string())
         }),
         Label::new(root).style(|s| {
-            s.color(TEXT)
+            s.color(color::text())
                 .font_bold()
                 .flex_grow(1.0_f32)
                 .min_width(0)
@@ -177,9 +166,9 @@ fn toolbar(state: Rc<Workbench>) -> impl IntoView {
             .gap(4)
             .items_center()
             .flex_shrink(0.0_f32)
-            .background(PANEL)
+            .background(color::panel())
             .border_bottom(1)
-            .border_color(BORDER)
+            .border_color(color::border())
     })
 }
 
@@ -191,9 +180,9 @@ fn divider(state: Rc<Workbench>, sidebar: bool, width: RwSignal<f64>) -> impl In
             s.width(5)
                 .height_full()
                 .flex_shrink(0.0_f32)
-                .background(BORDER)
+                .background(color::border())
                 .cursor(CursorStyle::ColResize)
-                .hover(|s| s.background(ACCENT))
+                .hover(|s| s.background(color::accent()))
                 .apply_if(
                     layout.with(|l| {
                         if sidebar {
@@ -252,7 +241,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         floem::close_window(window)
     });
     state.restore();
-    if let Some(err) = settings_error {
+    if let Some(err) = settings_error.or_else(color::follow_settings) {
         state.report(err);
     }
     state.sessions.refresh_recent();
@@ -318,12 +307,12 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         })
     })
     .style(|s| {
-        s.color(ACCENT)
+        s.color(color::accent())
             .padding_horiz(8)
             .padding_vert(2)
             .border_radius(5)
             .cursor(floem::style::CursorStyle::Pointer)
-            .hover(|s| s.background(BORDER))
+            .hover(|s| s.background(color::border()))
             .flex_shrink(0.0_f32)
     })
     .on_event_stop(el::Click, move |_, _| {
@@ -344,7 +333,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                         .border_radius(2)
                         .background(origin_color(origin))
                 }),
-                Label::new(name).style(|s| s.color(MUTED).font_size(11)),
+                Label::new(name).style(|s| s.color(color::muted()).font_size(11)),
             ))
             .style(|s| s.gap(4).items_center())
         }),
@@ -359,7 +348,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         lens_summary,
         legend,
         Label::derived(move || status.get()).style(|s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
@@ -368,7 +357,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             let status = dot_sessions.active().map(|s| s.status());
             s.size(7, 7)
                 .border_radius(4)
-                .background(status.map_or(MUTED, session::status_color))
+                .background(status.map_or(color::muted(), session::status_color))
         }),
         Label::derived(move || {
             label_sessions
@@ -378,7 +367,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                     format!("Pi {}  {model}", session::status_label(session.status()))
                 })
         })
-        .style(|s| s.color(MUTED)),
+        .style(|s| s.color(color::muted())),
         Label::derived(move || {
             let pane = focused.get();
             if pane == Pane::Primary && position_state.conversation().get() {
@@ -390,7 +379,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             );
             format!("Ln {}, Col {}  ·  UTF-8", line + 1, col + 1)
         })
-        .style(|s| s.color(MUTED).margin_left(8)),
+        .style(|s| s.color(color::muted()).margin_left(8)),
     ))
     .style(|s| {
         s.width_full()
@@ -400,9 +389,9 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             .font_size(11)
             .items_center()
             .flex_shrink(0.0_f32)
-            .background(PANEL)
+            .background(color::panel())
             .border_top(1)
-            .border_color(BORDER)
+            .border_color(color::border())
     });
     Stack::new((
         Stack::vertical((
@@ -414,10 +403,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
         finder::finder(state.clone()),
-        command_palette(state.clone()),
         confirmation(state),
     ))
-    .style(|s| s.size_full().background(BG).color(TEXT).font_size(13))
+    .style(|s| {
+        s.size_full()
+            .background(color::bg())
+            .color(color::text())
+            .font_size(13)
+    })
     .on_event_cont(el::WindowCloseRequested, move |cx, _| {
         cx.prevent_default();
         close_state.request_quit();
@@ -425,7 +418,6 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     .on_event_cont(el::WindowResized, move |_, size| width.set(size.width))
     .on_event_with_config(el::KeyDown, CAPTURE, move |cx, event| {
         if event.key == Key::Named(NamedKey::Escape) {
-            keyboard_state.dismiss_palette();
             keyboard_state.dismiss_finder();
             keyboard_state.dismiss_confirmation();
             return EventPropagation::Continue;
@@ -475,9 +467,9 @@ fn lens_menu(state: Rc<Workbench>, open: RwSignal<bool>) -> impl IntoView {
             s.width_full()
                 .padding_horiz(12)
                 .padding_vert(7)
-                .color(TEXT)
+                .color(color::text())
                 .cursor(floem::style::CursorStyle::Pointer)
-                .hover(|s| s.background(BORDER))
+                .hover(|s| s.background(color::border()))
         })
         .on_event_stop(el::Click, move |_, _| {
             pick_state.lens.set_since(choice);
@@ -487,7 +479,7 @@ fn lens_menu(state: Rc<Workbench>, open: RwSignal<bool>) -> impl IntoView {
     });
     Stack::vertical((
         Label::new("Compare everything with").style(|s| {
-            s.color(MUTED)
+            s.color(color::muted())
                 .font_size(11)
                 .padding_horiz(12)
                 .padding_vert(6)
@@ -500,9 +492,9 @@ fn lens_menu(state: Rc<Workbench>, open: RwSignal<bool>) -> impl IntoView {
             .inset_left(12)
             .width(260)
             .padding_vert(4)
-            .background(PANEL)
+            .background(color::panel())
             .border(1)
-            .border_color(BORDER)
+            .border_color(color::border())
             .border_radius(8)
             .z_index(20)
             .apply_if(!open.get(), |s| s.hide())

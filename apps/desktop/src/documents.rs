@@ -357,7 +357,10 @@ impl Documents {
         let finish = create_ext_action(self.scope, move |(snapshot, result)| {
             match doc.finish_save(snapshot, result) {
                 Ok(()) if crate::settings::is_file(&doc.path) => {
-                    status.set(match crate::settings::current().1 {
+                    let problem = crate::settings::current()
+                        .1
+                        .or_else(crate::ui::color::follow_settings);
+                    status.set(match problem {
                         Some(err) => err,
                         None => "Saved settings; fonts and shortcuts apply to new windows".into(),
                     })
