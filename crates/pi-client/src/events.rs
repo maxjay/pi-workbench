@@ -34,6 +34,8 @@ pub enum Event {
     Response {
         command: String,
         error: Option<String>,
+        /// Pi consumed a prompt itself (an extension command), so no run follows.
+        handled: bool,
     },
     /// Emitted by the client, not Pi, when the process stops.
     Exited(String),
@@ -98,6 +100,7 @@ pub fn decode(line: &str) -> Result<Event> {
                     .unwrap_or("Command failed")
                     .to_string()
             }),
+            handled: value["data"]["disposition"] == "handled",
         },
         _ => Event::Other,
     })
@@ -132,9 +135,15 @@ mod tests {
             decode(failed).unwrap(),
             Event::Response {
                 command: "prompt".into(),
-                error: Some("busy".into())
+                error: Some("busy".into()),
+                handled: false,
             }
         );
+        let handled = r#"{"type":"response","command":"prompt","success":true,"data":{"disposition":"handled"}}"#;
+        assert!(matches!(
+            decode(handled).unwrap(),
+            Event::Response { handled: true, .. }
+        ));
         assert_eq!(decode(r#"{"type":"turn_start"}"#).unwrap(), Event::Other);
         assert!(decode("not json").is_err());
     }

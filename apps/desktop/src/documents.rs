@@ -10,6 +10,8 @@ use floem::{
     },
 };
 use std::{
+    borrow::Cow,
+    cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -26,6 +28,8 @@ pub struct OpenDocument {
     read_generation: RwSignal<u64>,
     /// Lines the last outside change touched, highlighted until the next edit.
     incoming: RwSignal<Option<Rc<LineDiff>>>,
+    /// A disk change arrived mid-save; merge it once the save settles.
+    resync: Cell<Option<&'static str>>,
 }
 
 struct SaveSnapshot {
@@ -68,6 +72,7 @@ impl OpenDocument {
                 saving: RwSignal::new(false),
                 read_generation: RwSignal::new(0),
                 incoming,
+                resync: Cell::new(None),
             })
         })
     }
@@ -159,29 +164,45 @@ impl OpenDocument {
     }
 
     /// Brings in a change someone else made on disk, keeping unsaved edits.
-    fn sync_disk(&self, disk: String, source: &str) -> Synced {
+    fn sync_disk(&self, disk: String, source: &'static str) -> Synced {
         let baseline = self.baseline.get_untracked();
         if disk == baseline {
             return Synced::Unchanged;
         }
         if self.saving.get_untracked() {
-            // The save result decides the baseline; the next sync merges.
+            // The save result decides the baseline; merge once it settles.
+            self.resync.set(Some(source));
             return Synced::Deferred;
         }
+        // The buffer keeps the line ending it opened with, and Pi may write
+        // either, so merge without line endings and convert back.
         let ours = self.text.text().to_string();
-        let merged = merge(&baseline, &ours, &disk, source);
+        let (base_lf, ours_lf, disk_lf) = (lf(&baseline), lf(&ours), lf(&disk));
+        let clean = ours_lf == base_lf;
+        if disk_lf == base_lf {
+            self.baseline.set(disk);
+            return Synced::Unchanged;
+        }
+        let merged = merge(&base_lf, &ours_lf, &disk_lf, source);
+        let merged_text = if ours.contains("\r\n") {
+            merged.text.replace('\n', "\r\n")
+        } else {
+            merged.text
+        };
         // A reload started earlier must not overwrite the merged text.
         self.read_generation.update(|generation| *generation += 1);
-        replace_changed_region(&self.text, &ours, &merged.text);
-        if merged.text != ours {
+        replace_changed_region(&self.text, &ours, &merged_text);
+        let now = self.text.text().to_string();
+        if now != ours {
             self.incoming
-                .set(Some(Rc::new(LineDiff::compute(&ours, &merged.text))));
+                .set(Some(Rc::new(LineDiff::compute(&ours, &now))));
         }
-        self.baseline.set(disk);
-        if merged.text == self.baseline.get_untracked() {
+        // Clean only if the buffer now says what the disk says.
+        if lf(&now) == disk_lf {
             self.saved_revision.set(self.revision.get_untracked());
         }
-        if ours == baseline {
+        self.baseline.set(disk);
+        if clean {
             Synced::Reloaded
         } else {
             Synced::Merged {
@@ -197,6 +218,14 @@ pub enum Synced {
     Deferred,
     Reloaded,
     Merged { conflicts: usize },
+}
+
+fn lf(text: &str) -> Cow<'_, str> {
+    if text.contains("\r\n") {
+        Cow::Owned(text.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 /// Edits only the span that differs, so cursors and undo history elsewhere survive.
@@ -228,6 +257,12 @@ pub struct Documents {
     root: PathBuf,
     items: RwSignal<Vec<Rc<OpenDocument>>>,
     status: RwSignal<String>,
+    /// While Pi works, saves wait so they cannot race its writes; the edits
+    /// stay in the buffer and are merged with Pi's.
+    held: Cell<bool>,
+    deferred: RefCell<Vec<PathBuf>>,
+    /// Only the newest sync applies; an older read may predate a later write.
+    sync_generation: Cell<u64>,
 }
 
 impl Documents {
@@ -237,7 +272,30 @@ impl Documents {
             root,
             status,
             items: RwSignal::new(Vec::new()),
+            held: Cell::new(false),
+            deferred: RefCell::new(Vec::new()),
+            sync_generation: Cell::new(0),
         })
+    }
+
+    pub fn hold_saves(&self) {
+        self.held.set(true);
+    }
+
+    /// Held saves run after the next sync has merged Pi's final changes.
+    pub fn release_saves(&self) {
+        self.held.set(false);
+    }
+
+    fn flush_deferred(self: &Rc<Self>) {
+        let paths = std::mem::take(&mut *self.deferred.borrow_mut());
+        for path in paths {
+            if let Some(doc) = self.get(&path)
+                && doc.dirty()
+            {
+                self.save(doc);
+            }
+        }
     }
 
     pub fn items(&self) -> ReadSignal<Vec<Rc<OpenDocument>>> {
@@ -271,7 +329,15 @@ impl Documents {
             .update(|docs| docs.retain(|doc| doc.path != path));
     }
 
-    pub fn save(&self, doc: Rc<OpenDocument>) {
+    pub fn save(self: &Rc<Self>, doc: Rc<OpenDocument>) {
+        if self.held.get() {
+            let mut deferred = self.deferred.borrow_mut();
+            if !deferred.contains(&doc.path) {
+                deferred.push(doc.path.clone());
+            }
+            self.status.set("Will save when Pi finishes".into());
+            return;
+        }
         let Some(snapshot) = doc.start_save() else {
             return;
         };
@@ -279,6 +345,7 @@ impl Documents {
         let path = doc.path.clone();
         let root = self.root.clone();
         let status = self.status;
+        let documents = self.clone();
         let finish = create_ext_action(self.scope, move |(snapshot, result)| {
             match doc.finish_save(snapshot, result) {
                 Ok(()) => status.set(format!(
@@ -286,6 +353,9 @@ impl Documents {
                     doc.path.strip_prefix(&root).unwrap_or(&doc.path).display()
                 )),
                 Err(err) => status.set(err),
+            }
+            if let Some(source) = doc.resync.take() {
+                documents.sync_from_disk(source);
             }
         });
         std::thread::spawn(move || {
@@ -295,7 +365,7 @@ impl Documents {
         });
     }
 
-    pub fn save_all(&self) {
+    pub fn save_all(self: &Rc<Self>) {
         for doc in self.items.get_untracked() {
             if doc.dirty() {
                 self.save(doc);
@@ -335,14 +405,17 @@ impl Documents {
     /// file is never both edited here and stale on disk. `source` names who
     /// made the changes, for the status line and conflict markers.
     pub fn sync_from_disk(self: &Rc<Self>, source: &'static str) {
+        let generation = self.sync_generation.get() + 1;
+        self.sync_generation.set(generation);
         let docs = self.items.get_untracked();
         if docs.is_empty() {
+            self.flush_deferred();
             return;
         }
         let paths: Vec<_> = docs.iter().map(|doc| doc.path.clone()).collect();
         let documents = self.clone();
         let finish = create_ext_action(self.scope, move |texts| {
-            documents.finish_sync(docs, texts, source)
+            documents.finish_sync(generation, docs, texts, source)
         });
         std::thread::spawn(move || {
             finish(
@@ -354,7 +427,16 @@ impl Documents {
         });
     }
 
-    fn finish_sync(&self, docs: Vec<Rc<OpenDocument>>, texts: Vec<Option<String>>, source: &str) {
+    fn finish_sync(
+        self: &Rc<Self>,
+        generation: u64,
+        docs: Vec<Rc<OpenDocument>>,
+        texts: Vec<Option<String>>,
+        source: &'static str,
+    ) {
+        if generation != self.sync_generation.get() {
+            return;
+        }
         let mut updated = Vec::new();
         let mut conflicts = 0;
         for (doc, disk) in docs.into_iter().zip(texts) {
@@ -379,6 +461,9 @@ impl Documents {
             };
             self.status
                 .set(format!("{source} updated {}{marked}", updated.join(", ")));
+        }
+        if !self.held.get() {
+            self.flush_deferred();
         }
     }
 }
@@ -483,6 +568,87 @@ C
             edit(&doc, "typed");
             assert!(doc.incoming().get().is_none());
         });
+    }
+
+    #[test]
+    fn crlf_buffers_take_lf_writes_without_false_conflicts() {
+        with_text(
+            "a
+b
+",
+            |doc| {
+                assert_eq!(
+                    doc.sync_disk(
+                        "a
+B
+"
+                        .into(),
+                        "pi"
+                    ),
+                    Synced::Reloaded
+                );
+                assert!(doc.can_close());
+                // A second edit must not see every line as changed by the editor.
+                assert_eq!(
+                    doc.sync_disk(
+                        "A
+B
+"
+                        .into(),
+                        "pi"
+                    ),
+                    Synced::Reloaded
+                );
+                assert_eq!(
+                    doc.text.text().to_string(),
+                    "A
+B
+"
+                );
+                assert!(doc.can_close());
+            },
+        );
+    }
+
+    #[test]
+    fn saves_wait_while_held_and_stale_syncs_are_dropped() {
+        let scope = Scope::new();
+        scope.enter(|| {
+            let docs = Documents::new(scope, "/".into(), RwSignal::new(String::new()));
+            docs.insert(
+                "/a.rs".into(),
+                "one
+"
+                .into(),
+            );
+            let doc = docs.get(Path::new("/a.rs")).unwrap();
+            edit(
+                &doc, "mine
+",
+            );
+            docs.hold_saves();
+            docs.save(doc.clone());
+            assert!(!doc.saving());
+            assert_eq!(*docs.deferred.borrow(), [PathBuf::from("/a.rs")]);
+            // An older read must not apply once a newer sync has started.
+            docs.sync_generation.set(2);
+            docs.finish_sync(
+                1,
+                vec![doc.clone()],
+                vec![Some(
+                    "stale
+"
+                    .into(),
+                )],
+                "pi",
+            );
+            assert_eq!(
+                doc.text.text().to_string(),
+                "mine
+"
+            );
+        });
+        scope.dispose();
     }
 
     #[test]

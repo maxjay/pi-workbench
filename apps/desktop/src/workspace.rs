@@ -1,10 +1,5 @@
 //! Opens files, selects documents in two panes, and handles confirmations and layout.
-use crate::{
-    agent::{self, Agent},
-    changes::Changes,
-    documents::Documents,
-    explorer::Explorer,
-};
+use crate::{agent::Agent, changes::Changes, documents::Documents, explorer::Explorer};
 use floem::ext_event::create_ext_action;
 use floem::prelude::*;
 use floem::reactive::{ReadSignal, Scope};
@@ -98,10 +93,10 @@ impl Workbench {
             root.clone(),
             integrations.pi,
             documents.clone(),
-            move |tool| {
+            move |tree_changed| {
                 // Pi wrote to disk; fold its changes into open buffers.
                 synced.sync_from_disk("Pi");
-                if agent::tool_changes_tree(tool) {
+                if tree_changed {
                     tree.refresh();
                 }
             },

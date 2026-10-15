@@ -91,8 +91,13 @@ pub struct Agent {
     root: PathBuf,
     launch: Launch,
     documents: Rc<Documents>,
-    /// Called after each tool finishes, with the tool's name.
-    on_tool_end: Box<dyn Fn(&str)>,
+    /// Called when no tool is running after Pi changed files; the flag says
+    /// whether files may have been created or deleted.
+    on_files_changed: Box<dyn Fn(bool)>,
+    /// Pi runs tools in parallel; reading files while one is still writing
+    /// could pick up a half-written file, so syncing waits for all of them.
+    running_tools: Cell<usize>,
+    tree_changed: Cell<bool>,
     process: RefCell<Option<PiProcess>>,
     entries: RwSignal<Vec<Rc<Entry>>>,
     next_entry: Cell<u64>,
@@ -112,14 +117,16 @@ impl Agent {
         root: PathBuf,
         launch: Launch,
         documents: Rc<Documents>,
-        on_tool_end: impl Fn(&str) + 'static,
+        on_files_changed: impl Fn(bool) + 'static,
     ) -> Rc<Self> {
         let agent = Rc::new(Self {
             scope,
             root,
             launch,
             documents,
-            on_tool_end: Box::new(on_tool_end),
+            on_files_changed: Box::new(on_files_changed),
+            running_tools: Cell::new(0),
+            tree_changed: Cell::new(false),
             process: RefCell::new(None),
             entries: RwSignal::new(Vec::new()),
             next_entry: Cell::new(0),
@@ -183,16 +190,18 @@ impl Agent {
         self.push(EntryKind::Notice, "", message.into(), String::new());
     }
 
-    /// Saves open files first so Pi reads what the user sees.
-    pub fn send(self: &Rc<Self>, text: String) {
+    /// Saves open files first so Pi reads what the user sees. Returns whether
+    /// the prompt was accepted; a run already in progress refuses it.
+    pub fn send(self: &Rc<Self>, text: String) -> bool {
         let text = text.trim().to_string();
         if text.is_empty() || self.working.get_untracked() {
-            return;
+            return false;
         }
         self.push(EntryKind::User, "", text.clone(), String::new());
         self.working.set(true);
         self.documents.save_all();
         self.prompt_when_saved(text);
+        true
     }
 
     fn prompt_when_saved(self: &Rc<Self>, text: String) {
@@ -203,6 +212,9 @@ impl Agent {
             });
             return;
         }
+        // Saves during the run would race Pi's writes; they wait for it and
+        // the edits are merged with Pi's instead.
+        self.documents.hold_saves();
         let result = self.start().and_then(|()| {
             self.process
                 .borrow_mut()
@@ -210,9 +222,21 @@ impl Agent {
                 .map_or(Ok(()), |pi| pi.prompt(&text))
         });
         if let Err(err) = result {
-            self.working.set(false);
+            self.finish_run();
             self.notice(format!("{err:#}"));
         }
+    }
+
+    /// Ends a run however it stopped: releases held saves and syncs files.
+    fn finish_run(&self) {
+        self.working.set(false);
+        *self.reply.borrow_mut() = None;
+        self.streaming.borrow_mut().clear();
+        self.tools.borrow_mut().clear();
+        self.running_tools.set(0);
+        self.tree_changed.set(false);
+        self.documents.release_saves();
+        (self.on_files_changed)(true);
     }
 
     fn start(&self) -> anyhow::Result<()> {
@@ -283,6 +307,7 @@ impl Agent {
                 }
             }
             Event::ToolStart { id, tool, args } => {
+                self.running_tools.set(self.running_tools.get() + 1);
                 let entry = self.tool_entry(&id, &tool);
                 entry.title.set(tool_target(&args, ""));
                 entry.state.set(Some(ToolState::Running));
@@ -303,26 +328,30 @@ impl Agent {
                 if is_error || !matches!(tool.as_str(), "edit" | "write") {
                     entry.body.set(output);
                 }
-                (self.on_tool_end)(&tool);
+                self.running_tools
+                    .set(self.running_tools.get().saturating_sub(1));
+                if may_create_files(&tool) {
+                    self.tree_changed.set(true);
+                }
+                if self.running_tools.get() == 0 {
+                    (self.on_files_changed)(self.tree_changed.replace(false));
+                }
             }
-            Event::AgentSettled => {
-                self.working.set(false);
-                *self.reply.borrow_mut() = None;
-                self.streaming.borrow_mut().clear();
-                self.tools.borrow_mut().clear();
-                // Catch anything a tool changed after its own end event was handled.
-                (self.on_tool_end)("");
-            }
+            // Also catches anything a tool changed after its end event.
+            Event::AgentSettled => self.finish_run(),
             Event::Response {
                 command,
                 error: Some(error),
+                ..
             } => {
-                self.working.set(false);
+                self.finish_run();
                 self.notice(format!("Pi rejected {command}: {error}"));
             }
+            // An extension consumed the prompt; no run or settle event follows.
+            Event::Response { handled: true, .. } => self.finish_run(),
             Event::Exited(message) => {
                 self.process.borrow_mut().take();
-                self.working.set(false);
+                self.finish_run();
                 self.notice(format!("Pi stopped: {message}"));
             }
             Event::Response { .. } | Event::Other => {}
@@ -330,17 +359,12 @@ impl Agent {
     }
 }
 
-/// Whether Pi may have created or deleted files, so the explorer should refresh.
-pub fn tool_changes_tree(tool: &str) -> bool {
-    tool.is_empty() || may_create_files(tool)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
 
-    fn with_agent(test: impl FnOnce(Rc<Agent>, Rc<RefCell<Vec<String>>>)) {
+    fn with_agent(test: impl FnOnce(Rc<Agent>, Rc<RefCell<Vec<bool>>>)) {
         let scope = Scope::new();
         scope.enter(|| {
             let status = RwSignal::new(String::new());
@@ -352,7 +376,7 @@ mod tests {
                 "/".into(),
                 Launch::default(),
                 documents,
-                move |tool| log.borrow_mut().push(tool.to_string()),
+                move |tree| log.borrow_mut().push(tree),
             );
             test(agent, ended);
         });
@@ -396,7 +420,7 @@ mod tests {
             });
             assert_eq!(entry.state.get(), Some(ToolState::Done));
             assert_eq!(entry.body.get(), "- hello\n+ hello pi\n");
-            assert_eq!(*ended.borrow(), ["edit"]);
+            assert_eq!(*ended.borrow(), [false]);
 
             agent.handle(Event::TextDelta("Edited ".into()));
             agent.handle(Event::TextDelta("it.".into()));
@@ -405,7 +429,7 @@ mod tests {
             assert_eq!(entries.len(), 2);
             assert_eq!(entries[1].body.get(), "Edited it.");
             assert!(!agent.working().get());
-            assert_eq!(*ended.borrow(), ["edit", ""]);
+            assert_eq!(*ended.borrow(), [false, true]);
         });
     }
 
@@ -428,6 +452,44 @@ mod tests {
             assert_eq!(entry.tool, "bash");
             assert_eq!(entry.body.get(), "not found");
             assert_eq!(entry.state.get(), Some(ToolState::Failed));
+        });
+    }
+
+    #[test]
+    fn files_sync_only_after_parallel_tools_all_finish() {
+        with_agent(|agent, ended| {
+            for (id, tool) in [("a", "edit"), ("b", "write")] {
+                agent.handle(Event::ToolStart {
+                    id: id.into(),
+                    tool: tool.into(),
+                    args: json!({"path": "x"}),
+                });
+            }
+            let end = |id: &str, tool: &str| Event::ToolEnd {
+                id: id.into(),
+                tool: tool.into(),
+                is_error: false,
+                output: String::new(),
+            };
+            agent.handle(end("b", "write"));
+            assert!(ended.borrow().is_empty());
+            agent.handle(end("a", "edit"));
+            // The write may have created a file, so the explorer refreshes.
+            assert_eq!(*ended.borrow(), [true]);
+        });
+    }
+
+    #[test]
+    fn a_prompt_handled_by_pi_itself_ends_the_run() {
+        with_agent(|agent, ended| {
+            agent.working.set(true);
+            agent.handle(Event::Response {
+                command: "prompt".into(),
+                error: None,
+                handled: true,
+            });
+            assert!(!agent.working().get());
+            assert_eq!(*ended.borrow(), [true]);
         });
     }
 

@@ -7,17 +7,20 @@
 
 pub mod events;
 pub mod preview;
+mod tree;
 
 pub use events::Event;
 
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
+    sync::{Arc, Mutex},
     time::Duration,
 };
+use tree::Tree;
 
 /// How to start Pi. Extra arguments select a provider, model, or session mode.
 #[derive(Clone, Debug)]
@@ -68,6 +71,7 @@ fn resolve(program: &str) -> PathBuf {
 
 pub struct PiProcess {
     child: Option<Child>,
+    tree: Option<Tree>,
     stdin: Option<ChildStdin>,
     next_id: u64,
 }
@@ -98,8 +102,21 @@ impl PiProcess {
         let mut child = command
             .spawn()
             .with_context(|| format!("Could not start `{}`", launch.program))?;
+        let tree = Tree::adopt(&child);
         let stdout = child.stdout.take().context("No stdout")?;
-        let mut stderr = child.stderr.take().context("No stderr")?;
+        let stderr = child.stderr.take().context("No stderr")?;
+        // Read stderr as it arrives: a full pipe would block Pi mid-run.
+        let last_error = Arc::new(Mutex::new(String::new()));
+        let errors = {
+            let last_error = last_error.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if !line.trim().is_empty() {
+                        *last_error.lock().unwrap() = line.trim().to_string();
+                    }
+                }
+            })
+        };
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
@@ -111,14 +128,18 @@ impl PiProcess {
                     on_event(event);
                 }
             }
-            let mut errors = String::new();
-            let _ = stderr.read_to_string(&mut errors);
-            let last = errors.lines().rev().find(|l| !l.trim().is_empty());
-            on_event(Event::Exited(last.unwrap_or("Pi stopped").trim().into()));
+            let _ = errors.join();
+            let last = std::mem::take(&mut *last_error.lock().unwrap());
+            on_event(Event::Exited(if last.is_empty() {
+                "Pi stopped".into()
+            } else {
+                last
+            }));
         });
         Ok(Self {
             stdin: child.stdin.take(),
             child: Some(child),
+            tree,
             next_id: 0,
         })
     }
@@ -145,10 +166,13 @@ impl Drop for PiProcess {
     fn drop(&mut self) {
         // Closing stdin asks Pi to exit; kill it if it has not after a grace period.
         self.stdin.take();
+        let tree = self.tree.take();
         if let Some(mut child) = self.child.take() {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(2));
                 if matches!(child.try_wait(), Ok(None)) {
+                    // Closing the job ends the whole tree; kill() only the direct child.
+                    drop(tree);
                     let _ = child.kill();
                 }
                 let _ = child.wait();

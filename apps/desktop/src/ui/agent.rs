@@ -239,9 +239,11 @@ pub(super) fn agent_panel(state: Rc<Workbench>) -> impl IntoView {
     .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
 
     let send_agent = agent.clone();
+    // A refused prompt (Pi still working) keeps the draft.
     let send = move || {
-        send_agent.send(draft.get_untracked());
-        draft.set(String::new());
+        if send_agent.send(draft.get_untracked()) {
+            draft.set(String::new());
+        }
     };
     let enter = send.clone();
     let input = TextInput::new(draft)
