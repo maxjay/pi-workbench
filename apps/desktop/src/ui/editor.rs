@@ -488,6 +488,10 @@ fn file_area(
     // Restyle when the lens diff, focus, seen changes, or Pi's latest edit change.
     let (styled, lens, syntax) = (handle.clone(), state.lens.clone(), state.syntax.clone());
     let styled_zoom = pane.zoom;
+    let window_scale = {
+        let layout = state.layout();
+        Memo::new(move |_| layout.with(|l| l.ui_scale))
+    };
     let blank = Rc::new(TextDocument::new(Scope::current(), ""));
     Effect::new(move |_| {
         let path = active.get();
@@ -496,9 +500,11 @@ fn file_area(
                 .find(|doc| Some(doc.path()) == path.as_ref())
                 .cloned()
         });
-        // Code colours come from the theme, and size from the pane's zoom.
+        // Code colours come from the theme, and size from the pane's zoom;
+        // a new window zoom lays the lines out afresh too.
         super::color::theme().track();
         let zoom = styled_zoom.get();
+        window_scale.track();
         let focus = lens.focus().get();
         let seen = lens.seen().get();
         let show_formatting = lens.show_formatting().get();

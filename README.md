@@ -137,7 +137,7 @@ The window is yours to arrange. Every pane is a row of tabs, and a tab is a file
 - **Split:** with the buttons in a pane's tab bar, Ctrl+\ (right) or Ctrl+Shift+\ (down). A split shows the same file or session on both sides; splitting a terminal starts another shell.
 - **Move:** drag a tab along its tab bar to reorder it, onto another pane to move it there, or onto a pane's edge to split that pane with it. Files from the explorer and sessions from the rail drag in the same way. Ctrl+Alt+Shift+arrows move the tab to the next pane, making one if there is none.
 - **Many tabs:** the wheel scrolls a tab bar sideways, Ctrl+PageDown and Ctrl+PageUp step through a pane's tabs, and the middle button closes a tab. Right-click a tab to close others or those to its right, split, end a session or restart a shell.
-- **Zoom:** Ctrl+= and Ctrl+- (or Ctrl+wheel) make one pane's text larger or smaller, whether it shows code, a Pi session or a terminal; Ctrl+0 or the pane's percentage puts it back.
+- **Zoom:** Ctrl+= and Ctrl+- (or Ctrl+wheel) make one pane's text larger or smaller, whether it shows code, a Pi session or a terminal; Ctrl+0 or the pane's percentage puts it back. Click the status bar first and the same keys zoom the whole window instead (saved per workspace); click a pane to go back.
 - **Focus and resize:** Ctrl+Alt+arrows move between panes, dividers drag, and Ctrl+Shift+M maximises a pane and back.
 - **Close:** Ctrl+W closes a tab; closing several keeps any file with unsaved edits open. A file closes when no other pane shows it, asking first if it has unsaved edits. A session keeps running in the rail. A terminal ends with its last tab.
 

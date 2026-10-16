@@ -28,9 +28,24 @@ fn workspace_paths(path: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn window_config() -> floem::window::WindowConfig {
-    floem::window::WindowConfig::default()
+    let config = floem::window::WindowConfig::default()
         .size(floem::kurbo::Size::new(1280.0, 800.0))
-        .title("Pi Workbench")
+        .title("Pi Workbench");
+    match icon() {
+        Some(icon) => config.window_icon(icon),
+        None => config,
+    }
+}
+
+/// Glitch, for the title bar and taskbar.
+fn icon() -> Option<floem::window::Icon> {
+    let image = image::load_from_memory(include_bytes!("../assets/icon/glitch.png"))
+        .ok()?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    floem::window::RgbaIcon::new(image.into_raw(), width, height)
+        .ok()
+        .map(floem::window::Icon::from)
 }
 
 fn open_folder() {

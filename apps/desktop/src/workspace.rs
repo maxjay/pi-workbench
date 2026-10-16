@@ -100,6 +100,24 @@ const ZOOMS: [f64; 13] = [
     0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
 ];
 
+/// The zoom a step from `now`: larger (`step` > 0), smaller, or the usual.
+fn zoom_step(now: f64, step: i32) -> f64 {
+    match step.cmp(&0) {
+        std::cmp::Ordering::Equal => 1.0,
+        std::cmp::Ordering::Greater => ZOOMS
+            .iter()
+            .copied()
+            .find(|z| *z > now + 1e-6)
+            .unwrap_or(ZOOMS[ZOOMS.len() - 1]),
+        std::cmp::Ordering::Less => ZOOMS
+            .iter()
+            .rev()
+            .copied()
+            .find(|z| *z < now - 1e-6)
+            .unwrap_or(ZOOMS[0]),
+    }
+}
+
 /// Whether a typed path names a file inside the workspace: relative, with
 /// no `..`, and not a folder.
 fn new_file_path(text: &str) -> Result<PathBuf, String> {
@@ -233,6 +251,8 @@ pub struct Workbench {
     bar_views: RefCell<BTreeMap<PaneId, floem::ViewId>>,
     tab_views: RefCell<Vec<(PaneId, Tab, floem::ViewId)>>,
     menu: RwSignal<Option<PopupMenu>>,
+    /// The zoom keys size the whole window, after a click on the status bar.
+    zoom_window: RwSignal<bool>,
     /// A file dropped before it was read: the pane it goes to, its place in
     /// the tabs, and whether that pane was split off for it (and so closes
     /// if the file cannot be opened).
@@ -355,6 +375,7 @@ impl Workbench {
             bar_views: RefCell::new(BTreeMap::new()),
             tab_views: RefCell::new(Vec::new()),
             menu: RwSignal::new(None),
+            zoom_window: RwSignal::new(false),
             dropped: RefCell::new(None),
             prefill: RefCell::new(None),
             jump: RwSignal::new(None),
@@ -376,6 +397,16 @@ impl Workbench {
     }
     pub fn focus_pane(&self, id: PaneId) {
         self.panes.focus(id);
+        // Zoom keys go back to the pane.
+        if self.zoom_window.get_untracked() {
+            self.zoom_window.set(false);
+        }
+    }
+
+    /// Whether the zoom keys size the whole window (after a click on the
+    /// status bar) rather than the focused pane.
+    pub fn zoom_window(&self) -> RwSignal<bool> {
+        self.zoom_window
     }
     pub fn layout(&self) -> ReadSignal<Layout> {
         self.layout.read_only()
@@ -1499,25 +1530,28 @@ impl Workbench {
             return;
         };
         let now = pane.zoom.get_untracked();
-        let next = match step.cmp(&0) {
-            std::cmp::Ordering::Equal => 1.0,
-            std::cmp::Ordering::Greater => ZOOMS
-                .iter()
-                .copied()
-                .find(|z| *z > now + 1e-6)
-                .unwrap_or(ZOOMS[ZOOMS.len() - 1]),
-            std::cmp::Ordering::Less => ZOOMS
-                .iter()
-                .rev()
-                .copied()
-                .find(|z| *z < now - 1e-6)
-                .unwrap_or(ZOOMS[0]),
-        };
+        let next = zoom_step(now, step);
         if next != now {
             pane.zoom.set(next);
         }
         self.status
             .set(format!("Zoom {}%", (next * 100.0).round() as i64));
+    }
+
+    /// The zoom keys: the whole window after a click on the status bar,
+    /// otherwise the focused pane.
+    pub fn zoom_focused(&self, step: i32) {
+        if !self.zoom_window.get_untracked() {
+            self.zoom(self.panes.focused().get_untracked(), step);
+            return;
+        }
+        let now = self.layout.with_untracked(|l| l.ui_scale);
+        let next = zoom_step(now, step);
+        if next != now {
+            self.layout.update(|l| l.ui_scale = next);
+        }
+        self.status
+            .set(format!("Window zoom {}%", (next * 100.0).round() as i64));
     }
 
     pub fn focus_direction(&self, direction: Direction) {
@@ -1763,7 +1797,12 @@ impl Workbench {
 
     /// One pane with every tab, and the explorer as it first was.
     pub fn reset_layout(&self) {
-        self.layout.set(Layout::default());
+        // The window's zoom is not a panel; it stays.
+        let ui_scale = self.layout.with_untracked(|l| l.ui_scale);
+        self.layout.set(Layout {
+            ui_scale,
+            ..Layout::default()
+        });
         self.panes.collapse();
     }
 
@@ -2084,6 +2123,22 @@ mod tests {
                 outside
             );
             assert_eq!(state.panes.focused().get_untracked(), pane);
+        });
+    }
+
+    #[test]
+    fn after_a_click_on_the_status_bar_zoom_sizes_the_window() {
+        with_workspace(|state, _| {
+            let pane = focused(&state);
+            state.zoom_window().set(true);
+            state.zoom_focused(1);
+            assert_eq!(state.layout().with_untracked(|l| l.ui_scale), 1.1);
+            assert_eq!(pane.zoom.get_untracked(), 1.0, "not the pane");
+            // A click in a pane gives the keys back to it.
+            state.focus_pane(pane.id);
+            state.zoom_focused(1);
+            assert_eq!(pane.zoom.get_untracked(), 1.1);
+            assert_eq!(state.layout().with_untracked(|l| l.ui_scale), 1.1);
         });
     }
 

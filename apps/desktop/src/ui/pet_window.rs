@@ -457,6 +457,34 @@ pub fn show_window(hwnd: isize, show: bool) {
     }
 }
 
+/// Gives a window the program's own icon, embedded in the executable, at
+/// both sizes: the small one for its title bar, and the large one the
+/// taskbar shows (Floem sets only the small one).
+pub fn use_app_icon(hwnd: isize) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, SM_CXICON,
+        SM_CXSMICON, WM_SETICON,
+    };
+    // The icon's resource id, as the build gives it.
+    const ICON: usize = 1;
+    for (kind, metric) in [(ICON_BIG, SM_CXICON), (ICON_SMALL, SM_CXSMICON)] {
+        unsafe {
+            let side = GetSystemMetrics(metric);
+            let icon = LoadImageW(
+                GetModuleHandleW(std::ptr::null()),
+                ICON as *const u16,
+                IMAGE_ICON,
+                side,
+                side,
+                LR_DEFAULTCOLOR,
+            );
+            if !icon.is_null() {
+                SendMessageW(hwnd as HWND, WM_SETICON, kind as WPARAM, icon as LPARAM);
+            }
+        }
+    }
+}
+
 /// Where a window is and its size: left, top, width, height (physical).
 pub fn window_rect(hwnd: isize) -> (i32, i32, i32, i32) {
     let mut rect = RECT {

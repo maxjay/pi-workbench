@@ -515,6 +515,29 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     state.start_with_session();
     state.restore();
     state.pets.start();
+    // Glitch on the taskbar too, not just in the title bar; once the window
+    // has its native handle.
+    #[cfg(windows)]
+    floem::action::exec_after(std::time::Duration::from_millis(50), move |_| {
+        if let Some(hwnd) = pet_window::native(window) {
+            pet_window::use_app_icon(hwnd);
+        }
+    });
+    // The whole window drawn larger or smaller, as last left; set again only
+    // when the zoom itself changes, not with every other layout change.
+    let scale_layout = state.layout();
+    let ui_scale = floem::reactive::Memo::new(move |_| scale_layout.with(|l| l.ui_scale));
+    floem::reactive::Effect::new(move |_| floem::action::set_window_scale(ui_scale.get()));
+    // Focusing a pane any way (keyboard, opening a file) gives it the zoom
+    // keys back from the status bar.
+    let (focus_state, focused_pane) = (state.clone(), state.focused());
+    floem::reactive::Effect::new(move |_| {
+        focused_pane.track();
+        let zoom_window = focus_state.zoom_window();
+        if zoom_window.get_untracked() {
+            zoom_window.set(false);
+        }
+    });
     pet::follow_popping(state.clone(), window);
     let shake = pet::shake(&state);
     if let Some(err) = settings_error.or_else(color::follow_settings) {
@@ -651,7 +674,32 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             })
             .on_event_stop(el::Click, move |_, _| pets.find())
     };
+    // The whole window's zoom, shown when it is not the usual; a click puts
+    // it back.
+    let window_zoom = {
+        let (layout, zoom_state) = (state.layout(), state.clone());
+        Label::derived(move || {
+            format!(
+                "Window {}%",
+                (layout.with(|l| l.ui_scale) * 100.0).round() as i64
+            )
+        })
+        .style(move |s| {
+            s.color(color::muted())
+                .padding_horiz(6)
+                .border_radius(5)
+                .cursor(floem::style::CursorStyle::Pointer)
+                .hover(|s| s.background(color::border()).color(color::text()))
+                .apply_if(layout.with(|l| l.ui_scale) == 1.0, |s| s.hide())
+        })
+        .on_event_stop(el::Click, move |_, _| {
+            zoom_state.zoom_window().set(true);
+            zoom_state.zoom_focused(0);
+        })
+    };
+    let (footer_zoom, footer_state) = (state.zoom_window(), state.clone());
     let footer = Stack::horizontal((
+        window_zoom,
         lens_summary,
         focus_chip,
         legend,
@@ -689,7 +737,9 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         })
         .style(|s| s.color(color::muted()).margin_left(8)),
     ))
-    .style(|s| {
+    .style(move |s| {
+        // Clicked, it takes the zoom keys, and shows it.
+        let zooming = footer_zoom.get();
         s.width_full()
             .height(28)
             .padding_horiz(12)
@@ -699,7 +749,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             .flex_shrink(0.0_f32)
             .background(color::panel())
             .border_top(1)
-            .border_color(color::border())
+            .border_color(if zooming {
+                color::accent()
+            } else {
+                color::border()
+            })
+    })
+    .on_event_cont(el::PointerDown, move |_, _| {
+        footer_state.zoom_window().set(true)
     });
     Stack::new((
         Stack::vertical((
