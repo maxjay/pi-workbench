@@ -553,7 +553,7 @@ impl Workbench {
         };
         self.last_session_pane
             .get()
-            .filter(|id| self.panes.pane(*id).is_some())
+            .filter(|id| shows_session(*id))
             .or_else(|| {
                 self.panes
                     .all()
@@ -1080,7 +1080,12 @@ impl Workbench {
         let (from, to) = (Tab::Session(old), Tab::Session(new));
         let holding = self.panes.holding(&from);
         if holding.is_empty() {
-            self.show_session(new);
+            // Switched away from meanwhile: it joins the sessions' pane
+            // beside whatever is shown there now, rather than replacing it.
+            let pane = self.session_pane();
+            self.panes.show(pane, to);
+            self.panes.focus(pane);
+            self.sessions.select(new);
             return;
         }
         for id in holding {
