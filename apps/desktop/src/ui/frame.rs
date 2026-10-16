@@ -32,15 +32,30 @@ pub fn use_own_frame() {
 /// Makes `view` a place to move the window from, and to maximize it with a
 /// double-click, when the workbench draws its own frame.
 pub fn drag_area<V: IntoView + 'static>(view: V) -> impl IntoView {
+    // The move starts once the pointer moves while pressed, not on the
+    // press: the system takes the pointer for the move, and a double-click
+    // would never arrive.
+    let pressed = Rc::new(std::cell::Cell::new(None::<floem::kurbo::Point>));
+    let (press, moved, released) = (pressed.clone(), pressed.clone(), pressed);
     view.into_view()
-        .on_event_cont(el::PointerDown, |_, event| {
+        .on_event_cont(el::PointerDown, move |_, event| {
             let primary = event
                 .button
                 .is_none_or(|b| b == floem::ui_events::pointer::PointerButton::Primary);
             if own_frame() && primary {
+                press.set(Some(event.state.logical_point()));
+            }
+        })
+        .on_event_cont(el::PointerMove, move |_, event| {
+            let Some(from) = moved.get() else { return };
+            if event.current.buttons.is_empty() {
+                moved.set(None);
+            } else if from.distance(event.current.logical_point()) > 4.0 {
+                moved.set(None);
                 drag_window();
             }
         })
+        .on_event_cont(el::PointerUp, move |_, _| released.set(None))
         .on_event_cont(el::DoubleClick, |_, _| {
             if own_frame() {
                 toggle_window_maximized();
