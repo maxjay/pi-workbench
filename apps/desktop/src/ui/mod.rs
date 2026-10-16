@@ -515,10 +515,20 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     state.start_with_session();
     state.restore();
     state.pets.start();
-    // The whole window drawn larger or smaller, as last left.
+    // The whole window drawn larger or smaller, as last left; set again only
+    // when the zoom itself changes, not with every other layout change.
     let scale_layout = state.layout();
+    let ui_scale = floem::reactive::Memo::new(move |_| scale_layout.with(|l| l.ui_scale));
+    floem::reactive::Effect::new(move |_| floem::action::set_window_scale(ui_scale.get()));
+    // Focusing a pane any way (keyboard, opening a file) gives it the zoom
+    // keys back from the status bar.
+    let (focus_state, focused_pane) = (state.clone(), state.focused());
     floem::reactive::Effect::new(move |_| {
-        floem::action::set_window_scale(scale_layout.with(|l| l.ui_scale))
+        focused_pane.track();
+        let zoom_window = focus_state.zoom_window();
+        if zoom_window.get_untracked() {
+            zoom_window.set(false);
+        }
     });
     pet::follow_popping(state.clone(), window);
     let shake = pet::shake(&state);

@@ -21,8 +21,9 @@ floem = { git = "https://github.com/lapce/floem", rev = "1351ffb162faeb8be983f13
 debug = 0
 
 # Floem's editor checks, in debug builds only, that every wrapped line has a
-# layout; changing the window's zoom relays them out and trips it. Release
-# builds go on without the check, so debug builds do too.
+# layout. Changing the window's zoom trips it for a moment, before the
+# editors lay their lines out again at the new zoom (ui/editor.rs). Release
+# builds have no such check; this keeps debug builds running the same way.
 [profile.dev.package.floem]
 debug-assertions = false
 

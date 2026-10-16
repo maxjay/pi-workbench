@@ -1797,7 +1797,12 @@ impl Workbench {
 
     /// One pane with every tab, and the explorer as it first was.
     pub fn reset_layout(&self) {
-        self.layout.set(Layout::default());
+        // The window's zoom is not a panel; it stays.
+        let ui_scale = self.layout.with_untracked(|l| l.ui_scale);
+        self.layout.set(Layout {
+            ui_scale,
+            ..Layout::default()
+        });
         self.panes.collapse();
     }
 
