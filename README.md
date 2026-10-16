@@ -57,7 +57,10 @@ Omit the path to open the current directory. A graphical desktop is required; WS
 
 Install Pi (`npm install -g @earendil-works/pi-coding-agent`) and sign in to a provider as usual. Each session runs its own `pi --mode rpc` in the workspace folder, so Pi uses your normal settings, credentials, extensions, and session store; nothing is installed into Pi.
 
-- **Sessions rail:** open sessions with their status (ready, working, needs you, stopped), and recent sessions from Pi's store for this folder. Closing a session stops its Pi process; it stays in Recent.
+- **Sessions rail:** sessions by the folder they work in: each folder's open sessions with their status (ready, working, needs you, stopped), then its recent ones from Pi's store. Every folder Pi has sessions in is listed. Picking a session switches to it in the pane used for conversations. Closing a session stops its Pi process; it stays in its folder's recent ones.
+- **The window follows the session:** the window shows the folder of the session in front, with that folder's files, panes, terminals and changes. Picking a session in another folder brings that folder forward, and its own layout with it. Sessions in other folders keep running.
+- **Starting a session:** **+ New**, or **+** beside a folder, starts one there. Until its first prompt, its composer shows where it starts: click the folder to start somewhere else (step up, into a subfolder, a folder Pi has worked in, or browse). Or just ask Pi; if Pi moves the session to another folder, the window goes with it.
+- **When Pi moves:** an extension can move Pi into another folder, for instance one that makes a workspace and works there. The workbench follows when Pi switches to a session in another folder (`ctx.switchSession`), or when an extension says so with `ctx.ui.setStatus("workspace", folder)`.
 - **Composer:** Enter sends, Shift+Enter adds a line. While Pi works, Enter steers it and Alt+Enter queues a follow-up for when it finishes.
 - **Files:** open files are saved before each prompt, so Pi reads what you see. While Pi runs, saves wait and then go through the same merge, so neither side is lost. Clicking an edit card opens the file next to the conversation; lines Pi changed stay highlighted until you type.
 - **Header:** session name, status, tokens, cost, context use, and the model picker.
@@ -141,7 +144,7 @@ The window is yours to arrange. Every pane is a row of tabs, and a tab is a file
 - **Focus and resize:** Ctrl+Alt+arrows move between panes, dividers drag, and Ctrl+Shift+M maximises a pane and back.
 - **Close:** Ctrl+W closes a tab; closing several keeps any file with unsaved edits open. A file closes when no other pane shows it, asking first if it has unsaved edits. A session keeps running in the rail. A terminal ends with its last tab.
 
-Clicking a session in the rail shows it where it already is, or in the focused pane. The panes, their tabs, sizes and zoom are saved per workspace, and the sessions in them resume when you reopen it.
+Clicking a session in the rail shows it where it already is, or switches to it in the pane last used for sessions. The panes, their tabs, sizes and zoom are saved per workspace, and the sessions in them resume when you reopen it.
 
 ## Glitch, the pet
 
@@ -205,7 +208,7 @@ To install it, copy it into `~/.pi/agent/extensions/`.
 
 Settings apply as you save, except fonts and shortcuts, which apply to new windows.
 
-**New Pi session in its own worktree** (palette) checks out the current commit as a new branch `pi/pi-<time>` in a sibling folder `<repository>-worktrees/`, and opens it in a new window with a fresh session. Pi then works apart from your checkout, and merging its branch is up to you.
+**New Pi session in its own worktree** (palette) checks out the current commit as a new branch `pi/pi-<time>` in a sibling folder `<repository>-worktrees/`, and starts a fresh session there, the window following it. Pi then works apart from your checkout, and merging its branch is up to you.
 
 ## Shortcuts
 
@@ -245,7 +248,8 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | --- | --- |
 | [session.rs](apps/desktop/src/session.rs) | One Pi session: process, timeline, questions, history, model and usage |
 | [sessions.rs](apps/desktop/src/sessions.rs) | Open sessions, the active one, and recent sessions from Pi's store |
-| [workspace.rs](apps/desktop/src/workspace.rs) | Opening files, panes, confirmations, layout |
+| [window.rs](apps/desktop/src/window.rs) | The folders open in a window, the one shown, and following sessions between them |
+| [workspace.rs](apps/desktop/src/workspace.rs) | One folder: opening files, panes, confirmations, layout |
 | [documents.rs](apps/desktop/src/documents.rs) | Buffers, saves, reloads, merging outside changes |
 | [lens.rs](apps/desktop/src/lens.rs) | The changes lens: baseline, changed files, per-file diffs, seen changes |
 | [origins.rs](apps/desktop/src/origins.rs) | Who wrote each changed line, and which changes only reformat |

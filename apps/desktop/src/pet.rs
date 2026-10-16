@@ -974,6 +974,8 @@ pub struct Pets {
     /// Milliseconds since `started`, ticking while pets are shown.
     clock: RwSignal<u64>,
     ticking: Cell<bool>,
+    /// Its folder is not the one its window shows.
+    away: Cell<bool>,
     pets: RefCell<HashMap<u64, Rc<Pet>>>,
     /// How big pets are drawn, in the window and out of it, as multiples of
     /// the usual; dragging a pet's corner changes it.
@@ -1008,6 +1010,7 @@ impl Pets {
                 started: Instant::now(),
                 clock: RwSignal::new(0),
                 ticking: Cell::new(false),
+                away: Cell::new(false),
                 pets: RefCell::new(HashMap::new()),
                 docked_scale: RwSignal::new(1.0),
                 popped_scale: RwSignal::new(1.0),
@@ -1112,6 +1115,15 @@ impl Pets {
     }
 
     /// Starts the clock, once the window the pets live in exists.
+    /// Its folder hidden in the window, or shown again: away, a popped-out
+    /// pet comes back in and the pets keep still.
+    pub fn set_away(&self, away: bool) {
+        self.away.set(away);
+        if away && self.out.get_untracked().is_some() {
+            self.pop_in();
+        }
+    }
+
     pub fn start(self: &Rc<Self>) {
         if !self.ticking.replace(true) {
             Pets::tick(Rc::downgrade(self));
@@ -1126,7 +1138,7 @@ impl Pets {
         let Some(hidden) = this.hidden.try_get_untracked() else {
             return;
         };
-        if hidden {
+        if hidden || this.away.get() {
             // Out of sight, nothing is under way: no shot, flight or swing
             // keeps the clock running fast.
             for pet in this.pets.borrow().values() {

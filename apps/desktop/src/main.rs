@@ -20,6 +20,7 @@ mod syntax;
 mod terminal;
 mod ui;
 mod watcher;
+mod window;
 mod workspace;
 
 use anyhow::{Context, Result, ensure};
@@ -53,32 +54,6 @@ fn icon() -> Option<floem::window::Icon> {
     floem::window::RgbaIcon::new(image.into_raw(), width, height)
         .ok()
         .map(floem::window::Icon::from)
-}
-
-fn open_folder() {
-    floem::open_file(
-        floem::FileDialogOptions::new()
-            .select_directories()
-            .title("Open workspace"),
-        |selected| {
-            if let Some(info) = selected
-                && let Some(path) = info.path.first()
-                && let Err(err) = open_window(path)
-            {
-                report(&format!("Cannot open workspace: {err:#}"));
-            }
-        },
-    );
-}
-
-/// Opens a workspace folder in a new window.
-fn open_window(path: &Path) -> Result<()> {
-    let (root, layout) = workspace_paths(path)?;
-    floem::new_window(
-        move |id| ui::workbench(id, root, layout),
-        Some(window_config()),
-    );
-    Ok(())
 }
 
 /// WSLg's GPU-backed OpenGL loses the device while wgpu sets up, which Floem
@@ -157,12 +132,9 @@ fn run() -> Result<()> {
         args.next().is_none(),
         "Usage: pi-workbench [workspace-folder]"
     );
-    let (root, layout) = workspace_paths(&path)?;
+    let (root, _) = workspace_paths(&path)?;
     floem::Application::new()
-        .window(
-            move |id| ui::workbench(id, root, layout),
-            Some(window_config()),
-        )
+        .window(move |id| ui::workbench(id, root), Some(window_config()))
         .run();
     Ok(())
 }

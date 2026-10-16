@@ -570,7 +570,60 @@ fn model_menu(session: Rc<Session>, open: RwSignal<bool>) -> impl IntoView {
     })
 }
 
-fn composer(session: Rc<Session>, visible: Memo<bool>, zoom: f64) -> impl IntoView {
+/// Where a session that has not started will run, and a menu to pick
+/// another folder; gone once it has.
+fn folder_chip(state: Rc<Workbench>, session: Rc<Session>, zoom: f64) -> impl IntoView {
+    let entries = session.entries();
+    let fresh = move || entries.with(|e| !e.iter().any(|e| e.kind == EntryKind::User));
+    let folder = state.root().to_path_buf();
+    let name = folder.file_name().map_or_else(
+        || folder.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let key = session.key;
+    let chip = floem::views::tooltip(
+        Stack::horizontal((
+            Label::new(name).style(|s| s.min_width(0).text_ellipsis()),
+            floem::views::svg(super::rail::CHEVRON_OPEN.to_string())
+                .style(|s| s.size(10, 10).flex_shrink(0.0_f32).color(color::muted())),
+        ))
+        .style(move |s| {
+            s.color(color::text())
+                .font_size(12.0 * zoom)
+                .gap(5)
+                .items_center()
+                .padding_horiz(8)
+                .padding_vert(5)
+                .max_width(160)
+                .border(1)
+                .border_color(color::border())
+                .border_radius(6)
+                .cursor(floem::style::CursorStyle::Pointer)
+                .hover(|s| s.border_color(color::accent()))
+        })
+        .on_event_stop(el::Click, move |_, _| {
+            state.choose_folder(state.pointer(), folder.clone(), key)
+        }),
+        || {
+            Label::new("Where Pi works: pick a folder, or ask Pi to make one")
+                .style(|s| s.padding(4).font_size(11))
+        },
+    );
+    Stack::horizontal((
+        Label::new("Starts in").style(move |s| s.color(color::muted()).font_size(12.0 * zoom)),
+        chip,
+    ))
+    // Gone, room and all, once the session has begun.
+    .style(move |s| s.gap(8).items_center().apply_if(!fresh(), |s| s.hide()))
+}
+
+fn composer(
+    state: Rc<Workbench>,
+    session: Rc<Session>,
+    visible: Memo<bool>,
+    zoom: f64,
+) -> impl IntoView {
+    let chip = folder_chip(state, session.clone(), zoom);
     let working = session.working();
     let request = session.focus_request();
     let editor = text_editor("")
@@ -641,6 +694,7 @@ fn composer(session: Rc<Session>, visible: Memo<bool>, zoom: f64) -> impl IntoVi
         }
     });
     Stack::vertical((
+        chip,
         Stack::horizontal((
             editor,
             button("Send", move || submit(false)).style(move |s| {
@@ -804,11 +858,12 @@ pub(super) fn session_view(
         100.0
     })
     .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
-    let composer = Stack::vertical((composer(session.clone(), visible, zoom),)).style(move |s| {
-        s.width_full()
-            .max_width(860.0 * zoom)
-            .margin_horiz(floem::unit::LengthAuto::Auto)
-    });
+    let composer = Stack::vertical((composer(state.clone(), session.clone(), visible, zoom),))
+        .style(move |s| {
+            s.width_full()
+                .max_width(860.0 * zoom)
+                .margin_horiz(floem::unit::LengthAuto::Auto)
+        });
     Stack::new((
         Stack::vertical((header, timeline, composer)).style(|s| s.size_full().min_height(0)),
         model_menu(session, menu_open),

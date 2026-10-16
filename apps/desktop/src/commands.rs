@@ -286,7 +286,7 @@ impl Command {
         match self {
             Self::Palette => ("Show all commands", ctrl_shift("p")),
             Self::Quit => ("Close workspace window", ctrl("q")),
-            Self::OpenFolder => ("Open folder in new window", None),
+            Self::OpenFolder => ("Open folder", None),
             Self::Save => ("Save active file", ctrl("s")),
             Self::SaveAll => ("Save all files", None),
             Self::CloseFile => ("Close tab", ctrl("w")),
@@ -391,7 +391,7 @@ impl Command {
 
 pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
     match command {
-        Command::OpenFolder => crate::open_folder(),
+        Command::OpenFolder => state.pick_folder(),
         Command::Save => state.save_active(),
         Command::SaveAll => state.documents.save_all(),
         Command::CloseFile => state.close_active(),
@@ -458,7 +458,7 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::MoveExplorer => state.move_explorer(),
         Command::Refresh => state.explorer.refresh(),
         Command::ResetLayout => state.reset_layout(),
-        Command::Quit => state.request_quit(),
+        Command::Quit => state.quit(),
         Command::Palette => state.toggle_palette(),
     }
 }

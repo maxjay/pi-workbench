@@ -16,7 +16,8 @@ use crate::{
     commands::{self, Command},
     lens::Since,
     panes::{Node, Tab},
-    workspace::{Integrations, Workbench},
+    window::Window,
+    workspace::Workbench,
 };
 use editor::pane;
 use explorer::explorer;
@@ -419,8 +420,15 @@ fn popup_menu(state: Rc<Workbench>) -> impl IntoView {
                 Some(action) => {
                     let state = row_state.clone();
                     Stack::horizontal((
-                        Label::new(item.title).style(|s| s.flex_grow(1.0_f32)),
-                        Label::new(item.hint).style(|s| s.color(color::muted()).font_size(11)),
+                        Label::new(item.title).style(|s| s.flex_grow(1.0_f32).flex_shrink(0.0_f32)),
+                        // Long hints, such as paths, are cut rather than
+                        // spilling out of the menu.
+                        Label::new(item.hint).style(|s| {
+                            s.color(color::muted())
+                                .font_size(11)
+                                .min_width(0)
+                                .text_ellipsis()
+                        }),
                     ))
                     .style(|s| {
                         s.width_full()
@@ -504,16 +512,53 @@ fn pane_tree(state: Rc<Workbench>) -> impl IntoView {
     .style(|s| s.size_full().min_width(0).min_height(0))
 }
 
-pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl IntoView {
+/// A window: the folders open in it, the one in front shown.
+pub fn workbench(window: WindowId, root: PathBuf) -> impl IntoView {
     let (settings, settings_error) = crate::settings::current();
-    let integrations = Integrations {
-        pi: Launch::from_settings(settings.pi.command(), &settings.pi.args),
-    };
-    let state = Workbench::new(root, layout_path, integrations, move || {
-        floem::close_window(window)
+    let app = Window::new(
+        window,
+        Launch::from_settings(settings.pi.command(), &settings.pi.args),
+    );
+    if let Some(first) = app.show(&root) {
+        first.start_with_session();
+        if let Some(err) = settings_error.or_else(color::follow_settings) {
+            first.report(err);
+        }
+    }
+    app.refresh_folders();
+    // Glitch on the taskbar too, not just in the title bar; once the window
+    // has its native handle.
+    #[cfg(windows)]
+    floem::action::exec_after(std::time::Duration::from_millis(50), move |_| {
+        if let Some(hwnd) = pet_window::native(window) {
+            pet_window::use_app_icon(hwnd);
+        }
     });
-    state.start_with_session();
-    state.restore();
+    // The whole window drawn larger or smaller, as the folder in front was
+    // last left; set again only when that zoom changes.
+    let scale_app = app.clone();
+    let ui_scale = floem::reactive::Memo::new(move |_| {
+        let shown = scale_app.active().get();
+        scale_app
+            .workspace_tracked(&shown)
+            .map_or(1.0, |state| state.layout().with(|l| l.ui_scale))
+    });
+    floem::reactive::Effect::new(move |_| floem::action::set_window_scale(ui_scale.get()));
+    let (views_app, close_app) = (app.clone(), app.clone());
+    dyn_stack(
+        move || views_app.workspaces().get(),
+        |state| state.root().to_path_buf(),
+        move |state| workspace(state, window, app.clone()),
+    )
+    .style(|s| s.size_full())
+    .on_event_cont(el::WindowCloseRequested, move |cx, _| {
+        cx.prevent_default();
+        close_app.request_close();
+    })
+}
+
+/// One folder's workspace, shown while it is the window's front folder.
+fn workspace(state: Rc<Workbench>, window: WindowId, app: Rc<Window>) -> impl IntoView {
     state.pets.start();
     // /kill: a fresh session in place of the one that lost the thread.
     let (renew, renew_state) = (state.sessions.renew(), state.clone());
@@ -528,19 +573,6 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         }
         renew.serial
     });
-    // Glitch on the taskbar too, not just in the title bar; once the window
-    // has its native handle.
-    #[cfg(windows)]
-    floem::action::exec_after(std::time::Duration::from_millis(50), move |_| {
-        if let Some(hwnd) = pet_window::native(window) {
-            pet_window::use_app_icon(hwnd);
-        }
-    });
-    // The whole window drawn larger or smaller, as last left; set again only
-    // when the zoom itself changes, not with every other layout change.
-    let scale_layout = state.layout();
-    let ui_scale = floem::reactive::Memo::new(move |_| scale_layout.with(|l| l.ui_scale));
-    floem::reactive::Effect::new(move |_| floem::action::set_window_scale(ui_scale.get()));
     // Focusing a pane any way (keyboard, opening a file) gives it the zoom
     // keys back from the status bar.
     let (focus_state, focused_pane) = (state.clone(), state.focused());
@@ -553,9 +585,6 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     });
     pet::follow_popping(state.clone(), window);
     let shake = pet::shake(&state);
-    if let Some(err) = settings_error.or_else(color::follow_settings) {
-        state.report(err);
-    }
     state.sessions.refresh_recent();
     state.lens.start();
     let (synced, changed, tree) = (
@@ -576,7 +605,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     let layout = state.layout();
     let status = state.status();
     let focused = state.focused();
-    let close_state = state.clone();
+    let (shown_app, shown_state) = (app.clone(), state.clone());
     let keyboard_state = state.clone();
     let pointer_state = state.clone();
     let body = Stack::horizontal((
@@ -774,7 +803,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     Stack::new((
         Stack::vertical((
             title_bar(state.clone()),
-            Stack::horizontal((rail::rail(state.clone()), body))
+            Stack::horizontal((rail::rail(state.clone(), app.clone()), body))
                 .style(|s| s.size_full().min_width(0).min_height(0)),
             footer,
         ))
@@ -789,7 +818,11 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     .style(move |s| {
         // A /kill shakes everything.
         let (x, y) = shake.get();
-        s.size_full()
+        let shown = shown_app.active().with(|shown| shown == shown_state.root());
+        s.absolute()
+            .inset(0)
+            .apply_if(!shown, |s| s.hide())
+            .size_full()
             .background(color::bg())
             .color(color::text())
             .font_size(13)
@@ -812,10 +845,6 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     })
     .on_event_cont_with_config(el::PointerUp, CAPTURE, move |_, _| {
         pointer_state.pointer_released();
-    })
-    .on_event_cont(el::WindowCloseRequested, move |cx, _| {
-        cx.prevent_default();
-        close_state.request_quit();
     })
     .on_event_with_config(el::KeyDown, CAPTURE, move |cx, event| {
         if event.key == Key::Named(NamedKey::Escape) {
