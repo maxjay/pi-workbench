@@ -3,6 +3,7 @@ pub(crate) mod color;
 mod editor;
 mod explorer;
 mod finder;
+pub(crate) mod frame;
 mod lens_doc;
 mod overlays;
 mod pet;
@@ -167,28 +168,40 @@ fn title_bar(state: Rc<Workbench>) -> impl IntoView {
             .on_event_stop(el::Click, move |_, _| explorer_state.toggle_explorer()),
         || Label::new("Explorer  (Ctrl+B)").style(|s| s.padding(4).font_size(11)),
     );
+    // Where the system draws no frame, the bar's empty parts move the
+    // window and its right end has the window's buttons.
+    let controls = frame::window_controls(state.clone());
     Stack::horizontal((
-        Stack::horizontal((
-            Label::new("π").style(|s| {
-                s.color(color::accent())
-                    .font_size(18)
-                    .font_family(CODE_FONT.to_string())
+        frame::drag_area(
+            Stack::horizontal((
+                Label::new("π").style(|s| {
+                    s.color(color::accent())
+                        .font_size(18)
+                        .font_family(CODE_FONT.to_string())
+                }),
+                Label::new(root).style(|s| s.color(color::text()).font_bold().text_ellipsis()),
+            ))
+            .style(|s| {
+                s.gap(8)
+                    .items_center()
+                    .flex_basis(0)
+                    .flex_grow(1.0_f32)
+                    .min_width(0)
+                    .height_full()
             }),
-            Label::new(root).style(|s| s.color(color::text()).font_bold().text_ellipsis()),
+        ),
+        search,
+        Stack::horizontal((
+            frame::drag_area(Empty::new().style(|s| s.flex_grow(1.0_f32).height_full())),
+            explorer_toggle,
+            controls,
         ))
         .style(|s| {
-            s.gap(8)
-                .items_center()
-                .flex_basis(0)
-                .flex_grow(1.0_f32)
-                .min_width(0)
-        }),
-        search,
-        Stack::horizontal((explorer_toggle,)).style(|s| {
             s.flex_basis(0)
                 .flex_grow(1.0_f32)
                 .justify_end()
                 .items_center()
+                .height_full()
         }),
     ))
     .style(|s| {
@@ -544,12 +557,14 @@ pub fn workbench(window: WindowId, folder: Option<PathBuf>, fallback: PathBuf) -
     });
     floem::reactive::Effect::new(move |_| floem::action::set_window_scale(ui_scale.get()));
     let (views_app, close_app) = (app.clone(), app.clone());
-    dyn_stack(
-        move || views_app.workspaces().get(),
-        |state| state.root().to_path_buf(),
-        move |state| workspace(state, window, app.clone()),
+    frame::with_resize_edges(
+        dyn_stack(
+            move || views_app.workspaces().get(),
+            |state| state.root().to_path_buf(),
+            move |state| workspace(state, window, app.clone()),
+        )
+        .style(|s| s.size_full()),
     )
-    .style(|s| s.size_full())
     .on_event_cont(el::WindowCloseRequested, move |cx, _| {
         cx.prevent_default();
         close_app.request_close();
