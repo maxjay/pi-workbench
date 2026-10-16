@@ -1,3 +1,8 @@
+// Release builds on Windows are a windowed app: started from the Start menu
+// or a shortcut, no console window opens beside it. Debug builds keep the
+// console for their logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod commands;
 mod documents;
 mod explorer;
