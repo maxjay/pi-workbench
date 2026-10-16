@@ -70,6 +70,13 @@ fn prefer_software_gl_on_wsl() {
         // SAFETY: runs first in main, before any other thread exists.
         unsafe { std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1") };
     }
+    // WSLg's Wayland gives the window no title bar, so it cannot be moved,
+    // resized or closed with the mouse; through X11 it gets one.
+    // `PI_WORKBENCH_WAYLAND=1` keeps Wayland.
+    if wsl && std::env::var_os("PI_WORKBENCH_WAYLAND").is_none() {
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    }
 }
 
 /// Says what went wrong where it will be seen: on standard error, and, for
