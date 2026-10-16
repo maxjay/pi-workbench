@@ -1,3 +1,10 @@
+// Release builds on Windows are a windowed app: started from the Start menu
+// or a shortcut, no console window opens beside it. Debug builds keep the
+// console for their logs. Without one, what the app has to say goes to the
+// terminal it was started from, if any, and errors to a message box too
+// (`report`).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod commands;
 mod documents;
 mod explorer;
@@ -58,7 +65,7 @@ fn open_folder() {
                 && let Some(path) = info.path.first()
                 && let Err(err) = open_window(path)
             {
-                eprintln!("Cannot open workspace: {err:#}");
+                report(&format!("Cannot open workspace: {err:#}"));
             }
         },
     );
@@ -90,7 +97,46 @@ fn prefer_software_gl_on_wsl() {
     }
 }
 
-fn main() -> Result<()> {
+/// Says what went wrong where it will be seen: on standard error, and, for
+/// the windowed Windows build that may have no terminal, in a message box.
+fn report(message: &str) {
+    eprintln!("{message}");
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (text, title) = (wide(message), wide("Pi Workbench"));
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            )
+        };
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    // Started from a terminal, the windowed Windows build writes to it
+    // (`--help`, errors); from a shortcut there is none, and this does
+    // nothing.
+    #[cfg(all(windows, not(debug_assertions)))]
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(
+            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        );
+    }
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            report(&format!("Error: {err:#}"));
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     prefer_software_gl_on_wsl();
     let mut args = std::env::args_os().skip(1);
