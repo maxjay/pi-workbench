@@ -295,6 +295,7 @@ fn control(
 /// Pop out (or in) and hide, over the empty top of the sprite's cell, so
 /// showing them moves nothing.
 fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl IntoView {
+    // Over the sprite's top, from its left edge.
     let (pop_pets, hide_pets) = (pets.clone(), pets.clone());
     let out = pets.out;
     let key = pet.key;
@@ -320,27 +321,88 @@ fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl Int
     .style(move |s| {
         s.absolute()
             .inset_top(0)
-            .inset_right(0)
+            .inset_left(0)
             .gap(4)
             .apply_if(!hovered.get(), |s| s.hide())
     })
 }
 
-/// A session's pet in its view: at the bottom right of the conversation,
-/// talking about this session, and thrown left across it by a `/kill`.
-pub(super) fn docked(state: Rc<Workbench>, key: u64) -> impl IntoView {
+/// The front session's pet in the window: switch sessions and it is that
+/// session's. It starts at the foot of the sessions rail and goes wherever
+/// it is dragged; thrown hard, it leaves the window and flies on across
+/// the screen.
+pub(super) fn docked(state: Rc<Workbench>, main: WindowId) -> impl IntoView {
+    let pets = state.pets.clone();
+    let front = state.sessions.active_key();
+    let (out, hidden, dock) = (pets.out, pets.hidden, pets.dock);
+    let shown = Memo::new(move |_| {
+        front
+            .get()
+            .filter(|key| out.get() != Some(*key) && !hidden.get())
+    });
+    // The window's size, to keep the pet and its bubble in it.
+    let window = RwSignal::new(Size::ZERO);
+    let view_state = state.clone();
+    let view = dyn_container(
+        move || shown.get(),
+        move |key| match key {
+            Some(key) => roaming(view_state.clone(), key, main, window).into_any(),
+            None => Empty::new().into_any(),
+        },
+    );
+    let view_id = view.view_id();
+    view.style(move |s| {
+        let (left, bottom) = dock.get();
+        let size_now = window.get();
+        let pet = (f64::from(CELL.0) * DOCKED, f64::from(CELL.1) * DOCKED);
+        // Kept in reach however small the window gets.
+        let (left, bottom) = if size_now.width > 0.0 {
+            (
+                left.min(size_now.width - pet.0).max(0.0),
+                bottom.min(size_now.height - pet.1).max(0.0),
+            )
+        } else {
+            (left, bottom)
+        };
+        s.absolute()
+            .inset_left(left)
+            .inset_bottom(bottom)
+            .z_index(25)
+    })
+    .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
+        let now = view_id.root().get_size().unwrap_or_default();
+        if window.get_untracked() != now {
+            window.set(now);
+        }
+    })
+}
+
+/// One session's pet roaming the window.
+fn roaming(
+    state: Rc<Workbench>,
+    key: u64,
+    main: WindowId,
+    window: RwSignal<Size>,
+) -> impl IntoView {
     let pets = state.pets.clone();
     let pet = pets.pet(key);
     let pose = pet.pose();
-    let (out, hidden) = (pets.out, pets.hidden);
+    let dock = pets.dock;
     let hovered = RwSignal::new(false);
+    let size = (f64::from(CELL.0) * DOCKED, f64::from(CELL.1) * DOCKED);
+    // A /kill throws it as far left as the window allows.
+    let throw_pet = pet.clone();
+    Effect::new(move |_| {
+        let (left, _) = dock.get();
+        throw_pet
+            .throw_distance
+            .set(((left - 6.0) / 1.15).clamp(0.0, 300.0));
+    });
 
-    // Grabbed: where the pointer and the pet were, the room it has, and the
-    // pointer's trail, to throw it with.
+    // Grabbed: where the pointer was on it, whether it has moved, and where
+    // it has been lately, to throw it with.
     struct Grab {
-        pointer: Point,
-        from: (f64, f64),
-        bounds: Bounds,
+        offset: Point,
         moved: bool,
         trail: Vec<(std::time::Instant, (f64, f64))>,
     }
@@ -348,38 +410,20 @@ pub(super) fn docked(state: Rc<Workbench>, key: u64) -> impl IntoView {
     let body = sprite(&pet, DOCKED);
     let body_id = body.view_id();
     pet.sprite_view.set(Some(body_id));
+    let window_size = move || body_id.root().get_size().unwrap_or_default();
     let (down_grab, move_grab, up_grab) = (grab.clone(), grab.clone(), grab);
     let (down_state, move_state) = (state.clone(), state.clone());
-    let (down_pet, move_pet, up_pet) = (pet.clone(), pet.clone(), pet.clone());
+    let (move_pet, up_pet, up_pets) = (pet.clone(), pet.clone(), pets.clone());
     let body = body
         .on_event_stop(el::PointerDown, move |cx, event| {
             if let Some(id) = event.pointer.pointer_id {
                 cx.request_pointer_capture(id);
             }
-            // Caught mid-air, it stays where it is caught.
-            let from = down_pet
-                .held
-                .get_untracked()
-                .or_else(|| down_pet.flight().get_untracked().map(|f| f.at))
-                .unwrap_or((0.0, 0.0));
-            // The conversation is its room; its place is where it sits.
-            let sprite = body_id.get_visual_rect();
-            let home = sprite - floem::kurbo::Vec2::new(from.0, from.1);
-            let bounds = body_id
-                .parent()
-                .and_then(|figure| figure.parent())
-                .and_then(|view| view.parent())
-                .map(|area| area.get_visual_rect())
-                .map_or(Bounds::HOP, |area| Bounds {
-                    left: area.x0 - home.x0,
-                    right: area.x1 - home.x1,
-                    top: area.y0 - home.y0,
-                    floor: 0.0,
-                });
+            let at = down_state.pointer();
+            let (left, bottom) = dock.get_untracked();
+            let top = window_size().height - bottom - size.1;
             *down_grab.borrow_mut() = Some(Grab {
-                pointer: down_state.pointer(),
-                from,
-                bounds,
+                offset: Point::new(at.x - left, at.y - top),
                 moved: false,
                 trail: Vec::new(),
             });
@@ -388,74 +432,63 @@ pub(super) fn docked(state: Rc<Workbench>, key: u64) -> impl IntoView {
             let mut grab = move_grab.borrow_mut();
             let Some(grab) = grab.as_mut() else { return };
             let at = move_state.pointer();
-            let (dx, dy) = (at.x - grab.pointer.x, at.y - grab.pointer.y);
-            if !grab.moved && dx.abs() + dy.abs() < 4.0 {
+            let window = window_size();
+            let left = (at.x - grab.offset.x).clamp(0.0, (window.width - size.0).max(0.0));
+            let top = (at.y - grab.offset.y).clamp(0.0, (window.height - size.1).max(0.0));
+            let (before, _) = dock.get_untracked();
+            if !grab.moved && (left - before).abs() < 2.0 {
                 return;
             }
             grab.moved = true;
-            let b = grab.bounds;
-            let held = (
-                (grab.from.0 + dx).clamp(b.left, b.right),
-                (grab.from.1 + dy).clamp(b.top, b.floor),
-            );
+            if (left - before).abs() > 0.5 {
+                move_pet.moving.set(Some(left > before));
+            }
             let now = std::time::Instant::now();
-            grab.trail.push((now, held));
+            grab.trail.push((now, (left, top)));
             grab.trail
                 .retain(|(when, _)| now - *when < std::time::Duration::from_millis(200));
-            move_pet.held.set(Some(held));
+            dock.set((left, window.height - top - size.1));
         })
         .on_event_stop(el::PointerUp, move |_, _| {
             let Some(grab) = up_grab.borrow_mut().take() else {
                 return;
             };
+            up_pet.moving.set(None);
             if !grab.moved {
                 up_pet.poke();
                 return;
             }
-            let at = up_pet.held.get_untracked().unwrap_or(grab.from);
+            // Thrown hard, it leaves the window, from where it is on the
+            // screen; let go gently, it stays where it is put.
             let velocity = release_velocity(&grab.trail);
-            let flung = velocity.0.hypot(velocity.1) > FLING_SPEED;
-            // Flung, it flies; let go gently, it drops. Either way it walks
-            // back to its place after.
-            let velocity = if flung { velocity } else { (0.0, 0.0) };
-            up_pet.launch(at, velocity, grab.bounds, true);
+            if cfg!(windows) && velocity.0.hypot(velocity.1) > FLING_SPEED {
+                let sprite = body_id.get_visual_rect();
+                let origin = main
+                    .position_on_screen_including_frame()
+                    .zip(main.position_of_content_on_screen())
+                    .map(|(window, content)| {
+                        Point::new(window.x + content.x, window.y + content.y)
+                    });
+                if let Some(origin) = origin {
+                    let at = Point::new(origin.x + sprite.x0, origin.y + sprite.y0);
+                    up_pets.fling_out(key, at, velocity);
+                }
+            }
         });
     let figure = Stack::new((body, controls(&pets, &pet, hovered))).style(move |s| {
         let thrown = pose.get().thrown;
         s.translate_x(thrown.0).translate_y(thrown.1)
     });
-    let view = Stack::vertical((bubble(&state, &pet), figure)).style(move |s| {
-        s.absolute()
-            .inset_right(14)
-            .inset_bottom(4)
-            .items_end()
-            .gap(4)
-            .z_index(5)
-            .apply_if(out.get() == Some(key) || hidden.get(), |s| s.hide())
+    // The bubble moves left to stay in the window near its right edge.
+    let said = bubble(&state, &pet).style(move |s| {
+        let (left, _) = dock.get();
+        let room = window.get().width - left - BUBBLE_WIDTH - 8.0;
+        s.translate_x(room.min(0.0).max(-left))
     });
-    // Thrown as far left as the conversation allows.
-    let view_id = view.view_id();
-    let throw_pet = pet.clone();
-    view.on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
+    Stack::vertical((said, figure))
+        .style(|s| s.items_start().gap(4))
+        .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
-        .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
-            // Popped out, the screen decides how far it flies.
-            if out.get_untracked() == Some(key) {
-                return;
-            }
-            let thrown = throw_pet.pose().get_untracked().thrown;
-            if thrown != (0.0, 0.0) {
-                return;
-            }
-            let room = view_id
-                .parent()
-                .map(|parent| parent.get_visual_rect())
-                .zip(throw_pet.sprite_view.get().map(|v| v.get_visual_rect()))
-                .map_or(0.0, |(area, sprite)| sprite.x0 - area.x0 - 8.0);
-            throw_pet
-                .throw_distance
-                .set((room / 1.15).clamp(0.0, 320.0));
-        })
 }
 
 /// The window's content shakes while a `/kill` lands.
@@ -830,11 +863,27 @@ impl Outside {
             (f64::from(CELL.0) * POPPED * scale).round() as u32,
             (f64::from(CELL.1) * POPPED * scale).round() as u32,
         );
-        let start = start_point(main, f64::from(height) / scale);
+        // Thrown out of the window, it carries on from where it left it.
+        let launch = pets.take_launch();
+        let start = launch.map_or_else(|| start_point(main, f64::from(height) / scale), |l| l.0);
         let home = (
             (start.x * scale).round() as i32,
             (start.y * scale).round() as i32,
         );
+        if let Some((_, velocity)) = launch {
+            let pose = pet.pose().get_untracked();
+            let pixels =
+                sheet(color::is_dark()).pixels(pose.anim.row(), pose.column, width, height);
+            sprite.draw(&pixels, width, height, Some(home));
+            let (left, top, right, bottom) = sprite.work_area();
+            let bounds = Bounds {
+                left: f64::from(left - home.0) / scale,
+                right: f64::from(right - width as i32 - home.0) / scale,
+                top: f64::from(top - home.1) / scale,
+                floor: f64::from(bottom - height as i32 - home.1) / scale,
+            };
+            pet.launch((0.0, 0.0), velocity, bounds, false);
+        }
 
         scope.enter(|| {
             // Drawn whenever the frame, the throw or the theme changes; moved
@@ -842,7 +891,8 @@ impl Outside {
             let pose = pet.pose();
             let (shot, flight) = (pet.shot(), pet.flight());
             let from = Cell::new(None::<((bool, u64), (i32, i32))>);
-            let first = Cell::new(Some(home));
+            // Placed once, unless it was thrown out and is already flying.
+            let first = Cell::new(launch.is_none().then_some(home));
             let (draw_sprite, throw_pet) = (sprite.clone(), pet.clone());
             let after_throw = place.clone();
             Effect::new(move |_| {

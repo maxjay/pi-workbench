@@ -808,6 +808,12 @@ pub struct Pets {
     statuses: RefCell<HashMap<u64, (Status, Instant)>>,
     /// How much the window shakes while a /kill lands.
     shake: RwSignal<(f64, f64)>,
+    /// In the window: the pet's left edge, and its height above the
+    /// window's bottom, in logical pixels.
+    pub dock: RwSignal<(f64, f64)>,
+    /// Thrown out of the window: from where on the screen (logical pixels),
+    /// and how fast.
+    launch_out: Cell<Option<(floem::kurbo::Point, (f64, f64))>>,
 }
 
 impl Pets {
@@ -826,6 +832,8 @@ impl Pets {
                 pop_out_when_ready: Cell::new(false),
                 statuses: RefCell::new(HashMap::new()),
                 shake: RwSignal::new((0.0, 0.0)),
+                dock: RwSignal::new((136.0, 34.0)),
+                launch_out: Cell::new(None),
             })
         });
         pets.watch();
@@ -853,6 +861,19 @@ impl Pets {
             self.out.set(Some(key));
         }
         self.pet(key).greet();
+    }
+
+    /// Thrown out of the window: it flies on from that point on the screen.
+    pub fn fling_out(&self, key: u64, at: floem::kurbo::Point, velocity: (f64, f64)) {
+        self.launch_out.set(Some((at, velocity)));
+        self.hidden.set(false);
+        self.out.set(Some(key));
+    }
+
+    /// The throw a pet popped out with, if it was thrown out.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn take_launch(&self) -> Option<(floem::kurbo::Point, (f64, f64))> {
+        self.launch_out.take()
     }
 
     pub fn pop_in(&self) {

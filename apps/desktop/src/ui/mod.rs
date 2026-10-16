@@ -683,6 +683,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        pet::docked(state.clone(), window),
         popup_menu(state.clone()),
         drag_ghost(state.clone()),
         finder::finder(state.clone()),
