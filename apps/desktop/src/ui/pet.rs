@@ -884,6 +884,7 @@ struct Outside {
 impl Outside {
     fn close(self, pets: &Rc<Pets>) {
         self.scope.dispose();
+        pets.speech_hwnd.set(None);
         if let PetWindow::Open(id) = pets.window.replace(PetWindow::Closed) {
             floem::close_window(id);
         }
@@ -893,6 +894,7 @@ impl Outside {
     /// the pet and its speech together.
     fn speech_window(state: &Rc<Workbench>, pet: &Rc<Pet>, at: Point, card: bool) {
         state.pets.window.set(PetWindow::Pending);
+        state.pets.speech_hwnd.set(None);
         let (state, pet) = (state.clone(), pet.clone());
         let size = if card {
             card_size(None)
@@ -1047,6 +1049,21 @@ fn card_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView 
         })
 }
 
+/// The native window of the popped-out pet's speech, once there is one: it
+/// is not made until after its view is, so it is looked up when wanted.
+#[cfg(windows)]
+fn speech_hwnd(pets: &Pets) -> Option<isize> {
+    if let Some(hwnd) = pets.speech_hwnd.get() {
+        return Some(hwnd);
+    }
+    let PetWindow::Open(id) = pets.window.get() else {
+        return None;
+    };
+    let hwnd = super::pet_window::native(id)?;
+    pets.speech_hwnd.set(Some(hwnd));
+    Some(hwnd)
+}
+
 /// The popped-out pet's speech beside its see-through sprite: shown only
 /// while it has something to say.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -1063,15 +1080,13 @@ fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoVie
             open.get() || !pet.questions().is_empty() || updates.with(|u| !u.is_empty())
         })
     };
-    #[cfg(windows)]
-    pets.speech_hwnd.set(super::pet_window::native(id));
     // Shown without taking the keyboard from whatever you are typing in;
     // a click on it (to chat) gives it the keyboard.
     let shown_pets = pets.clone();
     Effect::new(move |_| {
         let show = speaking.get();
         #[cfg(windows)]
-        if let Some(hwnd) = shown_pets.speech_hwnd.get() {
+        if let Some(hwnd) = speech_hwnd(&shown_pets) {
             super::pet_window::show_window(hwnd, show);
             return;
         }
@@ -1196,7 +1211,7 @@ impl Body {
     }
     /// Its speech, just above its antenna (the pet at `at`, physical).
     fn speech_follows(&self, pets: &Pets, at: (i32, i32)) {
-        if let Some(hwnd) = pets.speech_hwnd.get() {
+        if let Some(hwnd) = speech_hwnd(pets) {
             let (left, now, _, height) = super::pet_window::window_rect(hwnd);
             let top = at.1 + (f64::from(self.height()) * HEADROOM) as i32 - height - 4;
             if (left, now) != (at.0, top) {
