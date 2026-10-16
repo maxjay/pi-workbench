@@ -559,6 +559,7 @@ impl Pet {
     }
 
     /// Looks the way of a point on the screen, popped out.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn look_at(&self, face: (f64, f64), at: (f64, f64)) {
         let look = look_from(face, at);
         if self.look.get_untracked() != look {
