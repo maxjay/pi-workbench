@@ -96,7 +96,29 @@ pub struct PopupMenu {
 type Dropped = (PathBuf, PaneId, Option<usize>, bool);
 
 /// Subfolders listed in the folder menu; the rest are a browse away.
-const SUBFOLDERS: usize = 24;
+const SUBFOLDERS: usize = 30;
+
+/// Whether the system has a folder picker to offer. On Linux it goes
+/// through a desktop portal, which WSL and plain window managers lack: the
+/// picker never shows and the choice is lost, so the folder menu is used.
+const SYSTEM_FOLDER_PICKER: bool = !cfg!(target_os = "linux");
+
+/// What to do with a folder chosen from the folder menu or picker.
+type FolderPick = Rc<dyn Fn(PathBuf)>;
+
+/// The system's folder picker; `pick` gets the folder chosen, if any.
+fn system_folder_picker(title: &str, pick: FolderPick) {
+    floem::open_file(
+        floem::FileDialogOptions::new()
+            .select_directories()
+            .title(title),
+        move |picked| {
+            if let Some(path) = picked.and_then(|info| info.path.into_iter().next()) {
+                pick(path);
+            }
+        },
+    );
+}
 /// Folders Pi has worked in, listed in the folder menu.
 const RECENT_FOLDERS: usize = 8;
 
@@ -569,26 +591,62 @@ impl Workbench {
 
     /// Where a session that has not started yet should run: a menu at `at`
     /// for `folder`, to start there, step up or into a subfolder, pick a
-    /// folder Pi has worked in, or browse. Its draft goes with it.
+    /// folder the window has open, or browse. Its draft goes with it.
     pub fn choose_folder(self: &Rc<Self>, at: floem::kurbo::Point, folder: PathBuf, key: u64) {
+        let state = self.clone();
+        self.browse_folders(
+            at,
+            folder,
+            "Start in",
+            Rc::new(move |picked| state.start_in(picked, key)),
+        );
+    }
+
+    /// A folder to bring forward here: the system's folder picker where it
+    /// works, else the folder menu. On Linux the picker needs a desktop
+    /// portal, which WSL, for one, does not have.
+    pub fn pick_folder(self: &Rc<Self>) {
+        let state = self.clone();
+        let pick: FolderPick = Rc::new(move |picked| {
+            state.open_folder(picked, None);
+        });
+        if SYSTEM_FOLDER_PICKER {
+            system_folder_picker("Open folder", pick);
+        } else {
+            let from = self.root.parent().unwrap_or(&self.root).to_path_buf();
+            self.browse_folders(self.pointer(), from, "Open", pick);
+        }
+    }
+
+    /// A menu at `at` for choosing a folder, starting at `folder`: `verb`
+    /// it, step up or into a subfolder, take one the window has open, or
+    /// browse with the system's picker where there is one.
+    fn browse_folders(
+        self: &Rc<Self>,
+        at: floem::kurbo::Point,
+        folder: PathBuf,
+        verb: &'static str,
+        pick: FolderPick,
+    ) {
         let name = |path: &Path| {
             path.file_name().map_or_else(
                 || pi_client::sessions::plain_cwd(path),
                 |n| n.to_string_lossy().into_owned(),
             )
         };
-        let here = folder.clone();
-        let state = self.clone();
+        let (here, chosen) = (folder.clone(), pick.clone());
         let mut items = vec![
-            MenuItem::new(format!("Start in {}", name(&folder)), move || {
-                state.start_in(here.clone(), key)
+            MenuItem::new(format!("{verb} {}", name(&folder)), move || {
+                chosen(here.clone())
             })
             .hint(pi_client::sessions::plain_cwd(&folder)),
             MenuItem::separator(),
         ];
         let step = |to: PathBuf, title: String| {
-            let state = self.clone();
-            MenuItem::new(title, move || state.choose_folder(at, to.clone(), key))
+            let (state, pick) = (self.clone(), pick.clone());
+            MenuItem::new(title, move || {
+                state.browse_folders(at, to.clone(), verb, pick.clone())
+            })
         };
         if let Some(parent) = folder.parent().filter(|p| p.file_name().is_some()) {
             items.push(step(parent.to_path_buf(), format!("‹ {}", name(parent))));
@@ -608,11 +666,14 @@ impl Workbench {
             items.push(step(child, title));
         }
         if more > 0 {
-            let state = self.clone();
-            items.push(MenuItem::new(
-                format!("{more} more: Browse…"),
-                move || state.browse_for_folder(key),
-            ));
+            items.push(if SYSTEM_FOLDER_PICKER {
+                let pick = pick.clone();
+                MenuItem::new(format!("{more} more: Browse…"), move || {
+                    system_folder_picker("Choose a folder", pick.clone())
+                })
+            } else {
+                MenuItem::new(format!("{more} more not listed"), || {})
+            });
         }
         let link = self.window.borrow().clone();
         let known: Vec<PathBuf> = link
@@ -625,54 +686,22 @@ impl Workbench {
         if !known.is_empty() {
             items.push(MenuItem::separator());
             for known in known {
-                let state = self.clone();
+                let pick = pick.clone();
                 let hint = known
                     .parent()
                     .map(pi_client::sessions::plain_cwd)
                     .unwrap_or_default();
                 let title = name(&known);
-                items.push(
-                    MenuItem::new(title, move || state.start_in(known.clone(), key)).hint(hint),
-                );
+                items.push(MenuItem::new(title, move || pick(known.clone())).hint(hint));
             }
         }
-        items.push(MenuItem::separator());
-        let state = self.clone();
-        items.push(MenuItem::new("Browse…", move || {
-            state.browse_for_folder(key)
-        }));
+        if SYSTEM_FOLDER_PICKER {
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new("Browse…", move || {
+                system_folder_picker("Choose a folder", pick.clone())
+            }));
+        }
         self.open_menu(at, items);
-    }
-
-    /// The system's folder picker, for a folder to bring forward here.
-    pub fn pick_folder(self: &Rc<Self>) {
-        let state = self.clone();
-        floem::open_file(
-            floem::FileDialogOptions::new()
-                .select_directories()
-                .title("Open folder"),
-            move |picked| {
-                if let Some(path) = picked.and_then(|info| info.path.into_iter().next()) {
-                    state.open_folder(path, None);
-                }
-            },
-        );
-    }
-
-    /// The system's folder picker, for where a session that has not begun
-    /// should start.
-    fn browse_for_folder(self: &Rc<Self>, key: u64) {
-        let state = self.clone();
-        floem::open_file(
-            floem::FileDialogOptions::new()
-                .select_directories()
-                .title("Start the session in"),
-            move |picked| {
-                if let Some(path) = picked.and_then(|info| info.path.into_iter().next()) {
-                    state.start_in(path, key);
-                }
-            },
-        );
     }
 
     /// Starts a session that has not begun yet in `folder` instead: a new
