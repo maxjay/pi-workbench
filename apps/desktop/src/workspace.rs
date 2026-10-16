@@ -310,6 +310,8 @@ pub struct Workbench {
     window: RefCell<Option<Rc<WindowLink>>>,
     /// Whether this folder is the one its window shows.
     shown: RwSignal<bool>,
+    /// The last save of what is open failed.
+    save_failed: Cell<bool>,
 }
 
 type AfterRestore = RefCell<Vec<Box<dyn FnOnce(&Rc<Workbench>)>>>;
@@ -404,7 +406,7 @@ impl Workbench {
                 }
             }
         });
-        Rc::new(Self {
+        let state = Rc::new(Self {
             documents,
             explorer,
             lens,
@@ -447,9 +449,60 @@ impl Workbench {
             after_restore: RefCell::new(Vec::new()),
             window: RefCell::new(None),
             shown: RwSignal::new(true),
+            save_failed: Cell::new(false),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
-        })
+        });
+        // What is open is saved as it changes, not only on closing, once the
+        // saved layout is in place.
+        let (open, saver) = (state.sessions.open(), Rc::downgrade(&state));
+        Effect::new(move |_| {
+            open.with(|open| open.iter().for_each(|session| session.file().track()));
+            if let Some(state) = saver.upgrade()
+                && state.restored.get()
+            {
+                Effect::untrack(|| match state.persist_layout() {
+                    Ok(()) => state.save_failed.set(false),
+                    // Said once, not on every change, until a save works.
+                    Err(err) => {
+                        if !state.save_failed.replace(true) {
+                            state.status.set(format!("Could not save layout: {err}"));
+                        }
+                    }
+                });
+            }
+        });
+        state
+    }
+
+    /// Whether this folder can close now: not with unsaved files.
+    pub fn can_release(&self) -> Result<(), String> {
+        if self.documents.all_saved() {
+            Ok(())
+        } else {
+            Err("Save or close its unsaved files first".into())
+        }
+    }
+
+    /// Closes this folder in its window: its layout saved, its sessions
+    /// stopped (they stay in Pi's store). Refused while it has unsaved files.
+    pub fn release(&self) -> Result<(), String> {
+        self.can_release()?;
+        self.persist_layout()
+            .map_err(|err| format!("Could not save layout: {err}"))?;
+        // Saved as it is; stopping its sessions must not save them away.
+        self.restored.set(false);
+        if self.pets.out.get_untracked().is_some() {
+            self.pets.pop_in();
+        }
+        let keys: Vec<u64> = self
+            .sessions
+            .open()
+            .with_untracked(|open| open.iter().map(|s| s.key).collect());
+        for key in keys {
+            self.close_session(key);
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -739,7 +792,11 @@ impl Workbench {
     /// Brings a session forward where it is shown, or else switches to it
     /// in the pane used for sessions: the conversation there gives way to it
     /// (and stays open in the rail), rather than gaining a tab beside it.
+    /// One reopened from before starts Pi now.
     pub fn show_session(&self, key: u64) {
+        if let Some(session) = self.sessions.find(key) {
+            self.sessions.wake(&session);
+        }
         let tab = Tab::Session(key);
         let pane = self.panes.find(&tab).unwrap_or_else(|| {
             let to = self.session_pane();
@@ -776,11 +833,17 @@ impl Workbench {
             .unwrap_or_else(|| self.panes.focused().get_untracked())
     }
 
-    /// Shows the front session, starting one if there is none.
+    /// Shows the front session, or the first open one, starting one if
+    /// there is none.
     pub fn show_conversation(&self) -> Rc<Session> {
         let session = self
             .sessions
             .active_untracked()
+            .or_else(|| {
+                self.sessions
+                    .open()
+                    .with_untracked(|open| open.first().cloned())
+            })
             .unwrap_or_else(|| self.sessions.create());
         self.show_session(session.key);
         session
@@ -945,6 +1008,7 @@ impl Workbench {
         // Startup runs once, before interaction. Reserve the saved files so
         // interactive opens share the same limit and do not read twice.
         self.pending.borrow_mut().extend(files.iter().cloned());
+        let kept = layout.sessions.clone();
         let state = self.clone();
         let finish = create_ext_action(self.scope, move |(files, summaries)| {
             state.finish_restore(layout, tree, files, summaries);
@@ -960,10 +1024,12 @@ impl Workbench {
                     (path, result)
                 })
                 .collect();
-            // Only this workspace's sessions are resumed.
+            // Only this workspace's sessions are resumed: those in panes, and
+            // the others it had open.
             let known = pi_client::sessions::list(&root);
             let summaries: Vec<SessionSummary> = sessions
                 .iter()
+                .chain(&kept)
                 .filter_map(|path| known.iter().find(|s| s.path == *path).cloned())
                 .collect();
             finish((files, summaries))
@@ -998,6 +1064,13 @@ impl Workbench {
             match result {
                 Ok(text) => self.documents.insert(path, text),
                 Err(err) => self.status.set(err),
+            }
+        }
+        // The sessions it had open come back first, in their order, waiting
+        // to be picked; those in panes start as their panes come back.
+        for path in &layout.sessions {
+            if let Some(summary) = summaries.iter().find(|s| s.path == *path) {
+                self.sessions.keep(summary);
             }
         }
         // Tabs opened while the layout was loading are kept.
@@ -2243,7 +2316,9 @@ impl Workbench {
     }
 
     fn persist_layout(&self) -> anyhow::Result<()> {
-        if !self.layout_writable {
+        // Before the saved layout is in place, what is open is not yet what
+        // was saved; nor once the folder is closing.
+        if !self.layout_writable || !self.restored.get() {
             return Ok(());
         }
         let mut layout = self.layout.get_untracked();
@@ -2276,6 +2351,11 @@ impl Workbench {
         layout.focused = order.iter().position(|&id| id == focused).unwrap_or(0);
         layout.pet_popped = self.pets.popped();
         layout.pet_hidden = self.pets.hidden.get_untracked();
+        layout.sessions = self.sessions.open().with_untracked(|open| {
+            open.iter()
+                .filter_map(|session| session.file().get_untracked())
+                .collect()
+        });
         layout::save(&self.layout_path, &layout)
     }
 
@@ -2412,6 +2492,55 @@ mod tests {
         );
         state.select_tab(focused(state).id, Tab::File(path.clone()));
         path
+    }
+
+    #[test]
+    fn sessions_left_open_come_back_waiting_in_their_order() {
+        with_workspace(|state, _| {
+            let summary = |name: &str| SessionSummary {
+                path: state.root.join(name),
+                id: name.into(),
+                title: name.into(),
+                prompts: 1,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                cwd: None,
+            };
+            let (a, b) = (summary("a.jsonl"), summary("b.jsonl"));
+            let layout = Layout {
+                sessions: vec![
+                    b.path.clone(),
+                    a.path.clone(),
+                    state.root.join("gone.jsonl"),
+                ],
+                ..Default::default()
+            };
+            let empty = SavedNode::Pane {
+                tabs: Vec::new(),
+                active: None,
+                zoom: 1.0,
+            };
+            state.finish_restore(layout, empty, Vec::new(), vec![a.clone(), b.clone()]);
+            let open = state.sessions.open().get_untracked();
+            let titles: Vec<String> = open.iter().map(|s| s.title().get_untracked()).collect();
+            assert_eq!(
+                titles,
+                ["b.jsonl", "a.jsonl"],
+                "in order; the gone one left out"
+            );
+            assert!(
+                open.iter().all(|s| s.waiting()),
+                "Pi is not started on them"
+            );
+            // What is open is what is saved.
+            state.persist_layout().unwrap();
+            let saved = layout::load(&state.layout_path).unwrap();
+            assert_eq!(saved.sessions, vec![b.path.clone(), a.path.clone()]);
+            // Closing the folder stops them, and keeps them for next time.
+            state.release().unwrap();
+            assert!(state.sessions.open().get_untracked().is_empty());
+            let saved = layout::load(&state.layout_path).unwrap();
+            assert_eq!(saved.sessions, vec![b.path, a.path], "not saved away");
+        });
     }
 
     #[test]
@@ -2923,6 +3052,8 @@ mod tests {
     #[test]
     fn normal_close_saves_the_panes_before_closing_the_window() {
         with_workspace(|state, closed| {
+            // A folder whose saved layout is in place.
+            state.restored.set(true);
             let first = focused(&state).id;
             let path = file(&state, "test.rs", "saved");
             state.select_tab(first, Tab::File(path));
@@ -2956,8 +3087,25 @@ mod tests {
     }
 
     #[test]
+    fn closing_before_the_layout_is_restored_keeps_the_saved_one() {
+        with_workspace(|state, closed| {
+            let saved = Layout {
+                sessions: vec!["/s/kept.jsonl".into()],
+                ..Default::default()
+            };
+            layout::save(&state.layout_path, &saved).unwrap();
+            state.request_quit();
+            assert!(closed.get());
+            let after = layout::load(&state.layout_path).unwrap();
+            assert_eq!(after.sessions, saved.sessions, "not saved over");
+        });
+    }
+
+    #[test]
     fn failed_layout_save_keeps_window_open() {
         with_workspace(|state, closed| {
+            // A folder whose saved layout is in place.
+            state.restored.set(true);
             std::fs::create_dir(&state.layout_path).unwrap();
             state.request_quit();
             assert!(!closed.get());

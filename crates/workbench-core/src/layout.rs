@@ -27,6 +27,18 @@ pub struct Layout {
     pub pet_hidden: bool,
     /// How large the whole window is drawn, 1 being the usual.
     pub ui_scale: f64,
+    /// The sessions open in this folder, by their files in Pi's store, as
+    /// the rail lists them; they come back, without Pi running, until picked.
+    pub sessions: Vec<PathBuf>,
+}
+
+/// What a window had open: its folders, in the rail's order, and the one
+/// it showed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowState {
+    pub folders: Vec<PathBuf>,
+    pub active: Option<PathBuf>,
 }
 
 /// A tab as saved: a file relative to the workspace, a Pi session by its
@@ -171,6 +183,7 @@ impl Default for Layout {
             pet_popped: false,
             pet_hidden: false,
             ui_scale: 1.0,
+            sessions: Vec::new(),
         }
     }
 }
@@ -270,6 +283,42 @@ pub fn state_path(root: &Path) -> Result<PathBuf> {
         .join(format!("{hash:016x}.json")))
 }
 
+fn data_dir() -> Result<PathBuf> {
+    let dirs = directories::ProjectDirs::from("dev", "pi-workbench", "Pi Workbench")
+        .context("No application data directory")?;
+    Ok(dirs.data_local_dir().to_path_buf())
+}
+
+/// Where the window's open folders are kept.
+pub fn window_state_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("window.json"))
+}
+
+/// Where a crash is written down.
+pub fn crash_log_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("crash.log"))
+}
+
+/// The window's open folders as last saved; nothing, if there is no file
+/// or it cannot be read.
+pub fn load_window(path: &Path) -> WindowState {
+    fs::read(path)
+        .ok()
+        .filter(|bytes| bytes.len() <= 1024 * 1024)
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_window(path: &Path, state: &WindowState) -> Result<()> {
+    let parent = path.parent().context("Window state has no parent")?;
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&serde_json::to_vec_pretty(state)?)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
+}
+
 pub fn load(path: &Path) -> Result<Layout> {
     if !path.exists() {
         return Ok(Layout::default());
@@ -318,6 +367,22 @@ mod tests {
         assert!(restored.explorer_right);
         assert_eq!(restored.split_fraction, 0.65);
         assert_eq!(restored.active, layout.active);
+    }
+
+    #[test]
+    fn the_window_state_round_trips_and_older_layouts_have_no_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("window.json");
+        assert_eq!(load_window(&path), WindowState::default(), "none saved yet");
+        let state = WindowState {
+            folders: vec!["/a".into(), "/b".into()],
+            active: Some("/b".into()),
+        };
+        save_window(&path, &state).unwrap();
+        assert_eq!(load_window(&path), state);
+        let older = dir.path().join("older.json");
+        fs::write(&older, r#"{"version": 1, "explorer_visible": true}"#).unwrap();
+        assert!(load(&older).unwrap().sessions.is_empty());
     }
 
     #[test]

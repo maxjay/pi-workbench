@@ -1,18 +1,24 @@
-//! The sessions rail: Pi sessions by the folder they work in, open ones to
-//! switch between and recent ones to resume. Picking one anywhere brings its
-//! folder forward in the window.
+//! The sessions rail: the sessions you opened, by the folder they work in.
+//! Sessions from before wait, Pi not running, until picked; closing one
+//! takes it off the list and leaves it in Pi's store. Picking one anywhere
+//! brings its folder forward in the window.
 use super::{color, session::status_color};
-use crate::{panes::Tab, session::Session, window::Window, workspace::Workbench};
+use crate::{
+    panes::Tab,
+    session::{Session, Status},
+    window::Window,
+    workspace::{MenuItem, Workbench},
+};
 use floem::{prelude::*, style::CursorStyle};
 use pi_client::sessions::SessionSummary;
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
-/// Recent sessions shown per folder before "Show all".
-const RECENT: usize = 5;
+/// Past sessions offered to open, per menu.
+const PAST: usize = 12;
 
 /// A folder's open and closed marks, drawn rather than typed: not every
 /// interface font has the arrows.
@@ -39,46 +45,35 @@ fn folder_name(folder: &Path) -> String {
     )
 }
 
-fn open_row(
-    app: Rc<Window>,
-    state: Rc<Workbench>,
-    session: Rc<Session>,
-    index: usize,
-) -> impl IntoView {
-    let key = session.key;
-    let title = session.title();
-    let active = state.sessions.active_key();
-    let status_session = session.clone();
-    let folder = state.root().to_path_buf();
-    let shown = {
-        let (app, folder) = (app.clone(), folder.clone());
-        move || app.active().with(|shown| *shown == folder)
-    };
-    let number_shown = shown.clone();
-    let row_shown = shown.clone();
-    let (select_state, close_state) = (state.clone(), state);
-    Stack::horizontal((
-        Empty::new().style(move |s| {
-            s.size(8, 8)
-                .border_radius(4)
-                .flex_shrink(0.0_f32)
-                .background(status_color(status_session.status()))
-        }),
-        Label::derived(move || title.get()).style(|s| {
-            s.color(color::text())
-                .flex_grow(1.0_f32)
-                .min_width(0)
-                .text_ellipsis()
-        }),
-        // Ctrl+1..9 pick the front folder's sessions.
-        Label::derived(move || {
-            if index < 9 && number_shown() {
-                format!("{}", index + 1)
-            } else {
-                String::new()
-            }
-        })
-        .style(|s| s.color(color::muted()).font_size(10).flex_shrink(0.0_f32)),
+/// Runs `act` once the click that asked for it is over: it may rebuild the
+/// rail, the clicked row included.
+fn after_click(act: impl FnOnce() + 'static) {
+    floem::action::exec_after(Duration::ZERO, move |_| act());
+}
+
+/// `items`, then a loaded folder's past sessions to open, newest first.
+fn with_past_sessions(state: &Rc<Workbench>, mut items: Vec<MenuItem>) -> Vec<MenuItem> {
+    let past: Vec<SessionSummary> = state.sessions.recent().into_iter().take(PAST).collect();
+    if !past.is_empty() {
+        items.push(MenuItem::separator());
+        for summary in past {
+            let state = state.clone();
+            let hint = age(summary.modified);
+            let title = summary.title.clone();
+            items.push(
+                MenuItem::new(title, move || {
+                    let session = state.sessions.resume(&summary);
+                    state.show_session(session.key);
+                })
+                .hint(hint),
+            );
+        }
+    }
+    items
+}
+
+fn close_mark(close: impl Fn() + 'static) -> impl IntoView {
+    floem::views::tooltip(
         Label::new("×")
             .style(|s| {
                 s.color(color::muted())
@@ -86,7 +81,49 @@ fn open_row(
                     .cursor(CursorStyle::Pointer)
                     .hover(|s| s.color(color::text()))
             })
-            .on_event_stop(el::Click, move |_, _| close_state.close_session(key)),
+            .on_event_stop(el::Click, move |_, _| close()),
+        || Label::new("Close; it stays in Pi's store").style(|s| s.padding(4).font_size(11)),
+    )
+}
+
+fn open_row(app: Rc<Window>, state: Rc<Workbench>, session: Rc<Session>) -> impl IntoView {
+    let key = session.key;
+    let title = session.title();
+    let running = session.running();
+    let active = state.sessions.active_key();
+    let status_session = session.clone();
+    let folder = state.root().to_path_buf();
+    let shown = {
+        let (app, folder) = (app.clone(), folder.clone());
+        move || app.active().with(|shown| *shown == folder)
+    };
+    let row_shown = shown.clone();
+    let (select_state, close_state) = (state.clone(), state);
+    Stack::horizontal((
+        // Waiting since last time: a ring, until Pi is started on it.
+        Empty::new().style(move |s| {
+            let s = s.size(8, 8).border_radius(4).flex_shrink(0.0_f32);
+            let status = status_session.status();
+            if running.get() || status != Status::Idle {
+                s.background(status_color(status))
+            } else {
+                s.border(1).border_color(color::muted())
+            }
+        }),
+        Label::derived(move || title.get()).style(move |s| {
+            s.color(if running.get() {
+                color::text()
+            } else {
+                color::muted()
+            })
+            .flex_grow(1.0_f32)
+            .min_width(0)
+            .text_ellipsis()
+        }),
+        close_mark(move || {
+            let state = close_state.clone();
+            after_click(move || state.close_session(key));
+        }),
     ))
     .style(move |s| {
         let selected = row_shown() && active.get() == Some(key);
@@ -118,123 +155,135 @@ fn open_row(
             }
         }
     })
-    .on_event_stop(el::Click, move |_, _| app.show_session(&folder, key))
+    .on_event_stop(el::Click, move |_, _| {
+        let (app, folder) = (app.clone(), folder.clone());
+        after_click(move || app.show_session(&folder, key));
+    })
 }
 
-fn recent_row(app: Rc<Window>, folder: PathBuf, summary: SessionSummary) -> impl IntoView {
-    let when = age(summary.modified);
+/// A session open in a folder not loaded yet, as it was left.
+fn stored_row(app: Rc<Window>, folder: PathBuf, summary: SessionSummary) -> impl IntoView {
     let title = summary.title.clone();
+    let (forget_app, forget_folder, forget_path) =
+        (app.clone(), folder.clone(), summary.path.clone());
     Stack::horizontal((
+        Empty::new().style(|s| {
+            s.size(8, 8)
+                .border_radius(4)
+                .flex_shrink(0.0_f32)
+                .border(1)
+                .border_color(color::muted())
+        }),
         Label::new(title).style(|s| {
             s.color(color::muted())
                 .flex_grow(1.0_f32)
                 .min_width(0)
                 .text_ellipsis()
         }),
-        Label::new(when).style(|s| s.color(color::muted()).font_size(10).flex_shrink(0.0_f32)),
+        close_mark(move || {
+            let (app, folder, path) = (
+                forget_app.clone(),
+                forget_folder.clone(),
+                forget_path.clone(),
+            );
+            after_click(move || app.forget(&folder, &path));
+        }),
     ))
     .style(|s| {
         s.width_full()
-            .height(28)
+            .height(32)
             .gap(8)
             .padding_left(26)
-            .padding_right(14)
+            .padding_right(8)
             .items_center()
             .cursor(CursorStyle::Pointer)
-            .hover(|s| {
-                s.background(color::border().with_alpha(0.5))
-                    .color(color::text())
-            })
+            .hover(|s| s.background(color::border().with_alpha(0.5)))
     })
-    .on_event_stop(el::Click, move |_, _| app.resume(&folder, summary.clone()))
+    .on_event_stop(el::Click, move |_, _| {
+        let (app, folder, summary) = (app.clone(), folder.clone(), summary.clone());
+        after_click(move || app.resume(&folder, summary));
+    })
 }
 
-/// A folder's open sessions, then its recent ones (a few, or all).
+/// A folder's sessions: those open in it, or, before it loads, those it
+/// had open.
 fn folder_sessions(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
-    let show_all = RwSignal::new(false);
     let (open_app, open_folder) = (app.clone(), folder.clone());
     let open = dyn_stack(
         move || {
             open_app
                 .workspace_tracked(&open_folder)
                 .map(|state| {
-                    let sessions = state.sessions.open().get();
-                    sessions
+                    state
+                        .sessions
+                        .open()
+                        .get()
                         .into_iter()
-                        .enumerate()
-                        .map(|(index, session)| (index, state.clone(), session))
+                        .map(|session| (state.clone(), session))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         },
-        |(index, _, session)| (*index, session.key),
+        |(_, session)| session.key,
         {
             let app = app.clone();
-            move |(index, state, session)| open_row(app.clone(), state, session, index)
+            move |(state, session)| open_row(app.clone(), state, session)
         },
     )
     .style(|s| s.flex_col().width_full());
-    // An open folder knows its own; others are read when first shown.
-    // Without sessions open anywhere in the window, which can be one Pi
-    // moved from here.
-    let recent = {
-        let (app, folder) = (app.clone(), folder.clone());
+    let (stored_app, stored_folder) = (app.clone(), folder.clone());
+    let stored = dyn_stack(
         move || {
-            let open = app.open_files();
-            match app.workspace_tracked(&folder) {
-                Some(state) => state.sessions.recent(),
-                None => app.stored(&folder).unwrap_or_default(),
+            if stored_app.workspace_tracked(&stored_folder).is_some() {
+                Vec::new()
+            } else {
+                stored_app.stored(&stored_folder)
             }
-            .into_iter()
-            .filter(|summary| !open.contains(&summary.path))
-            .collect::<Vec<_>>()
-        }
-    };
-    let (count, hide_more) = (recent.clone(), recent.clone());
-    let (rows_app, rows_folder) = (app.clone(), folder.clone());
-    let recent_rows = dyn_stack(
-        move || {
-            let all = recent();
-            let shown = if show_all.get() { all.len() } else { RECENT };
-            all.into_iter().take(shown).collect::<Vec<_>>()
         },
         |summary| summary.path.clone(),
-        move |summary| recent_row(rows_app.clone(), rows_folder.clone(), summary),
+        move |summary| stored_row(app.clone(), folder.clone(), summary),
     )
     .style(|s| s.flex_col().width_full());
-    let more = Label::derived(move || {
-        if show_all.get() {
-            "Show fewer".to_string()
-        } else {
-            format!("Show all {}", count().len())
-        }
-    })
-    .style(move |s| {
-        s.color(color::accent())
-            .font_size(11)
-            .padding_left(26)
-            .padding_vert(4)
-            .cursor(CursorStyle::Pointer)
-            .apply_if(hide_more().len() <= RECENT, |s| s.hide())
-    })
-    .on_event_stop(el::Click, move |_, _| show_all.update(|all| *all = !*all));
-    Stack::vertical((open, recent_rows, more)).style(|s| s.width_full())
+    Stack::vertical((open, stored)).style(|s| s.width_full())
+}
+
+/// A folder's menu: a new session there, its past sessions once it has
+/// loaded, and closing it.
+fn folder_menu(app: Rc<Window>, folder: PathBuf) {
+    let Some(shown) = app.shown() else {
+        return;
+    };
+    let (new_app, new_folder) = (app.clone(), folder.clone());
+    let mut items = vec![MenuItem::new("New session here", move || {
+        let (app, folder) = (new_app.clone(), new_folder.clone());
+        after_click(move || {
+            app.go(&folder, Some(String::new()));
+        });
+    })];
+    if let Some(state) = app.workspace(&folder) {
+        items = with_past_sessions(&state, items);
+    }
+    items.push(MenuItem::separator());
+    let (close_app, close_folder) = (app.clone(), folder.clone());
+    items.push(MenuItem::new("Close folder", move || {
+        let (app, folder) = (close_app.clone(), close_folder.clone());
+        after_click(move || app.close_folder(&folder));
+    }));
+    shown.open_menu(shown.pointer(), items);
 }
 
 fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
     let name = folder_name(&folder);
     let expanded = {
         let (app, folder) = (app.clone(), folder.clone());
-        move || app.expanded.with(|open| open.contains(&folder))
+        move || app.collapsed.with(|folded| !folded.contains(&folder))
     };
     let shown = {
         let (app, folder) = (app.clone(), folder.clone());
         move || app.active().with(|shown| *shown == folder)
     };
-    let (when_app, when_folder) = (app.clone(), folder.clone());
     let chevron_open = expanded.clone();
-    let name_shown = shown.clone();
-    let (new_app, new_folder) = (app.clone(), folder.clone());
+    let (menu_app, menu_folder) = (app.clone(), folder.clone());
     let (toggle_app, toggle_folder) = (app.clone(), folder.clone());
     let header = Stack::horizontal((
         floem::views::svg(move || {
@@ -247,7 +296,7 @@ fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
         })
         .style(|s| s.size(10, 10).color(color::muted()).flex_shrink(0.0_f32)),
         Label::new(name).style(move |s| {
-            s.color(if name_shown() {
+            s.color(if shown() {
                 color::text()
             } else {
                 color::muted()
@@ -257,13 +306,6 @@ fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
             .min_width(0)
             .text_ellipsis()
         }),
-        Label::derived(move || {
-            when_app
-                .last_used(&when_folder)
-                .map(age)
-                .unwrap_or_default()
-        })
-        .style(|s| s.color(color::muted()).font_size(10).flex_shrink(0.0_f32)),
         floem::views::tooltip(
             Label::new("+")
                 .style(|s| {
@@ -275,9 +317,12 @@ fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
                         .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
-                    new_app.go(&new_folder, Some(String::new()));
+                    folder_menu(menu_app.clone(), menu_folder.clone())
                 }),
-            || Label::new("New session here").style(|s| s.padding(4).font_size(11)),
+            || {
+                Label::new("New session here, or close the folder")
+                    .style(|s| s.padding(4).font_size(11))
+            },
         ),
     ))
     .style(|s| {
@@ -292,23 +337,13 @@ fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
     })
     .on_event_stop(el::Click, move |_, _| {
         let folder = toggle_folder.clone();
-        let opening = !toggle_app
-            .expanded
-            .with_untracked(|open| open.contains(&folder));
-        if opening
-            && toggle_app.workspace(&folder).is_none()
-            && toggle_app.stored(&folder).is_none()
-        {
-            toggle_app.load_stored(folder.clone());
-        }
-        toggle_app.expanded.update(|open| {
-            if !open.remove(&folder) {
-                open.insert(folder);
+        toggle_app.collapsed.update(|folded| {
+            if !folded.remove(&folder) {
+                folded.insert(folder);
             }
         });
     });
-    let body_app = app.clone();
-    let body_folder = folder.clone();
+    let (body_app, body_folder) = (app, folder);
     Stack::vertical((
         header,
         dyn_container(expanded, move |open| {
@@ -345,7 +380,16 @@ pub(super) fn rail(state: Rc<Workbench>, app: Rc<Window>) -> impl IntoView {
                         .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
-                    new_state.new_session();
+                    // A new session, a past one of this folder, or another
+                    // folder.
+                    let state = new_state.clone();
+                    let (fresh, folder) = (state.clone(), state.clone());
+                    let items = vec![
+                        MenuItem::new("New session", move || fresh.new_session()),
+                        MenuItem::new("Open folder…", move || folder.pick_folder()),
+                    ];
+                    let items = with_past_sessions(&state, items);
+                    state.open_menu(state.pointer(), items);
                 }),
         ))
         .style(|s| {

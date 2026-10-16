@@ -92,7 +92,51 @@ fn report(message: &str) {
     }
 }
 
+/// A crash is written down, with where it happened, and said in a message
+/// box too where there may be no terminal to see it.
+fn record_crashes() {
+    let main = std::thread::current().id();
+    let usual = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let details = format!(
+            "--- at {when} (Unix time), thread {}\n{info}\n\n{}\n",
+            thread.name().unwrap_or("unnamed"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        // Added to, so an earlier crash's details are kept.
+        let log = workbench_core::layout::crash_log_path()
+            .ok()
+            .filter(|path| {
+                use std::io::Write;
+                path.parent()
+                    .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+                    && std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .and_then(|mut file| file.write_all(details.as_bytes()))
+                        .is_ok()
+            });
+        // Only a crash on the main thread stops the app; one in a helper
+        // thread is just written down. The box is shown from a thread of its
+        // own, so its message loop cannot call back into the crashing UI.
+        if thread.id() == main {
+            let place = log.map_or_else(String::new, |path| {
+                format!("\n\nThe details are in {}", path.display())
+            });
+            let message = format!("Pi Workbench stopped: {info}{place}");
+            let _ = std::thread::spawn(move || report(&message)).join();
+        }
+        usual(info);
+    }));
+}
+
 fn main() -> std::process::ExitCode {
+    record_crashes();
     // Started from a terminal, the windowed Windows build writes to it
     // (`--help`, errors); from a shortcut there is none, and this does
     // nothing.
@@ -115,11 +159,11 @@ fn run() -> Result<()> {
     #[cfg(target_os = "linux")]
     prefer_software_gl_on_wsl();
     let mut args = std::env::args_os().skip(1);
-    let path = args
-        .next()
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir()?);
-    if path == Path::new("--help") || path == Path::new("-h") {
+    let folder = args.next().map(PathBuf::from);
+    if folder
+        .as_deref()
+        .is_some_and(|path| path == Path::new("--help") || path == Path::new("-h"))
+    {
         println!("Pi Workbench\n\nUsage: pi-workbench [workspace-folder]\n");
         for command in commands::COMMANDS {
             if command.shortcut().is_some() {
@@ -132,9 +176,18 @@ fn run() -> Result<()> {
         args.next().is_none(),
         "Usage: pi-workbench [workspace-folder]"
     );
-    let (root, _) = workspace_paths(&path)?;
+    // A folder given is shown; without one, the window comes back as it
+    // was left, or opens where it was started.
+    let folder = match folder {
+        Some(folder) => Some(workspace_paths(&folder)?.0),
+        None => None,
+    };
+    let fallback = workspace_paths(&std::env::current_dir()?)?.0;
     floem::Application::new()
-        .window(move |id| ui::workbench(id, root), Some(window_config()))
+        .window(
+            move |id| ui::workbench(id, folder, fallback),
+            Some(window_config()),
+        )
         .run();
     Ok(())
 }

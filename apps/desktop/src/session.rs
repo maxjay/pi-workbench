@@ -265,6 +265,9 @@ pub struct Session {
     file: RwSignal<Option<PathBuf>>,
     title: RwSignal<String>,
     working: RwSignal<bool>,
+    /// Pi is running for it; a session reopened from before waits, not
+    /// running, until it is picked.
+    running: RwSignal<bool>,
     pending_asks: RwSignal<usize>,
     stopped: RwSignal<bool>,
     /// The current run was stopped from here.
@@ -332,6 +335,7 @@ impl Session {
                 file: RwSignal::new(resume.map(|s| s.path.clone())),
                 title: RwSignal::new(resume.map_or("New session".into(), |s| s.title.clone())),
                 working: RwSignal::new(false),
+                running: RwSignal::new(false),
                 pending_asks: RwSignal::new(0),
                 stopped: RwSignal::new(false),
                 stop_requested: Cell::new(false),
@@ -503,7 +507,18 @@ impl Session {
         process.request("get_available_models")?;
         process.request("get_commands")?;
         *self.process.borrow_mut() = Some(process);
+        self.running.set(true);
         Ok(())
+    }
+
+    /// Whether Pi is running for it.
+    pub fn running(&self) -> ReadSignal<bool> {
+        self.running.read_only()
+    }
+
+    /// Reopened from before and not picked yet: Pi has not been started.
+    pub fn waiting(&self) -> bool {
+        !self.running.get_untracked() && !self.stopped.get_untracked()
     }
 
     /// Returns whether the command reached Pi.
@@ -1043,6 +1058,7 @@ impl Session {
             }
             Event::Exited(message) => {
                 self.process.borrow_mut().take();
+                self.running.set(false);
                 // Stopped first, so the run ending is not taken for it finishing.
                 self.stopped.set(true);
                 self.pending_asks.set(0);

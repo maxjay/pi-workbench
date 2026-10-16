@@ -248,6 +248,7 @@ impl Sessions {
         });
         match open {
             Some(session) => {
+                self.wake(&session);
                 self.active.set(Some(session.key));
                 session
             }
@@ -256,6 +257,28 @@ impl Sessions {
                 self.start(&session);
                 session
             }
+        }
+    }
+
+    /// Lists a stored session as open, without starting Pi on it: it waits
+    /// until picked. One already open is left as it is.
+    pub fn keep(&self, summary: &SessionSummary) {
+        let open = self.open.with_untracked(|open| {
+            open.iter()
+                .any(|s| s.file().get_untracked().as_ref() == Some(&summary.path))
+        });
+        if !open {
+            let front = self.active.get_untracked();
+            self.add(Some(summary));
+            self.active.set(front);
+        }
+    }
+
+    /// Starts Pi on a session that is waiting to be picked; one that ran
+    /// and stopped stays stopped.
+    pub fn wake(&self, session: &Session) {
+        if session.waiting() {
+            self.start(session);
         }
     }
 
