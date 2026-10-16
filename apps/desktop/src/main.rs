@@ -70,12 +70,18 @@ fn prefer_software_gl_on_wsl() {
         // SAFETY: runs first in main, before any other thread exists.
         unsafe { std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1") };
     }
-    // WSLg's Wayland gives the window no title bar, so it cannot be moved,
-    // resized or closed with the mouse; through X11 it gets one.
-    // `PI_WORKBENCH_WAYLAND=1` keeps Wayland.
-    if wsl && std::env::var_os("PI_WORKBENCH_WAYLAND").is_none() {
+    if !wsl {
+        return;
+    }
+    // WSLg's Wayland takes on drawing windows' title bars and then draws
+    // none, so the workbench draws its own frame there. Through X11 there is
+    // a title bar, but on some setups the window takes no clicks, so X11 is
+    // only used when asked for, with `PI_WORKBENCH_X11=1`.
+    if std::env::var_os("PI_WORKBENCH_X11").is_some() {
         // SAFETY: as above.
         unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+    } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        ui::frame::use_own_frame();
     }
 }
 
