@@ -20,6 +20,12 @@ floem = { git = "https://github.com/lapce/floem", rev = "1351ffb162faeb8be983f13
 [profile.dev]
 debug = 0
 
+# Floem's editor checks, in debug builds only, that every wrapped line has a
+# layout; changing the window's zoom relays them out and trips it. Release
+# builds go on without the check, so debug builds do too.
+[profile.dev.package.floem]
+debug-assertions = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

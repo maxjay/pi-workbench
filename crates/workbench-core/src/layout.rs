@@ -25,6 +25,8 @@ pub struct Layout {
     /// The pet is in a window of its own, or hidden.
     pub pet_popped: bool,
     pub pet_hidden: bool,
+    /// How large the whole window is drawn, 1 being the usual.
+    pub ui_scale: f64,
 }
 
 /// A tab as saved: a file relative to the workspace, a Pi session by its
@@ -168,12 +170,18 @@ impl Default for Layout {
             focused: 0,
             pet_popped: false,
             pet_hidden: false,
+            ui_scale: 1.0,
         }
     }
 }
 
 impl Layout {
     pub fn normalize(&mut self) {
+        self.ui_scale = if self.ui_scale.is_finite() {
+            self.ui_scale.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1)
+        } else {
+            1.0
+        };
         self.explorer_width = if self.explorer_width.is_finite() {
             self.explorer_width.clamp(160.0, 480.0)
         } else {
