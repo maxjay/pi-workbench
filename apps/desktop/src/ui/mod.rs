@@ -6,6 +6,8 @@ mod finder;
 mod lens_doc;
 mod overlays;
 mod pet;
+#[cfg(windows)]
+mod pet_window;
 mod rail;
 mod session;
 mod terminal;
@@ -512,9 +514,9 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     });
     state.start_with_session();
     state.restore();
-    state.pet.start();
+    state.pets.start();
     pet::follow_popping(state.clone(), window);
-    let shake = pet::shake(&state.pet);
+    let shake = pet::shake(&state);
     if let Some(err) = settings_error.or_else(color::follow_settings) {
         state.report(err);
     }
@@ -681,7 +683,6 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
-        pet::docked(state.clone()),
         popup_menu(state.clone()),
         drag_ghost(state.clone()),
         finder::finder(state.clone()),
@@ -704,7 +705,7 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
             let held = !event.current.buttons.is_empty();
             let at = event.current.logical_point();
             state.pointer_moved(at, held);
-            state.pet.pointer_at(at);
+            state.pets.pointer_at(at);
         }
     })
     .on_event_cont_with_config(el::PointerDown, CAPTURE, {

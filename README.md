@@ -19,7 +19,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Panes you arrange:** split any pane right or down as often as you like. Every pane holds tabs of files, Pi sessions and terminals, and tabs drag between panes or onto a pane's edge to split it. The layout is saved per workspace.
 - **Terminals, settings, worktrees:** terminal tabs anywhere, a commented settings file, and sessions that work in their own git worktree.
 - **One quick picker, extended by Pi:** files, commands and colour themes in one VS Code-style picker. Pi's own slash commands are in it too, including the ones your Pi extensions, prompt templates and skills add.
-- **A pet across your sessions:** Glitch keeps an eye on every session. It shows how the one in front is doing, says when the others finish or stop, and brings their questions to you to answer on the spot. It sits in the window or pops out into a little always-on-top window of its own.
+- **A pet per session:** each session's Glitch shows how it is doing, says the gist of each reply, and brings its questions to answer on the spot. Pop one out onto the desktop, see-through on Windows, and it keeps you posted on every session from there. `/kill` gets it shot.
 - **Themes:** 30 bundled themes, including Catppuccin, Dracula, Nord, Gruvbox, Solarized, One Half, GitHub and Monokai, or any `.tmTheme` file, with a live preview.
 - Background saves, and nothing on screen you have to learn first: one search box, and controls where they act.
 
@@ -145,24 +145,32 @@ Clicking a session in the rail shows it where it already is, or in the focused p
 
 ## Glitch, the pet
 
-![Glitch at the foot of the sessions rail, asking a session's question](docs/screenshots/pet.png)
+![Glitch at the foot of a conversation, saying the gist of its reply](docs/screenshots/pet.png)
 
-Glitch lives at the foot of the sessions rail and watches every session in the window.
+Every session has its own Glitch, at the bottom right of its conversation.
 
-- **The front session first:** it works while that session works, waits when it needs you, and looks pleased when it finishes.
-- **News from the rest:** its bubble says when any session finishes a run or its Pi stops. Click the news to go to that session.
-- **Questions:** when an extension in any session asks something, the question appears in Glitch's bubble with its answers, so you can reply without going there. The front session's questions come first.
-- **Where it lives:** drag it anywhere in the window. Hover for **Pop out**, which moves it into a small window that stays on top of everything, and **Pop in** to bring it back. Drag that window by Glitch, who runs the way you drag. **Hide**, or *Pet: show or hide* in the command picker, puts it away. Whether it is popped out or hidden is saved per workspace.
+- **Its session:** it works while the session works, waits when it needs you, and looks pleased when it finishes.
+- **Each reply:** it says the gist of each reply. Click that to dismiss it.
+- **Questions:** when an extension asks something, the question appears in its bubble with its answers, so you can reply there.
+- **Its eyes:** it watches the pointer, hops when clicked, and waves hello.
 - **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
 
-Glitch also follows the pointer with its eyes, hops when clicked, and waves hello.
+**Pop out**, on hover, takes a session's pet out of the window onto the desktop:
 
-**`/kill`** gets Glitch shot. The window shakes and Glitch is thrown across it, or, when popped out, its whole window is thrown across the screen. It lies there for a moment and gets up. Docked, it walks back to where it was; popped out, it stays where it landed. The shot is the one animation kept for this.
+- **See-through:** on Windows it is only Glitch, with no window around it. Its speech appears above it when it has something to say.
+- **Still that session's:** it speaks up on each of its session's replies. It also brings the other sessions' news and questions, its own session's first.
+- **Moving and dismissing:** drag Glitch to move it, and it runs the way you drag. Right-click for **Pop in** and **Hide**.
+- **Commands:** *Pet: pop the front session's pet out, or back in* and *Pet: show or hide* are in the command picker.
+- **Saved:** whether a pet is out or hidden is saved per workspace.
 
-The workbench handles `/kill` itself until a Pi extension provides one. [extensions/pet.ts](extensions/pet.ts) is that extension. It adds `/kill` and `/pet-say <text>` by setting Pi's `pet` status line, which any extension can do:
+Elsewhere, a popped-out pet sits in a small card instead.
+
+**`/kill`** is for a session whose model has run on so long that it has lost the plot. That session's pet gets shot: the window shakes and the pet is thrown across the conversation. Popped out, it is thrown across the screen. It lies there for a moment and gets up; in the window it walks back to its place. The shot is the one animation kept for this.
+
+The workbench handles `/kill` as a stand-in until a Pi extension provides one, and while Pi is working, since Pi does not run extension commands mid-run. [extensions/pet.ts](extensions/pet.ts) shows the cue: it adds `/kill` and `/pet-say <text>` by setting Pi's `pet` status line. An extension that resets a session's context can do the same:
 
 ```ts
-ctx.ui.setStatus("pet", `kill:${Date.now()}`); // shot and thrown
+ctx.ui.setStatus("pet", `kill:${Date.now()}`); // this session's pet is shot
 ctx.ui.setStatus("pet", "say:Tests pass");     // said in its bubble
 ctx.ui.setStatus("pet", "wave");               // or "jump"
 ```
@@ -244,8 +252,9 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [ui/terminal.rs](apps/desktop/src/ui/terminal.rs) | A terminal tab |
 | [panes.rs](apps/desktop/src/panes.rs) | The pane tree: splits, tabs, moving, saving |
 | [ui/editor.rs](apps/desktop/src/ui/editor.rs) | A pane: its tab bar, dragging tabs, and what the active tab shows |
-| [pet.rs](apps/desktop/src/pet.rs) | Glitch: its animations, moods, news, questions, and the `/kill` timeline |
-| [ui/pet.rs](apps/desktop/src/ui/pet.rs) | Glitch on screen: the sprite, its bubble, docked or in its own window |
+| [pet.rs](apps/desktop/src/pet.rs) | Each session's Glitch: animations, moods, what it says, questions, and the `/kill` timeline |
+| [ui/pet.rs](apps/desktop/src/ui/pet.rs) | Glitch on screen: the sprite, its bubble, in a conversation or popped out |
+| [ui/pet_window.rs](apps/desktop/src/ui/pet_window.rs) | The see-through window a popped-out Glitch lives in on Windows |
 | [workbench-core](crates/workbench-core/src) | File operations, layout storage, settings, line diffs, merges, git access (read-only, plus worktrees), blame, difftastic |
 | [workbench-text](crates/workbench-text/src) | Syntax highlighting, themes, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |

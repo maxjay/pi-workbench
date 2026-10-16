@@ -1,18 +1,19 @@
-//! Glitch, the workbench's pet. One lives in each window and watches every
-//! session in it: it shows how the front session is doing, says when others
-//! finish or stop, and brings you their questions. It sits in the window or
-//! pops out into a little window of its own. A `/kill` gets it shot and
-//! thrown, which is the one animation kept for that.
+//! Glitch, the workbench's pet. Every session has its own: it lives in the
+//! session's view, shows how that session is doing, repeats the gist of its
+//! replies and brings its questions. Popped out of the window it sits on
+//! the desktop, still that session's, with news and questions from the
+//! others too. A session's `/kill`, for when its context has gone bad, gets
+//! its pet shot and thrown, the one animation kept for that.
 use crate::{
     session::{Entry, EntryKind, Session, Status},
     sessions::Sessions,
 };
 use floem::{
     action::exec_after,
-    reactive::{Effect, Memo, RwSignal, Scope, SignalGet, SignalUpdate, SignalWith},
+    reactive::{Effect, Memo, ReadSignal, RwSignal, Scope, SignalGet, SignalUpdate, SignalWith},
 };
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
     time::{Duration, Instant},
@@ -188,10 +189,11 @@ pub fn shot_at(ms: u64, distance: f64, walk_home: bool) -> Option<ShotFrame> {
     None
 }
 
-/// What the pet tells you about a session.
+/// What a pet says.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Update {
     pub id: u64,
+    /// The session it is about, to open on a click.
     pub session: Option<u64>,
     pub text: String,
     /// Shown until, unless dismissed first.
@@ -200,12 +202,13 @@ pub struct Update {
 
 /// How long an update stays up.
 const UPDATE_FOR: Duration = Duration::from_secs(12);
-/// How long the pet looks pleased after the front session finishes.
+/// How long a pet looks pleased after its session finishes.
 const REVIEW_FOR: Duration = Duration::from_secs(8);
-/// A run this short (a slash command an extension handled, say) is not news.
-const NEWSWORTHY_RUN: Duration = Duration::from_secs(2);
+/// How much of a reply a pet repeats.
+const GIST: usize = 140;
 
-/// The pet's own window: none, asked for but not made yet, or open.
+/// The pet popped out of the window: none, asked for but not made yet, or
+/// open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PetWindow {
     Closed,
@@ -213,7 +216,7 @@ pub enum PetWindow {
     Open(floem::window::WindowId),
 }
 
-/// What the pet is doing now: the moving parts the views draw from.
+/// What a pet is doing now: the moving parts the views draw from.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pose {
     pub anim: Anim,
@@ -222,13 +225,40 @@ pub struct Pose {
     pub shake: (f64, f64),
 }
 
+const STILL: Pose = Pose {
+    anim: Anim::Idle,
+    column: 0,
+    thrown: (0.0, 0.0),
+    shake: (0.0, 0.0),
+};
+
+/// The first line of a reply, without its markdown, cut short.
+pub fn gist(reply: &str) -> Option<String> {
+    let line = reply
+        .lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .trim()
+        })
+        .find(|line| !line.is_empty() && !line.starts_with("```"))?;
+    let line = line.replace("**", "").replace('`', "");
+    Some(if line.chars().count() > GIST {
+        let cut: String = line.chars().take(GIST - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        line
+    })
+}
+
+/// One session's pet. It lives in the session's view, or is popped out of
+/// the window, where it also brings news and questions from the others.
 pub struct Pet {
+    pub key: u64,
     sessions: Rc<Sessions>,
-    started: Instant,
-    /// Milliseconds since `started`, ticking while the pet is shown.
     clock: RwSignal<u64>,
-    pub popped: RwSignal<bool>,
-    pub hidden: RwSignal<bool>,
+    started: Instant,
+    out: RwSignal<Option<u64>>,
     /// A one-off animation and when it began, after which the mood resumes.
     once: RwSignal<Option<(Anim, u64)>>,
     /// When the current `/kill` began.
@@ -237,60 +267,41 @@ pub struct Pet {
     pub throw_distance: Cell<f64>,
     /// Being dragged, moving right (`true`) or left.
     pub moving: RwSignal<Option<bool>>,
-    /// Where the pointer is, as a direction to look in, when it is near.
+    /// The direction to look in, when the pointer is near.
     pub look: RwSignal<Option<u8>>,
     updates: RwSignal<Vec<Update>>,
     next_update: Cell<u64>,
-    /// When the front session last finished a run.
-    finished: RwSignal<Option<(u64, Instant)>>,
-    /// Each session's status, and since when.
-    statuses: RefCell<HashMap<u64, (Status, Instant)>>,
-    /// The pet's own window while popped out.
-    pub window: Cell<PetWindow>,
-    /// Docked: the sprite's left edge, and its height above the window's
-    /// bottom, in logical pixels.
-    pub dock: RwSignal<(f64, f64)>,
+    /// When its session last finished a run, while that still shows.
+    finished: RwSignal<Option<Instant>>,
     /// The sprite as drawn in the window, to look from.
     pub sprite_view: Cell<Option<floem::ViewId>>,
-    pose: std::cell::OnceCell<Memo<Pose>>,
-    /// Waiting questions as (session, entry) keys, the front session's first.
-    asking: std::cell::OnceCell<Memo<Vec<(u64, u64)>>>,
-    mood: std::cell::OnceCell<Memo<Anim>>,
-    ticking: Cell<bool>,
+    pose: OnceCell<Memo<Pose>>,
+    mood: OnceCell<Memo<Anim>>,
+    /// Waiting questions as (session, entry) keys, its own session's first.
+    asking: OnceCell<Memo<Vec<(u64, u64)>>>,
 }
 
 impl Pet {
-    pub fn new(scope: Scope, sessions: Rc<Sessions>) -> Rc<Self> {
-        scope.enter(|| {
-            let clock = RwSignal::new(0u64);
-            let once = RwSignal::new(None::<(Anim, u64)>);
-            let shot = RwSignal::new(None::<u64>);
-            let moving = RwSignal::new(None::<bool>);
-            let look = RwSignal::new(None::<u8>);
-            let finished = RwSignal::new(None);
-            let popped = RwSignal::new(false);
+    fn new(pets: &Pets, key: u64) -> Rc<Self> {
+        pets.scope.enter(|| {
             let pet = Rc::new(Pet {
-                sessions: sessions.clone(),
-                started: Instant::now(),
-                clock,
-                popped,
-                hidden: RwSignal::new(false),
-                once,
-                shot,
+                key,
+                sessions: pets.sessions.clone(),
+                clock: pets.clock,
+                started: pets.started,
+                out: pets.out,
+                once: RwSignal::new(None),
+                shot: RwSignal::new(None),
                 throw_distance: Cell::new(240.0),
-                moving,
-                look,
+                moving: RwSignal::new(None),
+                look: RwSignal::new(None),
                 updates: RwSignal::new(Vec::new()),
                 next_update: Cell::new(0),
-                finished,
-                statuses: RefCell::new(HashMap::new()),
-                window: Cell::new(PetWindow::Closed),
-                dock: RwSignal::new((136.0, 34.0)),
+                finished: RwSignal::new(None),
                 sprite_view: Cell::new(None),
-                pose: std::cell::OnceCell::new(),
-                asking: std::cell::OnceCell::new(),
-                mood: std::cell::OnceCell::new(),
-                ticking: Cell::new(false),
+                pose: OnceCell::new(),
+                mood: OnceCell::new(),
+                asking: OnceCell::new(),
             });
             // Questions and mood are worked out when sessions change, not on
             // every tick of the clock.
@@ -306,44 +317,11 @@ impl Pet {
                 Memo::new(move |_| this.upgrade().map_or(Anim::Idle, |pet| pet.compute_mood()));
             let _ = pet.mood.set(mood);
             let this = Rc::downgrade(&pet);
-            let pose = Memo::new(move |_| match this.upgrade() {
-                Some(pet) => pet.compute_pose(),
-                None => Pose {
-                    anim: Anim::Idle,
-                    column: 0,
-                    thrown: (0.0, 0.0),
-                    shake: (0.0, 0.0),
-                },
-            });
+            let pose = Memo::new(move |_| this.upgrade().map_or(STILL, |pet| pet.compute_pose()));
             let _ = pet.pose.set(pose);
-            pet.watch();
             pet.greet();
             pet
         })
-    }
-
-    /// Starts the clock, once the window it lives in exists.
-    pub fn start(self: &Rc<Self>) {
-        if !self.ticking.replace(true) {
-            Pet::tick(Rc::downgrade(self));
-        }
-    }
-
-    /// Advances the clock while the pet is shown, about thirty times a second.
-    fn tick(pet: Weak<Pet>) {
-        let Some(this) = pet.upgrade() else { return };
-        // Its window closed and its signals with it: the clock stops.
-        let Some(hidden) = this.hidden.try_get_untracked() else {
-            return;
-        };
-        if !hidden {
-            // A finished /kill ends before the clock moves on, so the pet is
-            // never drawn back where it was shot from for a frame.
-            this.expire_updates();
-            this.clock.set(this.started.elapsed().as_millis() as u64);
-        }
-        drop(this);
-        exec_after(Duration::from_millis(33), move |_| Pet::tick(pet));
     }
 
     /// The frame to draw, where the pet has been thrown to, and the shake.
@@ -351,78 +329,13 @@ impl Pet {
         *self.pose.get().expect("made in new")
     }
 
-    fn now(&self) -> u64 {
-        self.started.elapsed().as_millis() as u64
+    /// Popped out of the window.
+    pub fn is_out(&self) -> bool {
+        self.out.get() == Some(self.key)
     }
 
-    /// Notices sessions finishing, stopping, and asking, and cues from Pi
-    /// extensions.
-    fn watch(self: &Rc<Self>) {
-        let pet = Rc::downgrade(self);
-        Effect::new(move |_| {
-            let Some(pet) = pet.upgrade() else { return };
-            let open = pet.sessions.open().get();
-            let front = pet.sessions.active_key().get();
-            let mut previous = pet.statuses.borrow_mut();
-            let mut news = Vec::new();
-            for session in &open {
-                let now = session.status();
-                let before = match previous.get(&session.key) {
-                    Some(&(status, since)) if status == now => Some((status, since)),
-                    _ => previous.insert(session.key, (now, Instant::now())),
-                };
-                let title = session.title().get_untracked();
-                match (before, now) {
-                    // Stopped by you, or by Pi exiting, is not done.
-                    (Some((Status::Working, since)), Status::Idle)
-                        if since.elapsed() >= NEWSWORTHY_RUN && !session.was_stopped() =>
-                    {
-                        if Some(session.key) == front {
-                            pet.finished.set(Some((session.key, Instant::now())));
-                        }
-                        news.push((session.key, format!("Done: {title}")));
-                    }
-                    (Some((before, _)), Status::Stopped) if before != Status::Stopped => {
-                        news.push((session.key, format!("Pi stopped: {title}")));
-                    }
-                    _ => {}
-                }
-            }
-            previous.retain(|key, _| open.iter().any(|s| s.key == *key));
-            drop(previous);
-            // News of closed sessions goes with them; all of it in one update,
-            // so the bubble changes once.
-            Effect::batch(|| {
-                let gone = |u: &Update| {
-                    u.session
-                        .is_some_and(|key| !open.iter().any(|s| s.key == key))
-                };
-                if pet.updates.with_untracked(|u| u.iter().any(gone)) {
-                    pet.updates.update(|u| u.retain(|u| !gone(u)));
-                }
-                for (key, text) in news {
-                    pet.tell(Some(key), text);
-                }
-            });
-        });
-        let pet = Rc::downgrade(self);
-        let cue = self.sessions.cue();
-        Effect::new(move |_| {
-            let Some(cue) = cue.get() else { return };
-            let Some(pet) = pet.upgrade() else { return };
-            match cue.action.as_str() {
-                "kill" => pet.kill(),
-                "wave" => pet.play(Anim::Wave),
-                "jump" => pet.play(Anim::Jump),
-                other => {
-                    if let Some(text) = other.strip_prefix("say:")
-                        && !text.trim().is_empty()
-                    {
-                        pet.tell(Some(cue.session), text.trim().to_string());
-                    }
-                }
-            }
-        });
+    fn now(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
     }
 
     fn compute_pose(&self) -> Pose {
@@ -430,23 +343,21 @@ impl Pet {
         let still = |anim: Anim, column| Pose {
             anim,
             column,
-            thrown: (0.0, 0.0),
-            shake: (0.0, 0.0),
+            ..STILL
         };
-        if let Some(began) = self.shot.get() {
-            let walk_home = !self.popped.get();
-            if let Some(frame) = shot_at(
+        if let Some(began) = self.shot.get()
+            && let Some(frame) = shot_at(
                 ms.saturating_sub(began),
                 self.throw_distance.get(),
-                walk_home,
-            ) {
-                return Pose {
-                    anim: frame.anim,
-                    column: frame.column,
-                    thrown: frame.thrown,
-                    shake: frame.shake,
-                };
-            }
+                !self.is_out(),
+            )
+        {
+            return Pose {
+                anim: frame.anim,
+                column: frame.column,
+                thrown: frame.thrown,
+                shake: frame.shake,
+            };
         }
         if let Some(right) = self.moving.get() {
             let anim = if right { Anim::RunRight } else { Anim::RunLeft };
@@ -462,39 +373,37 @@ impl Pet {
         if mood == Anim::Idle
             && let Some(direction) = self.look.get()
         {
-            return still(
-                Anim::Look(direction),
-                Anim::Look(direction).column(0, false),
-            );
+            let look = Anim::Look(direction);
+            return still(look, look.column(0, false));
         }
         still(mood, mood.column(ms, true))
     }
 
-    /// What the pet does when nothing in particular is happening: how the
-    /// front session is doing comes first, then any question waiting. The
-    /// pleased look is cleared by the clock when its time is up.
+    /// What the pet does when nothing in particular is happening: how its
+    /// session is doing, then any question waiting for you.
     fn compute_mood(&self) -> Anim {
-        let front = self.sessions.active();
-        match front.as_ref().map(|s| s.status()) {
+        match self.sessions.find_tracked(self.key).map(|s| s.status()) {
             Some(Status::NeedsInput) => return Anim::Waiting,
             Some(Status::Working) => return Anim::Working,
             _ => {}
         }
-        let asking = self.asking.get().is_some_and(|a| a.with(|a| !a.is_empty()));
-        if asking {
+        if self.asking.get().is_some_and(|a| a.with(|a| !a.is_empty())) {
             return Anim::Waiting;
         }
-        let pleased = self
-            .finished
-            .with(|f| f.is_some_and(|(key, _)| Some(key) == front.as_ref().map(|s| s.key)));
-        if pleased { Anim::Review } else { Anim::Idle }
+        if self.finished.with(Option::is_some) {
+            Anim::Review
+        } else {
+            Anim::Idle
+        }
     }
 
-    /// Waiting questions as keys, the front session's first.
+    /// Waiting questions as keys: its own session's, and popped out, the
+    /// other sessions' after them.
     fn find_questions(&self) -> Vec<(u64, u64)> {
-        let front = self.sessions.active_key().get();
+        let out = self.is_out();
         let mut found: Vec<(u64, u64)> = self.sessions.open().with(|open| {
             open.iter()
+                .filter(|session| out || session.key == self.key)
                 .flat_map(|session| {
                     session.entries().with(|entries| {
                         entries
@@ -506,12 +415,12 @@ impl Pet {
                 })
                 .collect()
         });
-        found.sort_by_key(|(session, _)| Some(*session) != front);
+        found.sort_by_key(|(session, _)| *session != self.key);
         found
     }
 
-    /// Questions waiting in any session, the front session's first. Tracks
-    /// only the questions, not every change to every timeline.
+    /// The questions it brings, its own session's first. Tracks only the
+    /// questions, not every change to every timeline.
     pub fn questions(&self) -> Vec<(Rc<Session>, Rc<Entry>)> {
         let keys = self.asking.get().map(|a| a.get()).unwrap_or_default();
         keys.into_iter()
@@ -529,7 +438,7 @@ impl Pet {
         self.updates
     }
 
-    /// Something to say about a session (or about nothing in particular).
+    /// Something to say, about a session or nothing in particular.
     pub fn tell(&self, session: Option<u64>, text: String) {
         let id = self.next_update.get() + 1;
         self.next_update.set(id);
@@ -551,14 +460,15 @@ impl Pet {
             .update(|updates| updates.retain(|u| u.id != id));
     }
 
-    fn expire_updates(&self) {
+    /// Its session finished a run: pleased for a while.
+    fn finished_run(&self) {
+        self.finished.set(Some(Instant::now()));
+    }
+
+    /// Clears what has had its time: old news, the pleased look, a /kill
+    /// that is over.
+    fn expire(&self) {
         let now = Instant::now();
-        if self
-            .finished
-            .with_untracked(|f| f.is_some_and(|(_, at)| at.elapsed() >= REVIEW_FOR))
-        {
-            self.finished.set(None);
-        }
         if self
             .updates
             .with_untracked(|updates| updates.iter().any(|u| u.until <= now))
@@ -566,17 +476,36 @@ impl Pet {
             self.updates
                 .update(|updates| updates.retain(|u| u.until > now));
         }
-        if self.shot.get_untracked().is_some_and(|began| {
-            let walk_home = !self.popped.get_untracked();
+        if self
+            .finished
+            .with_untracked(|f| f.is_some_and(|at| at.elapsed() >= REVIEW_FOR))
+        {
+            self.finished.set(None);
+        }
+        let over = self.shot.get_untracked().is_some_and(|began| {
+            let walk_home = self.out.get_untracked() != Some(self.key);
             shot_at(
                 self.now().saturating_sub(began),
                 self.throw_distance.get(),
                 walk_home,
             )
             .is_none()
-        }) {
+        });
+        if over {
             self.shot.set(None);
         }
+    }
+
+    /// The shake of a /kill under way.
+    fn shake(&self) -> Option<(f64, f64)> {
+        let began = self.shot.get_untracked()?;
+        let walk_home = self.out.get_untracked() != Some(self.key);
+        shot_at(
+            self.now().saturating_sub(began),
+            self.throw_distance.get(),
+            walk_home,
+        )
+        .map(|frame| frame.shake)
     }
 
     /// Plays an animation once, then goes back to the mood.
@@ -606,41 +535,315 @@ impl Pet {
         self.shot.set(Some(self.now()));
     }
 
-    /// Whether a `/kill` is under way.
+    /// When the /kill under way began.
     pub fn shot(&self) -> RwSignal<Option<u64>> {
         self.shot
     }
 
-    /// The pointer moved in the window: the pet looks at it when it is
-    /// near, and not while popped out, where the window cannot see it.
-    pub fn pointer_at(&self, at: floem::kurbo::Point) {
-        let look = (!self.popped.get_untracked())
-            .then(|| self.sprite_view.get())
-            .flatten()
+    /// The pointer moved in the window: the pet looks at it when near.
+    fn pointer_at(&self, at: floem::kurbo::Point) {
+        let look = self
+            .sprite_view
+            .get()
             .filter(|view| view.is_valid())
             .map(|view| view.get_visual_rect())
             .filter(|rect| rect.area() > 0.0)
             .and_then(|rect| {
                 // The face sits a little below the cell's middle.
                 let face = (rect.center().x, rect.y0 + rect.height() * 0.62);
-                let distance = (at.x - face.0).hypot(at.y - face.1);
-                (distance > 28.0 && distance < 420.0).then(|| direction(face, (at.x, at.y)))
+                look_from(face, (at.x, at.y))
             });
         if self.look.get_untracked() != look {
             self.look.set(look);
         }
     }
 
-    pub fn toggle_popped(&self) {
-        self.popped.update(|p| *p = !*p);
+    /// Looks the way of a point on the screen, popped out.
+    pub fn look_at(&self, face: (f64, f64), at: (f64, f64)) {
+        let look = look_from(face, at);
+        if self.look.get_untracked() != look {
+            self.look.set(look);
+        }
+    }
+}
+
+/// Where to look for a point: towards it when near, ahead when far or on top.
+fn look_from(face: (f64, f64), at: (f64, f64)) -> Option<u8> {
+    let distance = (at.0 - face.0).hypot(at.1 - face.1);
+    (distance > 28.0 && distance < 420.0).then(|| direction(face, at))
+}
+
+/// Whether a session's last prompt got a reply from Pi.
+fn replied(session: &Session) -> bool {
+    session.entries().with_untracked(|entries| {
+        let last = |kind| entries.iter().rposition(|e| e.kind == kind);
+        match (last(EntryKind::Assistant), last(EntryKind::User)) {
+            (Some(reply), Some(prompt)) => reply > prompt,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    })
+}
+
+/// The pets of a window's sessions, their shared clock, and which one, if
+/// any, is popped out.
+pub struct Pets {
+    sessions: Rc<Sessions>,
+    scope: Scope,
+    started: Instant,
+    /// Milliseconds since `started`, ticking while pets are shown.
+    clock: RwSignal<u64>,
+    ticking: Cell<bool>,
+    pets: RefCell<HashMap<u64, Rc<Pet>>>,
+    /// The session whose pet is popped out of the window.
+    pub out: RwSignal<Option<u64>>,
+    pub hidden: RwSignal<bool>,
+    /// The popped-out pet's window.
+    pub window: Cell<PetWindow>,
+    /// Pop out the front session's pet once there is one, as saved.
+    pop_out_when_ready: Cell<bool>,
+    statuses: RefCell<HashMap<u64, (Status, Instant)>>,
+    /// How much the window shakes while a /kill lands.
+    shake: RwSignal<(f64, f64)>,
+}
+
+impl Pets {
+    pub fn new(scope: Scope, sessions: Rc<Sessions>) -> Rc<Self> {
+        let pets = scope.enter(|| {
+            Rc::new(Pets {
+                sessions,
+                scope,
+                started: Instant::now(),
+                clock: RwSignal::new(0),
+                ticking: Cell::new(false),
+                pets: RefCell::new(HashMap::new()),
+                out: RwSignal::new(None),
+                hidden: RwSignal::new(false),
+                window: Cell::new(PetWindow::Closed),
+                pop_out_when_ready: Cell::new(false),
+                statuses: RefCell::new(HashMap::new()),
+                shake: RwSignal::new((0.0, 0.0)),
+            })
+        });
+        pets.watch();
+        pets
+    }
+
+    /// A session's pet, made the first time it is wanted.
+    pub fn pet(&self, key: u64) -> Rc<Pet> {
+        if let Some(pet) = self.pets.borrow().get(&key) {
+            return pet.clone();
+        }
+        let pet = Pet::new(self, key);
+        self.pets.borrow_mut().insert(key, pet.clone());
+        pet
+    }
+
+    pub fn shake(&self) -> ReadSignal<(f64, f64)> {
+        self.shake.read_only()
+    }
+
+    /// Pops a session's pet out of the window, bringing back any other.
+    pub fn pop_out(&self, key: u64) {
         self.hidden.set(false);
-        self.greet();
+        if self.out.get_untracked() != Some(key) {
+            self.out.set(Some(key));
+        }
+        self.pet(key).greet();
+    }
+
+    pub fn pop_in(&self) {
+        if let Some(key) = self.out.get_untracked() {
+            self.out.set(None);
+            self.pet(key).greet();
+        }
+    }
+
+    /// Pops the front session's pet out, or the popped-out one back in.
+    pub fn toggle_out(&self) {
+        match (
+            self.out.get_untracked(),
+            self.sessions.active_key().get_untracked(),
+        ) {
+            (Some(_), _) => self.pop_in(),
+            (None, Some(front)) => self.pop_out(front),
+            (None, None) => self.pop_out_when_ready.set(true),
+        }
     }
 
     pub fn toggle_hidden(&self) {
         self.hidden.update(|h| *h = !*h);
-        if !self.hidden.get_untracked() {
-            self.greet();
+    }
+
+    /// As saved: popped out (the front session's pet, once there is one).
+    pub fn restore(&self, popped: bool, hidden: bool) {
+        self.hidden.set(hidden);
+        self.pop_out_when_ready.set(popped);
+    }
+
+    /// Whether a pet is popped out, for saving.
+    pub fn popped(&self) -> bool {
+        self.out.get_untracked().is_some() || self.pop_out_when_ready.get()
+    }
+
+    /// Starts the clock, once the window the pets live in exists.
+    pub fn start(self: &Rc<Self>) {
+        if !self.ticking.replace(true) {
+            Pets::tick(Rc::downgrade(self));
+        }
+    }
+
+    /// Advances the clock while pets are shown, about thirty times a second.
+    fn tick(pets: Weak<Pets>) {
+        let Some(this) = pets.upgrade() else { return };
+        // Its window closed and its signals with it: the clock stops.
+        let Some(hidden) = this.hidden.try_get_untracked() else {
+            return;
+        };
+        if !hidden {
+            this.advance();
+        }
+        drop(this);
+        exec_after(Duration::from_millis(33), move |_| Pets::tick(pets));
+    }
+
+    /// Moves the clock on now, as while a popped-out pet is dragged and
+    /// the timers wait.
+    pub fn advance(&self) {
+        let pets: Vec<Rc<Pet>> = self.pets.borrow().values().cloned().collect();
+        // A finished /kill ends before the clock moves on, so a pet is never
+        // drawn back where it was shot from for a frame.
+        for pet in &pets {
+            pet.expire();
+        }
+        self.clock.set(self.started.elapsed().as_millis() as u64);
+        let shake = pets
+            .iter()
+            .find_map(|pet| pet.shake())
+            .unwrap_or((0.0, 0.0));
+        if self.shake.get_untracked() != shake {
+            self.shake.set(shake);
+        }
+    }
+
+    /// The pointer moved in the window: docked pets near it look at it.
+    pub fn pointer_at(&self, at: floem::kurbo::Point) {
+        let out = self.out.get_untracked();
+        for pet in self.pets.borrow().values() {
+            if Some(pet.key) != out {
+                pet.pointer_at(at);
+            }
+        }
+    }
+
+    /// Notices sessions finishing and stopping, tells their pets (and the
+    /// popped-out one, about others), and passes Pi extensions' cues on.
+    fn watch(self: &Rc<Self>) {
+        let pets = Rc::downgrade(self);
+        self.scope.enter(|| {
+            Effect::new(move |_| {
+                let Some(pets) = pets.upgrade() else { return };
+                let open = pets.sessions.open().get();
+                if pets.pop_out_when_ready.get()
+                    && let Some(front) = pets.sessions.active_key().get()
+                {
+                    pets.pop_out_when_ready.set(false);
+                    pets.pop_out(front);
+                }
+                let mut previous = pets.statuses.borrow_mut();
+                let mut news = Vec::new();
+                for session in &open {
+                    let now = session.status();
+                    let before = match previous.get(&session.key) {
+                        Some(&(status, since)) if status == now => Some((status, since)),
+                        _ => previous.insert(session.key, (now, Instant::now())),
+                    };
+                    match (before, now) {
+                        // Stopped by you, or by Pi exiting, is not done.
+                        // A reply is news; a run stopped (by you, or Pi exiting)
+                        // or with none (an extension's command) is not.
+                        (Some((Status::Working, _)), Status::Idle)
+                            if !session.was_stopped() && replied(session) =>
+                        {
+                            news.push((session.clone(), true));
+                        }
+                        (Some((before, _)), Status::Stopped) if before != Status::Stopped => {
+                            news.push((session.clone(), false));
+                        }
+                        _ => {}
+                    }
+                }
+                previous.retain(|key, _| open.iter().any(|s| s.key == *key));
+                drop(previous);
+                // Pets of closed sessions go with them; all in one update.
+                Effect::batch(|| {
+                    let closed: Vec<u64> = pets
+                        .pets
+                        .borrow()
+                        .keys()
+                        .copied()
+                        .filter(|key| !open.iter().any(|s| s.key == *key))
+                        .collect();
+                    for key in closed {
+                        pets.pets.borrow_mut().remove(&key);
+                        if pets.out.get_untracked() == Some(key) {
+                            pets.out.set(None);
+                        }
+                    }
+                    for (session, done) in news {
+                        pets.report(&session, done);
+                    }
+                });
+            });
+            let pets = Rc::downgrade(self);
+            let cue = self.sessions.cue();
+            Effect::new(move |_| {
+                let Some(cue) = cue.get() else { return };
+                let Some(pets) = pets.upgrade() else { return };
+                let pet = pets.pet(cue.session);
+                match cue.action.as_str() {
+                    "kill" => pet.kill(),
+                    "wave" => pet.play(Anim::Wave),
+                    "jump" => pet.play(Anim::Jump),
+                    other => {
+                        if let Some(text) = other.strip_prefix("say:")
+                            && !text.trim().is_empty()
+                        {
+                            pet.tell(Some(cue.session), text.trim().to_string());
+                        }
+                    }
+                }
+            });
+        });
+    }
+
+    /// A session finished a run (`done`) or its Pi stopped: its pet says
+    /// so, with the gist of the reply; the popped-out pet, if another's,
+    /// passes it on.
+    fn report(&self, session: &Session, done: bool) {
+        let reply = session.entries().with_untracked(|entries| {
+            entries
+                .iter()
+                .rev()
+                .find(|e| e.kind == EntryKind::Assistant)
+                .and_then(|e| e.body.with_untracked(|body| gist(body)))
+        });
+        let said = match (done, reply) {
+            (true, Some(gist)) => gist,
+            (true, None) => "Done.".to_string(),
+            (false, _) => "Pi stopped.".to_string(),
+        };
+        let own = self.pet(session.key);
+        if done {
+            own.finished_run();
+        }
+        own.tell(Some(session.key), said.clone());
+        if let Some(out) = self.out.get_untracked()
+            && out != session.key
+        {
+            let title = session.title().get_untracked();
+            self.pet(out)
+                .tell(Some(session.key), format!("{title}: {said}"));
         }
     }
 }
@@ -672,6 +875,19 @@ mod tests {
         assert_eq!(direction(at, (100.0, 200.0)), 8, "down");
         assert_eq!(direction(at, (0.0, 100.0)), 12, "left");
         assert_eq!(direction(at, (200.0, 0.0)), 2, "up and right");
+    }
+
+    #[test]
+    fn a_pet_repeats_the_gist_of_a_reply() {
+        assert_eq!(
+            gist("\n## **Done**: tests pass\nmore"),
+            Some("Done: tests pass".into())
+        );
+        assert_eq!(gist("```rust\ncode\n```"), Some("code".into()));
+        assert_eq!(gist("  \n"), None);
+        let long = "word ".repeat(60);
+        let cut = gist(&long).unwrap();
+        assert!(cut.ends_with('…') && cut.chars().count() <= GIST);
     }
 
     #[test]

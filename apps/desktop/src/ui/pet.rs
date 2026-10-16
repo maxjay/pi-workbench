@@ -1,38 +1,37 @@
-//! The pet on screen: its sprite, cut from the sheet for the theme; what it
-//! has to say; and where it lives, docked in the window or popped out into
-//! a small window of its own that a `/kill` throws across the screen.
+//! Pets on screen: the sprite, cut from the sheet for the theme; what a pet
+//! has to say; each session's pet in its view; and the one popped out onto
+//! the desktop, which a `/kill` throws across the screen.
 use super::{color, session::ask_card};
 use crate::{
-    pet::{CELL, Pet, PetWindow},
+    pet::{CELL, Pet, PetWindow, Pets},
     workspace::Workbench,
 };
 use floem::{
     kurbo::{Point, Rect, Size},
     peniko::{self, Blob, ImageAlphaType, ImageData},
     prelude::*,
-    reactive::{Effect, Memo},
+    reactive::{Effect, Memo, ReadSignal},
     style::CursorStyle,
     views::canvas,
-    window::{WinOsCornerPreference, WindowConfig, WindowId, WindowIdExt, WindowLevel},
+    window::{WindowConfig, WindowId, WindowIdExt, WindowLevel},
 };
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
     sync::Arc,
-    time::Duration,
 };
 
 const DARK: &[u8] = include_bytes!("../../assets/pet/glitch-dark.png");
 const LIGHT: &[u8] = include_bytes!("../../assets/pet/glitch-light.png");
 
-/// Docked, the pet is drawn at half size; popped out, a little larger.
-const DOCKED: f64 = 0.5;
+/// In a session's view a pet is drawn small; popped out, larger.
+const DOCKED: f64 = 0.42;
 const POPPED: f64 = 0.75;
 const BUBBLE_WIDTH: f64 = 280.0;
-
-/// Space around the pet and its bubble in the popped-out card.
-const CARD_PADDING: f64 = 8.0;
+/// The empty top of a cell, above the pet's antenna, as a share of it.
+#[cfg_attr(not(windows), allow(dead_code))]
+const HEADROOM: f64 = 0.3;
 
 /// A frame cut from the sheet, and its key in the renderer's cache.
 type Frame = (peniko::ImageBrush, Vec<u8>);
@@ -45,23 +44,21 @@ struct Sheet {
 }
 
 impl Sheet {
+    fn cell(&self, row: u32, column: u32) -> image::RgbaImage {
+        let (width, height) = CELL;
+        image::imageops::crop_imm(&self.image, column * width, row * height, width, height)
+            .to_image()
+    }
+
     fn frame(&self, row: u32, column: u32) -> Frame {
         self.frames
             .borrow_mut()
             .entry((row, column))
             .or_insert_with(|| {
                 let (width, height) = CELL;
-                let cell = image::imageops::crop_imm(
-                    &self.image,
-                    column * width,
-                    row * height,
-                    width,
-                    height,
-                )
-                .to_image();
                 // Nearest-neighbour, so the pixel art stays crisp when scaled.
                 let brush = peniko::ImageBrush::new(ImageData {
-                    data: Blob::new(Arc::new(cell.into_raw())),
+                    data: Blob::new(Arc::new(self.cell(row, column).into_raw())),
                     format: peniko::ImageFormat::Rgba8,
                     alpha_type: ImageAlphaType::Alpha,
                     width,
@@ -72,6 +69,18 @@ impl Sheet {
                 (brush, key)
             })
             .clone()
+    }
+
+    /// A frame scaled to a size, nearest-neighbour, as RGBA pixels.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn pixels(&self, row: u32, column: u32, width: u32, height: u32) -> Vec<u8> {
+        image::imageops::resize(
+            &self.cell(row, column),
+            width,
+            height,
+            image::imageops::FilterType::Nearest,
+        )
+        .into_raw()
     }
 }
 
@@ -97,12 +106,12 @@ fn sheet(dark: bool) -> Rc<Sheet> {
     })
 }
 
-/// The pet itself, at a scale of its 192×208 cell.
+/// A pet, at a scale of its 192×208 cell. Ivory on dark themes would glare;
+/// the charcoal one suits them.
 fn sprite(pet: &Rc<Pet>, scale: f64) -> floem::views::Canvas {
     let pose = pet.pose();
     canvas(move |cx, size| {
         let pose = pose.get();
-        // Ivory on dark themes would glare; the charcoal one suits them.
         let sheet = sheet(color::is_dark());
         let (brush, key) = sheet.frame(pose.anim.row(), pose.column);
         cx.draw_img(
@@ -127,8 +136,9 @@ enum Say {
     Update(u64),
 }
 
-/// The pet's speech bubble: a session's question, answered right there,
-/// or news from any session, which opens it when clicked.
+/// A pet's speech bubble: a question, answered right there, or what it has
+/// to say about its session (or, popped out, another), which opens the
+/// session when clicked.
 fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
     let updates = pet.updates();
     let asking = pet.clone();
@@ -144,6 +154,7 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
     let more_pet = pet.clone();
     let more = Memo::new(move |_| more_pet.questions().len() + updates.with(Vec::len));
     let (view_state, view_pet) = (state.clone(), pet.clone());
+    let own = pet.key;
     let body = dyn_container(
         move || say.get(),
         move |say| match say {
@@ -158,13 +169,16 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
                 let title = session.title();
                 let open_state = view_state.clone();
                 let key = session.key;
+                // Another session's question says whose it is.
+                let theirs = key != own;
                 Stack::vertical((
                     Label::derived(move || format!("{} asks", title.get()))
-                        .style(|s| {
+                        .style(move |s| {
                             s.color(color::muted())
                                 .font_size(11)
                                 .cursor(CursorStyle::Pointer)
                                 .hover(|s| s.color(color::accent()))
+                                .apply_if(!theirs, |s| s.hide())
                         })
                         .on_event_stop(el::Click, move |_, _| open_state.show_session(key)),
                     ask_card(session, entry),
@@ -199,6 +213,7 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
                 ))
                 .style(|s| s.gap(6).width_full().items_start())
                 .on_event_stop(el::Click, move |_, _| {
+                    // One update, so the bubble changes once.
                     Effect::batch(|| {
                         if let Some(key) = update.session {
                             open_state.show_session(key);
@@ -235,7 +250,7 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
     })
 }
 
-/// A small pill shown on hover: pop out or in, or hide.
+/// A small pill shown on hover.
 fn control(
     title: impl Fn() -> &'static str + 'static,
     action: impl Fn() + 'static,
@@ -257,219 +272,223 @@ fn control(
         .on_event_stop(el::Click, move |_, _| action())
 }
 
-/// The pills, over the empty top of the sprite's cell so showing them
-/// moves nothing.
-fn controls(pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl IntoView {
-    let (pop_pet, hide_pet) = (pet.clone(), pet.clone());
-    let popped = pet.popped;
+/// Pop out (or in) and hide, over the empty top of the sprite's cell, so
+/// showing them moves nothing.
+fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl IntoView {
+    let (pop_pets, hide_pets) = (pets.clone(), pets.clone());
+    let out = pets.out;
+    let key = pet.key;
     Stack::horizontal((
         control(
-            move || if popped.get() { "Pop in" } else { "Pop out" },
-            move || pop_pet.toggle_popped(),
+            move || {
+                if out.get() == Some(key) {
+                    "Pop in"
+                } else {
+                    "Pop out"
+                }
+            },
+            move || {
+                if pop_pets.out.get_untracked() == Some(key) {
+                    pop_pets.pop_in()
+                } else {
+                    pop_pets.pop_out(key)
+                }
+            },
         ),
-        control(|| "Hide", move || hide_pet.toggle_hidden()),
+        control(|| "Hide", move || hide_pets.toggle_hidden()),
     ))
     .style(move |s| {
         s.absolute()
-            .inset_top(2)
-            .inset_left(0)
+            .inset_top(0)
+            .inset_right(0)
             .gap(4)
             .apply_if(!hovered.get(), |s| s.hide())
     })
 }
 
-/// The pet docked in the window: it sits at the bottom of the sessions
-/// rail, drags anywhere, and is thrown left across the window by a `/kill`.
-pub(super) fn docked(state: Rc<Workbench>) -> impl IntoView {
-    let pet = state.pet.clone();
+/// A session's pet in its view: at the bottom right of the conversation,
+/// talking about this session, and thrown left across it by a `/kill`.
+pub(super) fn docked(state: Rc<Workbench>, key: u64) -> impl IntoView {
+    let pets = state.pets.clone();
+    let pet = pets.pet(key);
     let pose = pet.pose();
-    let dock = pet.dock;
-    let (popped, hidden) = (pet.popped, pet.hidden);
+    let (out, hidden) = (pets.out, pets.hidden);
     let hovered = RwSignal::new(false);
-    // Grabbed at this offset from the sprite's corner, and moved yet.
-    let grabbed = RwSignal::new(None::<(Point, bool)>);
-    let size = (f64::from(CELL.0) * DOCKED, f64::from(CELL.1) * DOCKED);
-    // It is thrown as far as the window allows, up to a good distance.
-    let throw_pet = pet.clone();
-    Effect::new(move |_| {
-        let (left, _) = dock.get();
-        throw_pet
-            .throw_distance
-            .set(((left - 6.0) / 1.15).clamp(0.0, 300.0));
+
+    let body = sprite(&pet, DOCKED).on_event_stop(el::Click, {
+        let pet = pet.clone();
+        move |_, _| pet.poke()
     });
-
-    let body = sprite(&pet, DOCKED);
-    let body_id = body.view_id();
-    pet.sprite_view.set(Some(body_id));
-    let window_size = move || body_id.root().get_size().unwrap_or_default();
-    // The window's size, to keep the pet and its bubble in it.
-    let window = RwSignal::new(Size::ZERO);
-    let (press_state, move_state, up_pet) = (state.clone(), state.clone(), pet.clone());
-    let move_pet = pet.clone();
-    let body = body
-        .on_event_stop(el::PointerDown, move |cx, event| {
-            if let Some(id) = event.pointer.pointer_id {
-                cx.request_pointer_capture(id);
-            }
-            let at = press_state.pointer();
-            let (left, bottom) = dock.get_untracked();
-            let window = window_size();
-            let top = window.height - bottom - size.1;
-            grabbed.set(Some((Point::new(at.x - left, at.y - top), false)));
-        })
-        .on_event_stop(el::PointerMove, move |_, _| {
-            let Some((offset, _)) = grabbed.get_untracked() else {
-                return;
-            };
-            let at = move_state.pointer();
-            let window = window_size();
-            let left = (at.x - offset.x).clamp(0.0, (window.width - size.0).max(0.0));
-            let top = (at.y - offset.y).clamp(0.0, (window.height - size.1).max(0.0));
-            let (before, _) = dock.get_untracked();
-            if (left - before).abs() > 0.5 {
-                move_pet.moving.set(Some(left > before));
-            }
-            dock.set((left, window.height - top - size.1));
-            grabbed.set(Some((offset, true)));
-        })
-        .on_event_stop(el::PointerUp, move |_, _| {
-            let moved = grabbed.get_untracked().is_some_and(|(_, moved)| moved);
-            grabbed.set(None);
-            up_pet.moving.set(None);
-            if !moved {
-                up_pet.poke();
-            }
-        })
-        .on_event_stop(el::LostPointerCapture, move |_, _| grabbed.set(None));
-
-    // Only the pet is thrown; what it was saying stays put.
-    let figure = Stack::new((body, controls(&pet, hovered))).style(move |s| {
+    pet.sprite_view.set(Some(body.view_id()));
+    let figure = Stack::new((body, controls(&pets, &pet, hovered))).style(move |s| {
         let thrown = pose.get().thrown;
         s.translate_x(thrown.0).translate_y(thrown.1)
     });
-    // The bubble moves left to stay in the window when the pet is near its
-    // right edge.
-    let said = bubble(&state, &pet).style(move |s| {
-        let (left, _) = dock.get();
-        let room = window.get().width - left - BUBBLE_WIDTH - 8.0;
-        s.translate_x(room.min(0.0).max(-left))
+    let view = Stack::vertical((bubble(&state, &pet), figure)).style(move |s| {
+        s.absolute()
+            .inset_right(14)
+            .inset_bottom(4)
+            .items_end()
+            .gap(4)
+            .z_index(5)
+            .apply_if(out.get() == Some(key) || hidden.get(), |s| s.hide())
     });
-    Stack::vertical((said, figure))
-        .style(move |s| {
-            let (left, bottom) = dock.get();
-            let size_now = window.get();
-            // Kept in reach however small the window gets.
-            let (left, bottom) = if size_now.width > 0.0 {
-                (
-                    left.min(size_now.width - size.0).max(0.0),
-                    bottom.min(size_now.height - size.1).max(0.0),
-                )
-            } else {
-                (left, bottom)
-            };
-            s.absolute()
-                .inset_left(left)
-                .inset_bottom(bottom)
-                .items_start()
-                .gap(4)
-                .z_index(25)
-                .apply_if(popped.get() || hidden.get(), |s| s.hide())
-        })
-        .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
+    // Thrown as far left as the conversation allows.
+    let view_id = view.view_id();
+    let throw_pet = pet.clone();
+    view.on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
         .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
-            let now = window_size();
-            if window.get_untracked() != now {
-                window.set(now);
+            // Popped out, the screen decides how far it flies.
+            if out.get_untracked() == Some(key) {
+                return;
             }
+            let room = view_id
+                .parent()
+                .map(|parent| parent.get_visual_rect())
+                .zip(throw_pet.sprite_view.get().map(|v| v.get_visual_rect()))
+                .map_or(0.0, |(area, sprite)| sprite.x0 - area.x0 - 8.0);
+            throw_pet
+                .throw_distance
+                .set((room / 1.15).clamp(0.0, 320.0));
         })
 }
 
-/// Opens and closes the pet's own window as it pops out and in, next to
-/// the workbench's window.
+/// The window's content shakes while a `/kill` lands.
+pub(super) fn shake(state: &Rc<Workbench>) -> ReadSignal<(f64, f64)> {
+    state.pets.shake()
+}
+
+/// Opens and closes the popped-out pet as it pops out and in.
 pub(super) fn follow_popping(state: Rc<Workbench>, main: WindowId) {
-    let pet = state.pet.clone();
-    let (popped, hidden) = (pet.popped, pet.hidden);
+    let pets = state.pets.clone();
+    let (out, hidden) = (pets.out, pets.hidden);
+    let current: Rc<RefCell<Option<Outside>>> = Rc::default();
     Effect::new(move |_| {
-        let wanted = popped.get() && !hidden.get();
-        match (wanted, pet.window.get()) {
-            (true, PetWindow::Closed) => {
-                pet.window.set(PetWindow::Pending);
-                let size = card_size(None);
-                // Low on the workbench, right of the rail, with room to be
-                // thrown left. (Content bounds give the size, not the place.)
-                let position = main
-                    .position_on_screen_including_frame()
-                    .zip(main.bounds_of_content_on_screen())
-                    .map(|(at, bounds)| {
-                        Point::new(at.x + 260.0, at.y + bounds.height() - size.height - 40.0)
-                    })
-                    .unwrap_or(Point::new(100.0, 100.0));
-                let state = state.clone();
-                floem::new_window(
-                    move |id| {
-                        // Popped back in, or the workbench closed, before
-                        // the window was made: it closes straight away.
-                        let pet = &state.pet;
-                        let wanted = pet.popped.try_get_untracked().unwrap_or(false)
-                            && !pet.hidden.try_get_untracked().unwrap_or(true)
-                            && pet.window.get() == PetWindow::Pending;
-                        if !wanted {
-                            floem::close_window(id);
-                            return Empty::new().into_any();
-                        }
-                        pet.window.set(PetWindow::Open(id));
-                        window_view(state, id).into_any()
-                    },
-                    Some(
-                        WindowConfig::default()
-                            .size(size)
-                            .position(position)
-                            .title("Glitch")
-                            .undecorated(true)
-                            .show_titlebar(false)
-                            .resizable(false)
-                            .window_level(WindowLevel::AlwaysOnTop)
-                            .with_win_os_config(|c| {
-                                c.set_skip_taskbar(true)
-                                    .corner_preference(WinOsCornerPreference::Round)
-                            }),
-                    ),
-                );
-            }
-            (false, PetWindow::Open(id)) => {
-                pet.window.set(PetWindow::Closed);
-                floem::close_window(id);
-            }
-            (false, PetWindow::Pending) => pet.window.set(PetWindow::Closed),
-            _ => {}
+        let wanted = out.get().filter(|_| !hidden.get());
+        let showing = current.borrow().as_ref().map(|o| o.key);
+        if showing == wanted {
+            return;
+        }
+        if let Some(old) = current.borrow_mut().take() {
+            old.close(&pets);
+        }
+        if let Some(key) = wanted {
+            *current.borrow_mut() = Some(Outside::open(&state, main, key));
         }
     });
 }
 
-/// The popped-out card: the pet alone, or with what it has to say above.
+/// Where the popped-out pet first appears: low on the workbench, right of
+/// the rail, with room to be thrown left (logical pixels). The content
+/// bounds give the size; their place is not on screen.
+fn start_point(main: WindowId, height: f64) -> Point {
+    main.position_on_screen_including_frame()
+        .zip(main.bounds_of_content_on_screen())
+        .map(|(at, bounds)| Point::new(at.x + 260.0, at.y + bounds.height() - height - 40.0))
+        .unwrap_or(Point::new(100.0, 100.0))
+}
+
+/// The popped-out pet and what it needs closing.
+struct Outside {
+    key: u64,
+    scope: floem::reactive::Scope,
+    /// Held for as long as it is out; dropping it closes it.
+    #[cfg(windows)]
+    _sprite: Rc<super::pet_window::Layered>,
+}
+
+impl Outside {
+    fn close(self, pets: &Rc<Pets>) {
+        self.scope.dispose();
+        if let PetWindow::Open(id) = pets.window.replace(PetWindow::Closed) {
+            floem::close_window(id);
+        }
+    }
+
+    /// The pet's speech in a window of its own that fits it, or (`card`)
+    /// the pet and its speech together.
+    fn speech_window(state: &Rc<Workbench>, pet: &Rc<Pet>, at: Point, card: bool) {
+        state.pets.window.set(PetWindow::Pending);
+        let (state, pet) = (state.clone(), pet.clone());
+        let size = if card {
+            card_size(None)
+        } else {
+            Size::new(BUBBLE_WIDTH + 2.0, 40.0)
+        };
+        floem::new_window(
+            move |id| {
+                // Popped back in, or the workbench closed, before the window
+                // was made: it closes straight away.
+                if state.pets.window.get() != PetWindow::Pending
+                    || state.pets.out.try_get_untracked().flatten() != Some(pet.key)
+                {
+                    floem::close_window(id);
+                    return Empty::new().into_any();
+                }
+                state.pets.window.set(PetWindow::Open(id));
+                if card {
+                    card_view(state, pet, id).into_any()
+                } else {
+                    speech_view(state, pet, id).into_any()
+                }
+            },
+            Some(
+                WindowConfig::default()
+                    .size(size)
+                    .position(at)
+                    .title("Glitch says")
+                    .undecorated(true)
+                    .show_titlebar(false)
+                    .resizable(false)
+                    .window_level(WindowLevel::AlwaysOnTop)
+                    .with_win_os_config(|c| {
+                        c.set_skip_taskbar(true)
+                            .corner_preference(floem::window::WinOsCornerPreference::Round)
+                    }),
+            ),
+        );
+    }
+}
+
+/// The popped-out card where windows cannot be see-through: the pet with
+/// its bubble above, growing upwards to fit.
 fn card_size(content: Option<Size>) -> Size {
     let pet = Size::new(f64::from(CELL.0) * POPPED, f64::from(CELL.1) * POPPED);
     let content = content.unwrap_or(pet);
     Size::new(
-        content.width.max(pet.width) + 2.0 * CARD_PADDING,
-        content.height.max(pet.height) + 2.0 * CARD_PADDING,
+        content.width.max(pet.width) + 16.0,
+        content.height.max(pet.height) + 16.0,
     )
 }
 
-/// The popped-out window: a small card always on top, with the pet at the
-/// bottom and its bubble above, growing upwards to fit. The pet drags the
-/// window about and runs while it moves; a `/kill` throws the whole window
-/// across the screen.
-fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
-    let pet = state.pet.clone();
+/// Keeps a window the size of its content, its bottom left where it is.
+fn fit_window(id: WindowId, content: floem::ViewId, size: impl Fn(Option<Size>) -> Size) {
+    let wanted = size(
+        content
+            .get_size()
+            .filter(|s| s.width > 1.0 && s.height > 1.0),
+    );
+    let (Some(now), Some(at)) = (
+        id.bounds_of_content_on_screen(),
+        id.position_on_screen_including_frame(),
+    ) else {
+        return;
+    };
+    if (now.width() - wanted.width).abs() > 1.0 || (now.height() - wanted.height).abs() > 1.0 {
+        id.set_content_size(wanted);
+        id.set_outer_location(Point::new(at.x, at.y + now.height() - wanted.height));
+    }
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn card_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView {
+    let pets = state.pets.clone();
     let hovered = RwSignal::new(false);
-    // Where the window was when shot, and which shot, to throw it from.
-    let shot_from = Rc::new(Cell::new(None::<(u64, Point)>));
-    let shot = pet.shot();
-    let pose = pet.pose();
+    // Thrown from where each /kill finds the window.
+    let from = Rc::new(Cell::new(None::<(u64, Point)>));
+    let (shot, pose) = (pet.shot(), pet.pose());
     let throw_pet = pet.clone();
-    let from = shot_from.clone();
     Effect::new(move |_| {
         let thrown = pose.get().thrown;
         let Some(began) = shot.get() else {
@@ -478,12 +497,10 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
         };
         let start = match from.get() {
             Some((shot, start)) if shot == began => start,
-            // A new shot, perhaps while the last was under way.
             _ => {
                 let Some(start) = id.position_on_screen_including_frame() else {
                     return;
                 };
-                // As far left as the screen allows.
                 if let Some(screen) = id.monitor_bounds() {
                     throw_pet
                         .throw_distance
@@ -495,8 +512,6 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
         };
         id.set_outer_location(Point::new(start.x + thrown.0, start.y + thrown.1));
     });
-
-    // Pressing and moving drags the window; a press alone pokes the pet.
     let pressed = Rc::new(Cell::new(None::<Point>));
     let (down, moved, up) = (pressed.clone(), pressed.clone(), pressed);
     let poke_pet = pet.clone();
@@ -517,43 +532,13 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
                 poke_pet.poke();
             }
         });
-
     let content = Stack::vertical((
         bubble(&state, &pet),
-        Stack::new((body, controls(&pet, hovered))),
+        Stack::new((body, controls(&pets, &pet, hovered))),
     ))
-    .style(|s| {
-        s.absolute()
-            .inset_left(CARD_PADDING)
-            .inset_top(CARD_PADDING)
-            .gap(6)
-            .items_start()
-    });
+    .style(|s| s.absolute().inset_left(8).inset_top(8).gap(6).items_start());
     let content_id = content.view_id();
-    // The card fits what it holds, keeping its bottom left where it is.
     let fit_pet = pet.clone();
-    let fit = move || {
-        if fit_pet.shot().get_untracked().is_some() {
-            return;
-        }
-        let wanted = card_size(content_id.get_size());
-        let (Some(now), Some(at)) = (
-            id.bounds_of_content_on_screen(),
-            id.position_on_screen_including_frame(),
-        ) else {
-            return;
-        };
-        if (now.width() - wanted.width).abs() > 1.0 || (now.height() - wanted.height).abs() > 1.0 {
-            id.set_content_size(wanted);
-            id.set_outer_location(Point::new(at.x, at.y + now.height() - wanted.height));
-        }
-    };
-
-    // It runs the way the window is dragged.
-    let last_x = Rc::new(Cell::new(None::<f64>));
-    let settle = Rc::new(Cell::new(0u64));
-    let run_pet = Rc::downgrade(&pet);
-    let closed_pet = Rc::downgrade(&pet);
     Stack::new((content,))
         .style(|s| {
             s.size_full()
@@ -563,45 +548,219 @@ fn window_view(state: Rc<Workbench>, id: WindowId) -> impl IntoView {
                 .border(1)
                 .border_color(color::border())
         })
-        .on_event_cont(el::UpdatePhaseLayout, move |_, _| fit())
+        .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
+            if fit_pet.shot().get_untracked().is_none() {
+                fit_window(id, content_id, card_size);
+            }
+        })
         .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
         .on_event_cont(el::WindowClosed, move |_, _| {
-            // Closed by the system (Alt+F4, say) rather than by popping in.
-            if let Some(pet) = closed_pet.upgrade()
-                && pet.window.get() == PetWindow::Open(id)
-            {
-                pet.window.set(PetWindow::Closed);
-                pet.popped.try_update(|p| *p = false);
-            }
-        })
-        .on_event_cont(el::WindowMoved, move |_, at| {
-            let Some(run_pet) = run_pet.upgrade() else {
-                return;
-            };
-            if run_pet.shot().get_untracked().is_some() {
-                return;
-            }
-            if let Some(before) = last_x.replace(Some(at.x))
-                && (at.x - before).abs() > 0.5
-            {
-                run_pet.moving.set(Some(at.x > before));
-                let serial = settle.get() + 1;
-                settle.set(serial);
-                let (pet, settle) = (Rc::downgrade(&run_pet), settle.clone());
-                floem::action::exec_after(Duration::from_millis(180), move |_| {
-                    if settle.get() == serial
-                        && let Some(pet) = pet.upgrade()
-                    {
-                        pet.moving.try_update(|m| *m = None);
-                    }
-                });
+            // Closed by the system (Alt+F4, say): the pet comes back in.
+            if pets.window.get() == PetWindow::Open(id) {
+                pets.window.set(PetWindow::Closed);
+                pets.out.try_update(|out| *out = None);
             }
         })
 }
 
-/// The window's content shakes while a `/kill` lands.
-pub(super) fn shake(pet: &Rc<Pet>) -> Memo<(f64, f64)> {
-    let pose = pet.pose();
-    Memo::new(move |_| pose.get().shake)
+/// The popped-out pet's speech beside its see-through sprite: shown only
+/// while it has something to say.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView {
+    // Laid out at its own size, not squeezed to the window's.
+    let said = bubble(&state, &pet).style(|s| s.absolute().inset_left(0).inset_top(0));
+    let said_id = said.view_id();
+    let pets = state.pets.clone();
+    let speaking = {
+        let pet = pet.clone();
+        let updates = pet.updates();
+        Memo::new(move |_| !pet.questions().is_empty() || updates.with(|u| !u.is_empty()))
+    };
+    Effect::new(move |_| id.set_visible(speaking.get()));
+    Stack::new((said,))
+        .style(|s| {
+            s.size_full()
+                .background(color::panel())
+                .color(color::text())
+                .font_size(13)
+        })
+        .on_event_cont(el::UpdatePhaseLayout, move |_, _| {
+            fit_window(id, said_id, |content| {
+                content.unwrap_or(Size::new(BUBBLE_WIDTH, 40.0))
+            });
+        })
+        .on_event_cont(el::WindowClosed, move |_, _| {
+            if pets.window.get() == PetWindow::Open(id) {
+                pets.window.set(PetWindow::Closed);
+            }
+        })
+}
+
+#[cfg(not(windows))]
+impl Outside {
+    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Self {
+        let pet = state.pets.pet(key);
+        let scope = floem::reactive::Scope::new();
+        let at = start_point(main, card_size(None).height);
+        scope.enter(|| Outside::speech_window(state, &pet, at, true));
+        Outside { key, scope }
+    }
+}
+
+#[cfg(windows)]
+impl Outside {
+    /// The pet alone, see-through, on top of everything, with its speech
+    /// in a small window above it.
+    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Self {
+        use super::pet_window::{Events, Layered};
+        let pets = state.pets.clone();
+        let pet = pets.pet(key);
+        let scope = floem::reactive::Scope::new();
+
+        struct Handler {
+            pets: std::rc::Weak<Pets>,
+            pet: std::rc::Weak<Pet>,
+            /// Moves the speech above the pet after a drag.
+            place_speech: Box<dyn Fn()>,
+        }
+        impl Events for Handler {
+            fn clicked(&self) {
+                if let Some(pet) = self.pet.upgrade() {
+                    pet.poke();
+                }
+            }
+            fn dragged(&self, dx: i32) {
+                if let (Some(pets), Some(pet)) = (self.pets.upgrade(), self.pet.upgrade()) {
+                    if pet.moving.get_untracked() != Some(dx > 0) {
+                        pet.moving.set(Some(dx > 0));
+                    }
+                    // The app's timers wait while the system moves the window.
+                    pets.advance();
+                }
+            }
+            fn dropped(&self) {
+                if let Some(pet) = self.pet.upgrade() {
+                    pet.moving.set(None);
+                }
+                (self.place_speech)();
+            }
+            fn chose(&self, index: usize) {
+                if let Some(pets) = self.pets.upgrade() {
+                    match index {
+                        0 => pets.pop_in(),
+                        _ => pets.toggle_hidden(),
+                    }
+                }
+            }
+            fn menu(&self) -> Vec<&'static str> {
+                vec!["Pop in", "Hide"]
+            }
+        }
+
+        // Floem works in logical pixels, the window in physical ones.
+        let speech_at = Rc::new(Cell::new(Point::ZERO));
+        let sprite_cell: Rc<RefCell<Option<std::rc::Weak<Layered>>>> = Rc::default();
+        let place = {
+            let (pets, sprite_cell, speech_at) =
+                (Rc::downgrade(&pets), sprite_cell.clone(), speech_at.clone());
+            move || {
+                let Some(sprite) = sprite_cell.borrow().as_ref().and_then(|s| s.upgrade()) else {
+                    return;
+                };
+                let scale = sprite.scale();
+                let (x, y, _, height) = sprite.rect();
+                let top = f64::from(y) / scale + f64::from(height) / scale * HEADROOM;
+                let at = Point::new(f64::from(x) / scale, top);
+                speech_at.set(at);
+                if let Some(pets) = pets.upgrade()
+                    && let PetWindow::Open(id) = pets.window.get()
+                    && let Some(size) = id.bounds_of_content_on_screen()
+                {
+                    id.set_outer_location(Point::new(at.x, at.y - size.height() - 4.0));
+                }
+            }
+        };
+        let handler = Rc::new(Handler {
+            pets: Rc::downgrade(&pets),
+            pet: Rc::downgrade(&pet),
+            place_speech: Box::new(place.clone()),
+        });
+        let sprite = Rc::new(Layered::open((0, 0), handler).expect("a layered window opens"));
+        *sprite_cell.borrow_mut() = Some(Rc::downgrade(&sprite));
+        let scale = sprite.scale();
+        let (width, height) = (
+            (f64::from(CELL.0) * POPPED * scale).round() as u32,
+            (f64::from(CELL.1) * POPPED * scale).round() as u32,
+        );
+        let start = start_point(main, f64::from(height) / scale);
+        let home = (
+            (start.x * scale).round() as i32,
+            (start.y * scale).round() as i32,
+        );
+
+        scope.enter(|| {
+            // Drawn whenever the frame, the throw or the theme changes; moved
+            // only while thrown, so a drag is left alone.
+            let pose = pet.pose();
+            let shot = pet.shot();
+            let from = Cell::new(None::<(u64, (i32, i32))>);
+            let first = Cell::new(Some(home));
+            let (draw_sprite, throw_pet) = (sprite.clone(), pet.clone());
+            let after_throw = place.clone();
+            Effect::new(move |_| {
+                let pose = pose.get();
+                let pixels =
+                    sheet(color::is_dark()).pixels(pose.anim.row(), pose.column, width, height);
+                let at = match shot.get() {
+                    Some(began) => {
+                        let start = match from.get() {
+                            Some((shot, start)) if shot == began => start,
+                            _ => {
+                                let (x, y, _, _) = draw_sprite.rect();
+                                // As far left as the screen allows.
+                                throw_pet
+                                    .throw_distance
+                                    .set((f64::from(x) / scale / 1.15).clamp(0.0, 420.0));
+                                from.set(Some((began, (x, y))));
+                                (x, y)
+                            }
+                        };
+                        let dx = (pose.thrown.0 + pose.shake.0) * scale;
+                        let dy = (pose.thrown.1 + pose.shake.1) * scale;
+                        Some((start.0 + dx.round() as i32, start.1 + dy.round() as i32))
+                    }
+                    None => {
+                        if from.take().is_some() {
+                            after_throw();
+                        }
+                        first.take()
+                    }
+                };
+                draw_sprite.draw(&pixels, width, height, at);
+            });
+            // Looks at the pointer anywhere on the screen.
+            let (look_sprite, look_pet) = (sprite.clone(), pet.clone());
+            Effect::new(move |_| {
+                pose.track();
+                let (x, y, w, h) = look_sprite.rect();
+                let face = (
+                    f64::from(x) + f64::from(w) / 2.0,
+                    f64::from(y) + f64::from(h) * 0.62,
+                );
+                let at = super::pet_window::pointer();
+                look_pet.look_at(
+                    (face.0 / scale, face.1 / scale),
+                    (f64::from(at.0) / scale, f64::from(at.1) / scale),
+                );
+            });
+            place();
+            Outside::speech_window(state, &pet, speech_at.get(), false);
+        });
+        Outside {
+            key,
+            scope,
+            _sprite: sprite,
+        }
+    }
 }

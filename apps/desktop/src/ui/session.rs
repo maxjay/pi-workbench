@@ -775,7 +775,10 @@ pub(super) fn session_view(
         });
         100.0
     })
-    .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
+    .style(|s| s.size_full().min_height(0));
+    // The session's pet sits at the bottom right of its conversation.
+    let timeline = Stack::new((timeline, super::pet::docked(state.clone(), session.key)))
+        .style(|s| s.width_full().flex_grow(1.0_f32).min_height(0));
     let composer = Stack::vertical((composer(session.clone(), visible, zoom),)).style(move |s| {
         s.width_full()
             .max_width(860.0 * zoom)

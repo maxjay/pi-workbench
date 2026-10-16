@@ -3002,6 +3002,7 @@ dependencies = [
  "pulldown-cmark",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
  "workbench-core",
  "workbench-text",
 ]

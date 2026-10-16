@@ -317,7 +317,7 @@ impl Command {
             Self::ZoomOut => ("Zoom out (this pane)", ctrl("-")),
             Self::ZoomReset => ("Reset zoom (this pane)", ctrl("0")),
             Self::NewFile => ("New file…", None),
-            Self::PetPopOut => ("Pet: pop out or back in", None),
+            Self::PetPopOut => ("Pet: pop the front session's pet out, or back in", None),
             Self::PetShow => ("Pet: show or hide", None),
             Self::Conversation => ("Show Pi session", ctrl("j")),
             Self::StopSession => ("Stop Pi in this session", None),
@@ -396,8 +396,8 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::ZoomOut => state.zoom(state.focused().get_untracked(), -1),
         Command::ZoomReset => state.zoom(state.focused().get_untracked(), 0),
         Command::NewFile => state.new_file(),
-        Command::PetPopOut => state.pet.toggle_popped(),
-        Command::PetShow => state.pet.toggle_hidden(),
+        Command::PetPopOut => state.pets.toggle_out(),
+        Command::PetShow => state.pets.toggle_hidden(),
         Command::Conversation => {
             state.show_conversation();
         }

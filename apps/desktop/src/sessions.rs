@@ -117,6 +117,12 @@ impl Sessions {
             .with(|open| open.iter().find(|s| s.key == key).cloned())
     }
 
+    /// Tracked: a session, by key.
+    pub fn find_tracked(&self, key: u64) -> Option<Rc<Session>> {
+        self.open
+            .with(|open| open.iter().find(|s| s.key == key).cloned())
+    }
+
     pub fn find(&self, key: u64) -> Option<Rc<Session>> {
         self.open
             .with_untracked(|open| open.iter().find(|s| s.key == key).cloned())
