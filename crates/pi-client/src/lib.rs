@@ -109,12 +109,13 @@ pub fn ask_aside(
         Some(session) => command.arg("--fork").arg(session),
         None => command.arg("--no-session"),
     };
+    // The question goes in on stdin, which Pi reads as the prompt: on
+    // Windows `pi` is a .cmd shim, which cannot be given an argument with a
+    // line break in it, and its command line is short besides.
     command
-        .arg("--")
-        .arg(question)
         .envs(launch.env.iter().map(|(k, v)| (k, v)))
         .current_dir(cwd)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
@@ -130,6 +131,14 @@ pub fn ask_aside(
         // The whole tree: on Windows the child is the `.cmd` shim, with Pi
         // under it, and both must end on a timeout.
         let tree = Tree::adopt(&child);
+        if let Some(mut stdin) = child.stdin.take() {
+            let question = question.to_string();
+            // Written from a thread, so a Pi slow to read cannot stall this
+            // one; dropped after, which closes it.
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(question.as_bytes());
+            });
+        }
         // Both pipes are drained at once, so neither fills and stalls Pi.
         let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
             let (sent, got) = std::sync::mpsc::channel();

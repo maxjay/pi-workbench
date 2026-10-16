@@ -142,6 +142,9 @@ pub struct Hooks {
     /// Something for the pet to do, from this session (by key): an
     /// extension's `pet` status, such as `kill:<id>` or `say:<text>`.
     pub cue: Box<dyn Fn(u64, String)>,
+    /// `/kill`: this session (by key) is to be replaced by a fresh one that
+    /// keeps only what matters, with what to do next, if given.
+    pub renew: Box<dyn Fn(u64, String)>,
 }
 
 /// What a `pet` status asks of the pet, without the part that only makes
@@ -261,6 +264,8 @@ pub struct Session {
     stopped: RwSignal<bool>,
     /// The current run was stopped from here.
     stop_requested: Cell<bool>,
+    /// Given a title, which its first prompt does not replace.
+    named: Cell<bool>,
     model: RwSignal<Option<Model>>,
     models: RwSignal<Vec<Model>>,
     stats: RwSignal<String>,
@@ -325,6 +330,7 @@ impl Session {
                 pending_asks: RwSignal::new(0),
                 stopped: RwSignal::new(false),
                 stop_requested: Cell::new(false),
+                named: Cell::new(false),
                 model: RwSignal::new(None),
                 models: RwSignal::new(Vec::new()),
                 stats: RwSignal::new(String::new()),
@@ -510,17 +516,18 @@ impl Session {
         if text.is_empty() || self.sending.get() {
             return false;
         }
-        // A stand-in for a Pi extension's /kill, until one is installed, and
-        // while Pi works, when it would not take an extension command: the
-        // pet takes it here and Pi never sees it. Pi numbers commands two
-        // extensions share, as kill:1.
-        let kill_extension = self.commands.with_untracked(|commands| {
-            commands
-                .iter()
-                .any(|c| c.name == "kill" || c.name.starts_with("kill:"))
-        });
-        if text == "/kill" && (!kill_extension || self.working.get_untracked()) {
+        // /kill, for a session that has run so long it has lost the thread:
+        // its pet is shot, and the workbench starts a fresh session that
+        // keeps only what matters. Pi never sees it.
+        if let Some(goal) = text
+            .strip_prefix("/kill")
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            if self.working.get_untracked() {
+                self.stop();
+            }
             (self.hooks.cue)(self.key, "kill".into());
+            (self.hooks.renew)(self.key, goal.trim().to_string());
             return true;
         }
         if self.working.get_untracked() {
@@ -537,9 +544,10 @@ impl Session {
             }
             return sent;
         }
-        if self
-            .entries
-            .with_untracked(|e| !e.iter().any(|e| e.kind == EntryKind::User))
+        if !self.named.get()
+            && self
+                .entries
+                .with_untracked(|e| !e.iter().any(|e| e.kind == EntryKind::User))
         {
             self.title.set(shorten(&text));
         }
@@ -609,6 +617,23 @@ impl Session {
             self.stop_requested.set(true);
             self.with_process(PiProcess::abort);
         }
+    }
+
+    /// Gives the session a title its first prompt will not replace.
+    pub fn rename(&self, title: &str) {
+        self.named.set(true);
+        self.title.set(shorten(title));
+    }
+
+    /// Puts text in the composer, in place of what was there, ready to send.
+    pub fn set_draft(&self, text: &str) {
+        let len = self.draft.text().len();
+        self.draft.edit_single(
+            Selection::region(0, len, CursorAffinity::Backward),
+            text,
+            EditType::Other,
+        );
+        self.focus_composer(text.len());
     }
 
     /// Whether the last run was stopped rather than finishing.
@@ -989,6 +1014,9 @@ mod tests {
                 settled: Box::new(|| {}),
                 snapshot: Box::new(|done| done(None)),
                 cue: Box::new(|key, cue| CUES.with_borrow_mut(|cues| cues.push((key, cue)))),
+                renew: Box::new(|key, goal| {
+                    CUES.with_borrow_mut(|cues| cues.push((key, format!("renew:{goal}"))))
+                }),
             });
             let session = Session::new(
                 scope,
@@ -1024,23 +1052,25 @@ mod tests {
                 key: "pet".into(),
                 text: None,
             });
-            // With no Pi extension called kill, the workbench takes /kill.
+            // /kill: the pet is shot and a fresh session asked for, with
+            // what to do next if given; Pi never sees it.
             assert!(session.submit("/kill".into(), false));
+            assert!(session.submit("/kill  finish the parser ".into(), false));
             assert!(!session.working.get_untracked(), "Pi never sees it");
             assert_eq!(
                 CUES.with_borrow(Clone::clone),
-                vec![(1, "kill".to_string()), (1, "kill".to_string())]
+                vec![
+                    (1, "kill".to_string()),
+                    (1, "kill".to_string()),
+                    (1, "renew:".to_string()),
+                    (1, "kill".to_string()),
+                    (1, "renew:finish the parser".to_string()),
+                ]
             );
-            // With one (Pi numbers a shared name, as kill:1), Pi gets it,
-            // except while it works, when it would refuse an extension command.
-            session.commands.set(vec![PiCommand {
-                name: "kill:1".into(),
-                description: String::new(),
-                source: "extension".into(),
-            }]);
-            session.working.set(true);
-            assert!(session.submit("/kill".into(), false));
-            assert_eq!(CUES.with_borrow(Vec::len), 3, "taken here while Pi works");
+            // A command that only starts the same is not /kill.
+            CUES.with_borrow_mut(Vec::clear);
+            assert!(session.submit("/killjoy".into(), false));
+            assert!(CUES.with_borrow(Vec::is_empty));
         });
     }
 

@@ -515,6 +515,13 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     state.start_with_session();
     state.restore();
     state.pets.start();
+    // /kill: a fresh session in place of the one that lost the thread.
+    let (renew, renew_state) = (state.sessions.renew(), state.clone());
+    floem::reactive::Effect::new(move |_| {
+        if let Some(renew) = renew.get() {
+            renew_state.renew_session(renew.session, renew.action);
+        }
+    });
     // Glitch on the taskbar too, not just in the title bar; once the window
     // has its native handle.
     #[cfg(windows)]

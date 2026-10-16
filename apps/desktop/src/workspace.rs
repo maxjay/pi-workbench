@@ -100,6 +100,15 @@ const ZOOMS: [f64; 13] = [
     0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
 ];
 
+/// What Pi is asked when a session is replaced: only what the fresh one
+/// strictly needs.
+const HANDOFF: &str = "This session has run so long that it has lost the thread, and is \
+about to be replaced by a fresh one. Write the handoff the fresh session starts from, \
+keeping only what is strictly important: the goal; decisions and constraints that still \
+hold; the current state of the work (done, in progress, broken); the files that matter and \
+why; open problems; and the next step. Leave out dead ends, chatter, and anything the fresh \
+session can find again in the code. Be brief and concrete. No preamble: start with the goal.";
+
 /// The zoom a step from `now`: larger (`step` > 0), smaller, or the usual.
 fn zoom_step(now: f64, step: i32) -> f64 {
     match step.cmp(&0) {
@@ -889,6 +898,120 @@ impl Workbench {
                 std::time::Duration::from_secs(180),
             ))
         });
+    }
+
+    /// `/kill`: a session that has run so long it has lost the thread is
+    /// replaced by a fresh one. Pi reads the old one (a copy, with no tools)
+    /// and writes down only what is strictly important; the fresh session
+    /// takes the old one's place in every pane with that in its composer,
+    /// ready to check and send. The old session stops and stays in Recent.
+    pub fn renew_session(self: &Rc<Self>, key: u64, goal: String) {
+        let Some(old) = self.sessions.find(key) else {
+            return;
+        };
+        let pet = self.pets.pet(key);
+        let Some(file) = old.file().get_untracked() else {
+            // Nothing said yet, so nothing to keep.
+            self.finish_renew(key, Ok(String::new()));
+            return;
+        };
+        pet.thinking.set(true);
+        self.status
+            .set("Keeping what matters from the session…".into());
+        let question = if goal.is_empty() {
+            HANDOFF.to_string()
+        } else {
+            format!("{HANDOFF}\n\nWhat the new session is to do next: {goal}")
+        };
+        let state = Rc::downgrade(self);
+        let finish = create_ext_action(self.scope, move |result: anyhow::Result<String>| {
+            if let Some(state) = state.upgrade() {
+                state.finish_renew(key, result.map_err(|e| format!("{e:#}")));
+            }
+        });
+        let (launch, root) = (self.sessions.launch().clone(), self.root.clone());
+        std::thread::spawn(move || {
+            finish(pi_client::ask_aside(
+                &launch,
+                &root,
+                Some(&file),
+                &question,
+                std::time::Duration::from_secs(300),
+            ))
+        });
+    }
+
+    /// The handoff is written (or could not be): the fresh session replaces
+    /// the old, or the old one is left as it was.
+    fn finish_renew(self: &Rc<Self>, key: u64, handoff: Result<String, String>) {
+        let pet = self.pets.pet(key);
+        pet.thinking.set(false);
+        let Some(old) = self.sessions.find(key) else {
+            return;
+        };
+        let handoff = match handoff {
+            Ok(handoff) => handoff,
+            Err(err) => {
+                pet.answer(None, format!("I couldn't start a fresh session: {err}"));
+                self.status.set("The session was kept as it was.".into());
+                return;
+            }
+        };
+        let title = old.title().get_untracked();
+        let fresh = self.sessions.create();
+        fresh.rename(&format!("{title} (fresh)"));
+        if !handoff.trim().is_empty() {
+            fresh.set_draft(&format!(
+                "Continuing from an earlier session, \"{title}\", that was reset. \
+                 What matters:\n\n{}",
+                handoff.trim()
+            ));
+        }
+        self.replace_session_tab(key, fresh.key);
+        // A popped-out pet stays out, as the fresh session's.
+        if self.pets.out.get_untracked() == Some(key) {
+            self.pets.pop_out(fresh.key);
+        }
+        self.close_session(key);
+        self.sessions.select(fresh.key);
+        let fresh_pet = self.pets.pet(fresh.key);
+        fresh_pet.greet();
+        fresh_pet.answer(
+            Some(fresh.key),
+            if handoff.trim().is_empty() {
+                "Fresh start.".into()
+            } else {
+                "Fresh start. I kept what matters: it's in the box; check it and send.".into()
+            },
+        );
+        self.status.set(format!(
+            "Started afresh from {title}; the old session is in Recent."
+        ));
+    }
+
+    /// Puts one session's tab where another's was, in every pane.
+    fn replace_session_tab(&self, old: u64, new: u64) {
+        let (from, to) = (Tab::Session(old), Tab::Session(new));
+        let holding = self.panes.holding(&from);
+        if holding.is_empty() {
+            self.show_session(new);
+            return;
+        }
+        for id in holding {
+            let Some(pane) = self.panes.pane(id) else {
+                continue;
+            };
+            pane.tabs.update(|tabs| {
+                for tab in tabs.iter_mut() {
+                    if *tab == from {
+                        *tab = to.clone();
+                    }
+                }
+            });
+            if pane.active.get_untracked().as_ref() == Some(&from) {
+                pane.active.set(Some(to.clone()));
+            }
+        }
     }
 
     /// Asks for a new file's path, starting in the folder of the file showing.
@@ -2123,6 +2246,30 @@ mod tests {
                 outside
             );
             assert_eq!(state.panes.focused().get_untracked(), pane);
+        });
+    }
+
+    #[test]
+    fn a_fresh_session_takes_the_old_ones_place() {
+        with_workspace(|state, _| {
+            let left = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            state.select_tab(left, Tab::File(a.clone()));
+            state.panes.show(left, Tab::Session(7));
+            let right = state.panes.split(left, Direction::Right).id;
+            state.panes.show(right, Tab::Session(7));
+            state.panes.show(right, Tab::File(a.clone()));
+            state.replace_session_tab(7, 8);
+            let tabs = |id| state.panes.pane(id).unwrap().tabs.get_untracked();
+            assert_eq!(tabs(left), vec![Tab::File(a.clone()), Tab::Session(8)]);
+            assert_eq!(showing(&state, left), Some(Tab::Session(8)), "in its place");
+            assert!(tabs(right).contains(&Tab::Session(8)));
+            assert!(!tabs(right).contains(&Tab::Session(7)));
+            assert_eq!(
+                showing(&state, right),
+                Some(Tab::File(a)),
+                "others untouched"
+            );
         });
     }
 

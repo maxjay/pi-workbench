@@ -26,6 +26,7 @@ pub struct Sessions {
     next_key: Cell<u64>,
     recent: RwSignal<Vec<SessionSummary>>,
     cue: RwSignal<Option<Cue>>,
+    renew: RwSignal<Option<Cue>>,
 }
 
 /// Something a session asked the pet to do.
@@ -49,12 +50,22 @@ impl Sessions {
     ) -> Rc<Self> {
         let recent = RwSignal::new(Vec::new());
         let cue = RwSignal::new(None::<Cue>);
-        let serial = Cell::new(0u64);
+        let renew = RwSignal::new(None::<Cue>);
+        let serial = Rc::new(Cell::new(0u64));
+        let renew_serial = serial.clone();
         Rc::new_cyclic(|this: &std::rc::Weak<Self>| {
             let this = this.clone();
             Self {
                 scope,
                 hooks: Rc::new(Hooks {
+                    renew: Box::new(move |session, goal| {
+                        renew_serial.set(renew_serial.get() + 1);
+                        renew.set(Some(Cue {
+                            session,
+                            action: goal,
+                            serial: renew_serial.get(),
+                        }));
+                    }),
                     cue: Box::new(move |session, action| {
                         serial.set(serial.get() + 1);
                         cue.set(Some(Cue {
@@ -80,6 +91,7 @@ impl Sessions {
                 next_key: Cell::new(0),
                 recent,
                 cue,
+                renew,
             }
         })
     }
@@ -87,6 +99,12 @@ impl Sessions {
     /// How Pi is started.
     pub fn launch(&self) -> &Launch {
         &self.launch
+    }
+
+    /// The latest `/kill`: the session to replace, with what to do next in
+    /// `action`.
+    pub fn renew(&self) -> ReadSignal<Option<Cue>> {
+        self.renew.read_only()
     }
 
     /// The latest thing a session asked the pet to do.
