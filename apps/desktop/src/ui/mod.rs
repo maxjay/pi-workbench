@@ -515,6 +515,14 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     state.start_with_session();
     state.restore();
     state.pets.start();
+    // Glitch on the taskbar too, not just in the title bar; once the window
+    // has its native handle.
+    #[cfg(windows)]
+    floem::action::exec_after(std::time::Duration::from_millis(50), move |_| {
+        if let Some(hwnd) = pet_window::native(window) {
+            pet_window::use_app_icon(hwnd);
+        }
+    });
     // The whole window drawn larger or smaller, as last left; set again only
     // when the zoom itself changes, not with every other layout change.
     let scale_layout = state.layout();
