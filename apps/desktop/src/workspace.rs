@@ -261,6 +261,9 @@ pub struct Workbench {
     /// The last pane used for files (showing one, or empty), where files
     /// opened from a session go.
     last_file_pane: Rc<Cell<Option<PaneId>>>,
+    /// The last pane that showed a session, where picking another one
+    /// switches to it.
+    last_session_pane: Rc<Cell<Option<PaneId>>>,
     last_terminal: Rc<Cell<Option<u64>>>,
     /// A tab being dragged, from its pane or from outside any (the explorer
     /// or the rail), and where it would land if dropped now.
@@ -351,6 +354,8 @@ impl Workbench {
         let (follow_pane, follow_terminal) = (last_pane.clone(), last_terminal.clone());
         let last_file_pane: Rc<Cell<Option<PaneId>>> = Rc::default();
         let follow_file = last_file_pane.clone();
+        let last_session_pane: Rc<Cell<Option<PaneId>>> = Rc::default();
+        let follow_session = last_session_pane.clone();
         Effect::new(move |_| {
             let id = follow_panes.focused().get();
             let Some(pane) = follow_panes.pane(id) else {
@@ -359,6 +364,7 @@ impl Workbench {
             match pane.active.get() {
                 Some(Tab::Session(key)) => {
                     follow_pane.set(Some(id));
+                    follow_session.set(Some(id));
                     if follow_sessions.active_key().get_untracked() != Some(key) {
                         follow_sessions.select(key);
                     }
@@ -393,6 +399,7 @@ impl Workbench {
             terminal_focused: RwSignal::new(false),
             last_pane,
             last_file_pane,
+            last_session_pane,
             last_terminal,
             dragging: RwSignal::new(None),
             drop_target: RwSignal::new(None),
@@ -517,15 +524,44 @@ impl Workbench {
     // ---- Sessions as tabs ----
 
     /// Shows a session: where it already is, or else in the focused pane.
+    /// Brings a session forward where it is shown, or else switches to it
+    /// in the pane used for sessions: the conversation there gives way to it
+    /// (and stays open in the rail), rather than gaining a tab beside it.
     pub fn show_session(&self, key: u64) {
         let tab = Tab::Session(key);
-        let pane = self
-            .panes
-            .find(&tab)
-            .unwrap_or_else(|| self.panes.focused().get_untracked());
+        let pane = self.panes.find(&tab).unwrap_or_else(|| {
+            let to = self.session_pane();
+            if let Some(shown @ Tab::Session(_)) =
+                self.panes.pane(to).and_then(|p| p.active.get_untracked())
+            {
+                self.panes.swap(to, &shown, tab.clone());
+            }
+            to
+        });
         self.panes.show(pane, tab);
         self.panes.focus(pane);
         self.sessions.select(key);
+    }
+
+    /// The pane sessions go to: the last that showed one, else one showing
+    /// one now, else the focused pane.
+    fn session_pane(&self) -> PaneId {
+        let shows_session = |id: PaneId| {
+            self.panes
+                .pane(id)
+                .is_some_and(|p| matches!(p.active.get_untracked(), Some(Tab::Session(_))))
+        };
+        self.last_session_pane
+            .get()
+            .filter(|id| self.panes.pane(*id).is_some())
+            .or_else(|| {
+                self.panes
+                    .all()
+                    .into_iter()
+                    .map(|p| p.id)
+                    .find(|id| shows_session(*id))
+            })
+            .unwrap_or_else(|| self.panes.focused().get_untracked())
     }
 
     /// Shows the front session, starting one if there is none.
@@ -540,9 +576,7 @@ impl Workbench {
 
     pub fn new_session(&self) {
         let session = self.sessions.create();
-        let tab = Tab::Session(session.key);
-        let pane = self.panes.focused().get_untracked();
-        self.panes.show(pane, tab);
+        self.show_session(session.key);
     }
 
     /// Stops a session's Pi and closes its tabs; it stays in Recent.
@@ -2322,6 +2356,30 @@ mod tests {
                 Some(Tab::File(a)),
                 "others untouched"
             );
+        });
+    }
+
+    #[test]
+    fn picking_a_session_switches_the_conversation_rather_than_adding_one() {
+        with_workspace(|state, _| {
+            // A file on the left, a conversation on the right; the file has
+            // the focus when another session is picked.
+            let left = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            state.select_tab(left, Tab::File(a.clone()));
+            let right = state.panes.split(left, Direction::Right).id;
+            state.select_tab(right, Tab::Session(1));
+            state.focus_pane(left);
+            state.show_session(2);
+            let tabs = |id| state.panes.pane(id).unwrap().tabs.get_untracked();
+            assert_eq!(tabs(right), vec![Tab::Session(2)], "switched in place");
+            assert_eq!(tabs(left), vec![Tab::File(a)], "the files are left be");
+            assert_eq!(state.focused().get_untracked(), right);
+            // One already shown is brought forward where it is.
+            state.panes.show(left, Tab::Session(3));
+            state.show_session(3);
+            assert_eq!(state.focused().get_untracked(), left);
+            assert_eq!(tabs(right), vec![Tab::Session(2)]);
         });
     }
 
