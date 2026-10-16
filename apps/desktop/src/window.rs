@@ -47,9 +47,9 @@ pub struct Window {
     pub collapsed: RwSignal<HashSet<PathBuf>>,
     /// Folders that have finished closing, while the window closes.
     closed: RefCell<HashSet<PathBuf>>,
-    /// The window is closing, showing each folder in turn; what it shows
-    /// then is not what to come back to.
-    closing: Rc<Cell<bool>>,
+    /// The folder shown when the window began closing: it shows each folder
+    /// in turn as it closes, which is not what to come back to.
+    closing_from: Rc<RefCell<Option<PathBuf>>>,
 }
 
 impl Window {
@@ -67,7 +67,7 @@ impl Window {
             stored: RwSignal::new(HashMap::new()),
             collapsed: RwSignal::new(HashSet::new()),
             closed: RefCell::new(HashSet::new()),
-            closing: Rc::default(),
+            closing_from: Rc::default(),
         })
     }
 
@@ -99,14 +99,13 @@ impl Window {
                 self.load_stored(folder);
             }
         }
-        let (opened, active, closing) = (self.opened, self.active, self.closing.clone());
+        let (opened, active, closing_from) = (self.opened, self.active, self.closing_from.clone());
         Effect::new(move |_| {
-            if closing.get() {
-                return;
-            }
+            let (folders, shown) = (opened.get(), active.get());
+            let shown = closing_from.borrow().clone().unwrap_or(shown);
             let state = layout::WindowState {
-                folders: opened.get(),
-                active: Some(active.get()).filter(|a| !a.as_os_str().is_empty()),
+                folders,
+                active: Some(shown).filter(|a| !a.as_os_str().is_empty()),
             };
             if let Ok(path) = layout::window_state_path() {
                 let _ = layout::save_window(&path, &state);
@@ -254,7 +253,7 @@ impl Window {
     pub fn show(&self, folder: &Path) -> Option<Rc<Workbench>> {
         match self.open(folder) {
             Ok(state) => {
-                self.closing.set(false);
+                self.closing_from.borrow_mut().take();
                 let root = state.root().to_path_buf();
                 if self.active.get_untracked() != root {
                     self.active.set(root.clone());
@@ -339,6 +338,12 @@ impl Window {
                 shown.report(message);
             }
         };
+        if let Some(state) = self.workspace(folder)
+            && let Err(err) = state.can_release()
+        {
+            report(err);
+            return;
+        }
         if self.active.get_untracked() == folder {
             let Some(next) = others.first() else {
                 report("The window's only folder stays open".into());
@@ -423,7 +428,9 @@ impl Window {
     /// Closes the window once every folder has: each saves its layout and
     /// asks about unsaved files, shown while it does.
     pub fn request_close(&self) {
-        self.closing.set(true);
+        self.closing_from
+            .borrow_mut()
+            .get_or_insert_with(|| self.active.get_untracked());
         self.closed.borrow_mut().clear();
         self.close_next();
     }

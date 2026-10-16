@@ -255,7 +255,10 @@ fn folder_menu(app: Rc<Window>, folder: PathBuf) {
     };
     let (new_app, new_folder) = (app.clone(), folder.clone());
     let mut items = vec![MenuItem::new("New session here", move || {
-        new_app.go(&new_folder, Some(String::new()));
+        let (app, folder) = (new_app.clone(), new_folder.clone());
+        after_click(move || {
+            app.go(&folder, Some(String::new()));
+        });
     })];
     if let Some(state) = app.workspace(&folder) {
         items = with_past_sessions(&state, items);
@@ -263,7 +266,8 @@ fn folder_menu(app: Rc<Window>, folder: PathBuf) {
     items.push(MenuItem::separator());
     let (close_app, close_folder) = (app.clone(), folder.clone());
     items.push(MenuItem::new("Close folder", move || {
-        close_app.close_folder(&close_folder)
+        let (app, folder) = (close_app.clone(), close_folder.clone());
+        after_click(move || app.close_folder(&folder));
     }));
     shown.open_menu(shown.pointer(), items);
 }

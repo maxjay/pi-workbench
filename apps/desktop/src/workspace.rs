@@ -310,6 +310,8 @@ pub struct Workbench {
     window: RefCell<Option<Rc<WindowLink>>>,
     /// Whether this folder is the one its window shows.
     shown: RwSignal<bool>,
+    /// The last save of what is open failed.
+    save_failed: Cell<bool>,
 }
 
 type AfterRestore = RefCell<Vec<Box<dyn FnOnce(&Rc<Workbench>)>>>;
@@ -447,6 +449,7 @@ impl Workbench {
             after_restore: RefCell::new(Vec::new()),
             window: RefCell::new(None),
             shown: RwSignal::new(true),
+            save_failed: Cell::new(false),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
         });
@@ -458,9 +461,13 @@ impl Workbench {
             if let Some(state) = saver.upgrade()
                 && state.restored.get()
             {
-                Effect::untrack(|| {
-                    if let Err(err) = state.persist_layout() {
-                        state.status.set(format!("Could not save layout: {err}"));
+                Effect::untrack(|| match state.persist_layout() {
+                    Ok(()) => state.save_failed.set(false),
+                    // Said once, not on every change, until a save works.
+                    Err(err) => {
+                        if !state.save_failed.replace(true) {
+                            state.status.set(format!("Could not save layout: {err}"));
+                        }
                     }
                 });
             }
@@ -468,14 +475,23 @@ impl Workbench {
         state
     }
 
+    /// Whether this folder can close now: not with unsaved files.
+    pub fn can_release(&self) -> Result<(), String> {
+        if self.documents.all_saved() {
+            Ok(())
+        } else {
+            Err("Save or close its unsaved files first".into())
+        }
+    }
+
     /// Closes this folder in its window: its layout saved, its sessions
     /// stopped (they stay in Pi's store). Refused while it has unsaved files.
     pub fn release(&self) -> Result<(), String> {
-        if !self.documents.all_saved() {
-            return Err("Save or close its unsaved files first".into());
-        }
+        self.can_release()?;
         self.persist_layout()
             .map_err(|err| format!("Could not save layout: {err}"))?;
+        // Saved as it is; stopping its sessions must not save them away.
+        self.restored.set(false);
         if self.pets.out.get_untracked().is_some() {
             self.pets.pop_in();
         }
@@ -2300,7 +2316,9 @@ impl Workbench {
     }
 
     fn persist_layout(&self) -> anyhow::Result<()> {
-        if !self.layout_writable {
+        // Before the saved layout is in place, what is open is not yet what
+        // was saved; nor once the folder is closing.
+        if !self.layout_writable || !self.restored.get() {
             return Ok(());
         }
         let mut layout = self.layout.get_untracked();
@@ -2516,7 +2534,12 @@ mod tests {
             // What is open is what is saved.
             state.persist_layout().unwrap();
             let saved = layout::load(&state.layout_path).unwrap();
-            assert_eq!(saved.sessions, vec![b.path, a.path]);
+            assert_eq!(saved.sessions, vec![b.path.clone(), a.path.clone()]);
+            // Closing the folder stops them, and keeps them for next time.
+            state.release().unwrap();
+            assert!(state.sessions.open().get_untracked().is_empty());
+            let saved = layout::load(&state.layout_path).unwrap();
+            assert_eq!(saved.sessions, vec![b.path, a.path], "not saved away");
         });
     }
 
@@ -3029,6 +3052,8 @@ mod tests {
     #[test]
     fn normal_close_saves_the_panes_before_closing_the_window() {
         with_workspace(|state, closed| {
+            // A folder whose saved layout is in place.
+            state.restored.set(true);
             let first = focused(&state).id;
             let path = file(&state, "test.rs", "saved");
             state.select_tab(first, Tab::File(path));
@@ -3062,8 +3087,25 @@ mod tests {
     }
 
     #[test]
+    fn closing_before_the_layout_is_restored_keeps_the_saved_one() {
+        with_workspace(|state, closed| {
+            let saved = Layout {
+                sessions: vec!["/s/kept.jsonl".into()],
+                ..Default::default()
+            };
+            layout::save(&state.layout_path, &saved).unwrap();
+            state.request_quit();
+            assert!(closed.get());
+            let after = layout::load(&state.layout_path).unwrap();
+            assert_eq!(after.sessions, saved.sessions, "not saved over");
+        });
+    }
+
+    #[test]
     fn failed_layout_save_keeps_window_open() {
         with_workspace(|state, closed| {
+            // A folder whose saved layout is in place.
+            state.restored.set(true);
             std::fs::create_dir(&state.layout_path).unwrap();
             state.request_quit();
             assert!(!closed.get());

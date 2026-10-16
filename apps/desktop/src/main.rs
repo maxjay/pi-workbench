@@ -95,20 +95,42 @@ fn report(message: &str) {
 /// A crash is written down, with where it happened, and said in a message
 /// box too where there may be no terminal to see it.
 fn record_crashes() {
+    let main = std::thread::current().id();
     let usual = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let details = format!("{info}\n\n{}\n", std::backtrace::Backtrace::force_capture());
+        let thread = std::thread::current();
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let details = format!(
+            "--- at {when} (Unix time), thread {}\n{info}\n\n{}\n",
+            thread.name().unwrap_or("unnamed"),
+            std::backtrace::Backtrace::force_capture()
+        );
+        // Added to, so an earlier crash's details are kept.
         let log = workbench_core::layout::crash_log_path()
             .ok()
             .filter(|path| {
+                use std::io::Write;
                 path.parent()
                     .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
-                    && std::fs::write(path, &details).is_ok()
+                    && std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .and_then(|mut file| file.write_all(details.as_bytes()))
+                        .is_ok()
             });
-        let place = log.map_or_else(String::new, |path| {
-            format!("\n\nThe details are in {}", path.display())
-        });
-        report(&format!("Pi Workbench stopped: {info}{place}"));
+        // Only a crash on the main thread stops the app; one in a helper
+        // thread is just written down. The box is shown from a thread of its
+        // own, so its message loop cannot call back into the crashing UI.
+        if thread.id() == main {
+            let place = log.map_or_else(String::new, |path| {
+                format!("\n\nThe details are in {}", path.display())
+            });
+            let message = format!("Pi Workbench stopped: {info}{place}");
+            let _ = std::thread::spawn(move || report(&message)).join();
+        }
         usual(info);
     }));
 }
