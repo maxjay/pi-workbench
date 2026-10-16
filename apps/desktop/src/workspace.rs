@@ -95,6 +95,11 @@ pub struct PopupMenu {
 /// A file dropped before it was read: its pane, place and whether split off.
 type Dropped = (PathBuf, PaneId, Option<usize>, bool);
 
+/// Subfolders listed in the folder menu; the rest are a browse away.
+const SUBFOLDERS: usize = 24;
+/// Folders Pi has worked in, listed in the folder menu.
+const RECENT_FOLDERS: usize = 8;
+
 /// The zoom steps, as in a browser.
 const ZOOMS: [f64; 13] = [
     0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
@@ -221,6 +226,8 @@ pub enum Confirm {
 /// External services the workbench uses.
 pub struct Integrations {
     pub pi: Launch,
+    /// Session keys, shared by the window's folders.
+    pub session_keys: Rc<Cell<u64>>,
 }
 
 /// One terminal tab's shell, started the first time the tab is shown.
@@ -296,6 +303,22 @@ pub struct Workbench {
     /// Things that must live as long as the window, such as the file watcher.
     kept: RefCell<Vec<Box<dyn std::any::Any>>>,
     close_window: Box<dyn Fn()>,
+    /// Whether the saved layout is in place, and what waits for it.
+    restored: Cell<bool>,
+    after_restore: AfterRestore,
+    /// Other folders are the window's business, as it shows one at a time.
+    window: RefCell<Option<Rc<WindowLink>>>,
+}
+
+type AfterRestore = RefCell<Vec<Box<dyn FnOnce(&Rc<Workbench>)>>>;
+
+/// What a workspace may ask of its window.
+pub struct WindowLink {
+    /// Brings a folder forward; with `Some(draft)`, in a new session there
+    /// with the draft in its composer.
+    pub go: Box<dyn Fn(PathBuf, Option<String>)>,
+    /// Folders Pi has worked in, open ones first.
+    pub folders: Box<dyn Fn() -> Vec<PathBuf>>,
 }
 
 impl Workbench {
@@ -323,6 +346,7 @@ impl Workbench {
             Scope::current(),
             root.clone(),
             integrations.pi,
+            integrations.session_keys,
             documents.clone(),
             move |tree_changed| {
                 // Pi wrote to disk; fold its changes into open buffers.
@@ -415,6 +439,9 @@ impl Workbench {
             prefill: RefCell::new(None),
             jump: RwSignal::new(None),
             start_session: Cell::new(false),
+            restored: Cell::new(false),
+            after_restore: RefCell::new(Vec::new()),
+            window: RefCell::new(None),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
         })
@@ -426,6 +453,143 @@ impl Workbench {
     /// Makes the window open a session once restored, if it has none.
     pub fn start_with_session(&self) {
         self.start_session.set(true);
+    }
+
+    /// Runs `then` once the saved layout is in place (now, if it is), so
+    /// what it opens is not swept away by the restore.
+    pub fn when_restored(self: &Rc<Self>, then: impl FnOnce(&Rc<Workbench>) + 'static) {
+        if self.restored.get() {
+            then(self);
+        } else {
+            self.after_restore.borrow_mut().push(Box::new(then));
+        }
+    }
+
+    /// How this workspace reaches its window's other folders.
+    pub fn link_window(&self, link: WindowLink) {
+        *self.window.borrow_mut() = Some(Rc::new(link));
+    }
+
+    /// Brings `folder` forward in the window; with `Some(draft)`, in a new
+    /// session there with the draft in its composer.
+    pub fn open_folder(&self, folder: PathBuf, draft: Option<String>) {
+        let link = self.window.borrow().clone();
+        match link {
+            Some(link) => (link.go)(folder, draft),
+            None => self
+                .status
+                .set("This window cannot open other folders".into()),
+        }
+    }
+
+    /// Where a session that has not started yet should run: a menu at `at`
+    /// for `folder`, to start there, step up or into a subfolder, pick a
+    /// folder Pi has worked in, or browse. Its draft goes with it.
+    pub fn choose_folder(self: &Rc<Self>, at: floem::kurbo::Point, folder: PathBuf, key: u64) {
+        let name = |path: &Path| {
+            path.file_name().map_or_else(
+                || pi_client::sessions::plain_cwd(path),
+                |n| n.to_string_lossy().into_owned(),
+            )
+        };
+        let here = folder.clone();
+        let state = self.clone();
+        let mut items = vec![
+            MenuItem::new(format!("Start in {}", name(&folder)), move || {
+                state.start_in(here.clone(), key)
+            })
+            .hint(pi_client::sessions::plain_cwd(&folder)),
+            MenuItem::separator(),
+        ];
+        let step = |to: PathBuf, title: String| {
+            let state = self.clone();
+            MenuItem::new(title, move || state.choose_folder(at, to.clone(), key))
+        };
+        if let Some(parent) = folder.parent().filter(|p| p.file_name().is_some()) {
+            items.push(step(parent.to_path_buf(), format!("‹ {}", name(parent))));
+        }
+        let mut children: Vec<PathBuf> = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|entry| entry.path())
+            .filter(|path| !name(path).starts_with('.'))
+            .collect();
+        children.sort_by_key(|path| name(path).to_lowercase());
+        let more = children.len().saturating_sub(SUBFOLDERS);
+        for child in children.into_iter().take(SUBFOLDERS) {
+            let title = format!("{} ›", name(&child));
+            items.push(step(child, title));
+        }
+        if more > 0 {
+            let state = self.clone();
+            items.push(MenuItem::new(
+                format!("{more} more: Browse…"),
+                move || state.browse_for_folder(key),
+            ));
+        }
+        let link = self.window.borrow().clone();
+        let known: Vec<PathBuf> = link
+            .map(|link| (link.folders)())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|known| *known != folder)
+            .take(RECENT_FOLDERS)
+            .collect();
+        if !known.is_empty() {
+            items.push(MenuItem::separator());
+            for known in known {
+                let state = self.clone();
+                let hint = known
+                    .parent()
+                    .map(pi_client::sessions::plain_cwd)
+                    .unwrap_or_default();
+                let title = name(&known);
+                items.push(
+                    MenuItem::new(title, move || state.start_in(known.clone(), key)).hint(hint),
+                );
+            }
+        }
+        items.push(MenuItem::separator());
+        let state = self.clone();
+        items.push(MenuItem::new("Browse…", move || {
+            state.browse_for_folder(key)
+        }));
+        self.open_menu(at, items);
+    }
+
+    /// The system's folder picker, for where a session that has not begun
+    /// should start.
+    fn browse_for_folder(self: &Rc<Self>, key: u64) {
+        let state = self.clone();
+        floem::open_file(
+            floem::FileDialogOptions::new()
+                .select_directories()
+                .title("Start the session in"),
+            move |picked| {
+                if let Some(path) = picked.and_then(|info| info.path.into_iter().next()) {
+                    state.start_in(path, key);
+                }
+            },
+        );
+    }
+
+    /// Starts a session that has not begun yet in `folder` instead: a new
+    /// one there takes its draft, and the window follows.
+    fn start_in(&self, folder: PathBuf, key: u64) {
+        let folder = folder.canonicalize().unwrap_or(folder);
+        if folder == self.root {
+            return;
+        }
+        let Some(session) = self.sessions.find(key) else {
+            return;
+        };
+        let draft = session.draft.text().to_string();
+        if !session.has_conversation() {
+            self.close_session(key);
+        }
+        self.open_folder(folder, Some(draft));
     }
     pub fn focused(&self) -> ReadSignal<PaneId> {
         self.panes.focused()
@@ -759,7 +923,7 @@ impl Workbench {
     }
 
     fn finish_restore(
-        &self,
+        self: &Rc<Self>,
         layout: Layout,
         tree: SavedNode,
         files: Vec<(PathBuf, Result<String, String>)>,
@@ -767,6 +931,11 @@ impl Workbench {
     ) {
         // One update, so the panes are built once.
         Effect::batch(|| self.apply_restore(layout, tree, files, summaries));
+        self.restored.set(true);
+        let waiting = std::mem::take(&mut *self.after_restore.borrow_mut());
+        for then in waiting {
+            then(self);
+        }
     }
 
     fn apply_restore(
@@ -2153,6 +2322,7 @@ mod tests {
                 dir.path().join("layout.json"),
                 Integrations {
                     pi: Launch::default(),
+                    session_keys: Rc::default(),
                 },
                 move || on_close.set(true),
             );

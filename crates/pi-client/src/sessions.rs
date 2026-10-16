@@ -261,6 +261,88 @@ pub fn files(cwd: &Path) -> Vec<(PathBuf, SystemTime)> {
         .collect()
 }
 
+/// The folders Pi has sessions in, each with when a session there last
+/// changed, newest first. Folders that no longer exist are left out.
+pub fn folders() -> Vec<(PathBuf, SystemTime)> {
+    let shared = std::env::var("PI_CODING_AGENT_SESSION_DIR")
+        .ok()
+        .filter(|dir| !dir.is_empty())
+        .map(|dir| expand_home(&dir))
+        .or_else(|| {
+            agent_dir()
+                .and_then(|dir| fs::read_to_string(dir.join("settings.json")).ok())
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .and_then(|settings| settings["sessionDir"].as_str().map(expand_home))
+        });
+    // One shared folder for every project, or one folder per project.
+    let dirs: Vec<PathBuf> = match shared {
+        Some(dir) => vec![dir],
+        None => agent_dir()
+            .and_then(|dir| fs::read_dir(dir.join("sessions")).ok())
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect(),
+    };
+    folders_of(dirs.iter().flat_map(|dir| jsonl_in(dir)))
+}
+
+fn jsonl_in(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).and_then(|m| m.modified()).ok()?;
+            Some((path, modified))
+        })
+        .collect()
+}
+
+/// The working folders recorded in session files' headers, each with its
+/// newest session's time.
+fn folders_of(
+    files: impl IntoIterator<Item = (PathBuf, SystemTime)>,
+) -> Vec<(PathBuf, SystemTime)> {
+    let mut folders: Vec<(String, SystemTime)> = Vec::new();
+    for (path, modified) in files {
+        let Some(cwd) = header_cwd(&path) else {
+            continue;
+        };
+        match folders.iter_mut().find(|(known, _)| same_dir(known, &cwd)) {
+            Some((_, newest)) => *newest = (*newest).max(modified),
+            None => folders.push((cwd, modified)),
+        }
+    }
+    let mut folders: Vec<(PathBuf, SystemTime)> = folders
+        .into_iter()
+        .map(|(cwd, modified)| (PathBuf::from(cwd), modified))
+        .filter(|(cwd, _)| cwd.is_dir())
+        .collect();
+    folders.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
+    folders
+}
+
+/// The folder a session file says its session works in.
+pub fn cwd_of(path: &Path) -> Option<PathBuf> {
+    header_cwd(path).map(PathBuf::from)
+}
+
+/// The working folder in a session file's first line.
+fn header_cwd(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let line = BufReader::new(file).lines().next()?.ok()?;
+    let header: Value = serde_json::from_str(&line).ok()?;
+    (header["type"] == "session")
+        .then(|| header["cwd"].as_str().map(String::from))
+        .flatten()
+}
+
 /// Whether a session started in `session_cwd` belongs to the project at `cwd`.
 pub fn belongs(session_cwd: &Path, cwd: &Path) -> bool {
     same_dir(&session_cwd.to_string_lossy(), &plain_cwd(cwd))
@@ -322,6 +404,40 @@ mod tests {
                 ("/work/b.md".to_owned(), "Bee".to_owned()),
                 ("c.rs".to_owned(), "b".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn folders_are_the_session_headers_folders_newest_first() {
+        let store = tempfile::tempdir().unwrap();
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let header = |cwd: &Path| {
+            format!(
+                r#"{{"type":"session","id":"x","cwd":{}}}"#,
+                serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+            )
+        };
+        let at = |secs| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let mut files = Vec::new();
+        for (name, cwd, secs) in [
+            ("1.jsonl", a.path().to_path_buf(), 10),
+            ("2.jsonl", b.path().to_path_buf(), 20),
+            ("3.jsonl", a.path().to_path_buf(), 30),
+            ("4.jsonl", store.path().join("gone"), 40),
+        ] {
+            let path = store.path().join(name);
+            fs::write(&path, header(&cwd) + "\n").unwrap();
+            files.push((path, at(secs)));
+        }
+        files.push((store.path().join("missing.jsonl"), at(50)));
+        let folders = folders_of(files);
+        assert_eq!(
+            folders,
+            vec![
+                (a.path().to_path_buf(), at(30)),
+                (b.path().to_path_buf(), at(20))
+            ],
+            "newest first, once each, only folders that exist"
         );
     }
 

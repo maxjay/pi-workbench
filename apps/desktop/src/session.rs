@@ -145,6 +145,9 @@ pub struct Hooks {
     /// `/kill`: this session (by key) is to be replaced by a fresh one that
     /// keeps only what matters, with what to do next, if given.
     pub renew: Box<dyn Fn(u64, String)>,
+    /// Pi moved this session (by key) into another folder, as an extension
+    /// can by switching to a session there.
+    pub moved: Box<dyn Fn(u64, PathBuf)>,
 }
 
 /// What a `pet` status asks of the pet, without the part that only makes
@@ -253,10 +256,12 @@ pub struct Session {
     /// Stable within this window; Pi's own id is only known once started.
     pub key: u64,
     scope: Scope,
-    root: PathBuf,
+    /// The folder it works in, its files and what to tell; all change when
+    /// Pi moves it to another folder.
+    root: RefCell<PathBuf>,
     launch: Launch,
-    documents: Rc<Documents>,
-    hooks: Rc<Hooks>,
+    documents: RefCell<Rc<Documents>>,
+    hooks: RefCell<Rc<Hooks>>,
     file: RwSignal<Option<PathBuf>>,
     title: RwSignal<String>,
     working: RwSignal<bool>,
@@ -320,10 +325,10 @@ impl Session {
                 me: me.clone(),
                 key,
                 scope,
-                root,
+                root: RefCell::new(root),
                 launch,
-                documents,
-                hooks,
+                documents: RefCell::new(documents),
+                hooks: RefCell::new(hooks),
                 file: RwSignal::new(resume.map(|s| s.path.clone())),
                 title: RwSignal::new(resume.map_or("New session".into(), |s| s.title.clone())),
                 working: RwSignal::new(false),
@@ -477,14 +482,18 @@ impl Session {
         let queue = self.queue.clone();
         let trigger = self.trigger;
         let resume = self.file.get_untracked();
-        let mut process =
-            PiProcess::spawn(&self.launch, &self.root, resume.as_deref(), move |event| {
+        let mut process = PiProcess::spawn(
+            &self.launch,
+            &self.root(),
+            resume.as_deref(),
+            move |event| {
                 queue.lock().unwrap().push_back(event);
                 register_ext_trigger(trigger);
-            })
-            .map_err(|err| {
-                err.context("Is Pi installed? npm install -g @earendil-works/pi-coding-agent")
-            })?;
+            },
+        )
+        .map_err(|err| {
+            err.context("Is Pi installed? npm install -g @earendil-works/pi-coding-agent")
+        })?;
         self.stopped.set(false);
         if resume.is_some() {
             process.request("get_messages")?;
@@ -526,8 +535,8 @@ impl Session {
             if self.working.get_untracked() {
                 self.stop();
             }
-            (self.hooks.cue)(self.key, "kill".into());
-            (self.hooks.renew)(self.key, goal.trim().to_string());
+            (self.hooks().cue)(self.key, "kill".into());
+            (self.hooks().renew)(self.key, goal.trim().to_string());
             return true;
         }
         if self.working.get_untracked() {
@@ -555,7 +564,7 @@ impl Session {
         self.stop_requested.set(false);
         self.working.set(true);
         self.sending.set(true);
-        self.documents.save_all();
+        self.documents().save_all();
         self.prompt_when_saved(text);
         true
     }
@@ -563,7 +572,7 @@ impl Session {
     fn prompt_when_saved(self: &Rc<Self>, text: String) {
         // Saves made while the last run settles are written once it has;
         // Pi must see them.
-        if self.documents.any_saving() || self.settling.get() {
+        if self.documents().any_saving() || self.settling.get() {
             // Weak, so closing the session meanwhile does not start Pi for it.
             let session = Rc::downgrade(self);
             exec_after(Duration::from_millis(30), move |_| {
@@ -575,12 +584,12 @@ impl Session {
         }
         // Saves during the run would race Pi's writes; they wait for it and
         // the edits are merged with Pi's instead.
-        self.documents.hold_saves();
+        self.documents().hold_saves();
         self.holding.set(true);
         // Snapshot first, so "since this turn" includes nothing Pi did.
         // Weak, so closing the session during the snapshot does not start Pi.
         let session = Rc::downgrade(self);
-        (self.hooks.snapshot)(Box::new(move |tree| {
+        (self.hooks().snapshot)(Box::new(move |tree| {
             let Some(session) = session.upgrade() else {
                 return;
             };
@@ -617,6 +626,37 @@ impl Session {
             self.stop_requested.set(true);
             self.with_process(PiProcess::abort);
         }
+    }
+
+    /// Whether anything has been asked yet.
+    pub fn has_conversation(&self) -> bool {
+        self.entries
+            .with_untracked(|e| e.iter().any(|e| e.kind == EntryKind::User))
+    }
+
+    /// The folder Pi works in for this session.
+    pub fn root(&self) -> PathBuf {
+        self.root.borrow().clone()
+    }
+    fn documents(&self) -> Rc<Documents> {
+        self.documents.borrow().clone()
+    }
+    fn hooks(&self) -> Rc<Hooks> {
+        self.hooks.borrow().clone()
+    }
+
+    /// Pi moved this session to `root`: from now on it belongs to that
+    /// folder's workspace. Pi itself carries on as it is. The turns compared
+    /// the old folder's files, so they go.
+    pub fn rebind(&self, root: PathBuf, documents: Rc<Documents>, hooks: Rc<Hooks>) {
+        if self.holding.replace(false) {
+            self.documents().release_saves();
+        }
+        *self.root.borrow_mut() = root;
+        *self.documents.borrow_mut() = documents;
+        *self.hooks.borrow_mut() = hooks;
+        self.open_turn.set(None);
+        self.turns.set(Vec::new());
     }
 
     /// Gives the session a title its first prompt will not replace, kept by
@@ -675,14 +715,14 @@ impl Session {
         let hold = self
             .holding
             .replace(false)
-            .then(|| SaveHold(self.documents.clone()));
-        (self.hooks.files_changed)(true);
-        (self.hooks.settled)();
+            .then(|| SaveHold(self.documents()));
+        (self.hooks().files_changed)(true);
+        (self.hooks().settled)();
         // Snapshot what Pi did before held saves land on top of it.
         if let Some(index) = self.open_turn.take() {
             self.settling.set(true);
             let session = self.me.clone();
-            (self.hooks.snapshot)(Box::new(move |after| {
+            (self.hooks().snapshot)(Box::new(move |after| {
                 if let Some(session) = session.upgrade() {
                     session.turns.update(|turns| {
                         if let Some(turn) = turns.get_mut(index) {
@@ -826,7 +866,15 @@ impl Session {
             }
             "get_state" => {
                 if let Some(file) = data["sessionFile"].as_str() {
-                    self.file.set(Some(file.into()));
+                    let file = PathBuf::from(file);
+                    // An extension can move Pi to a session in another
+                    // folder; the session's file says which.
+                    if let Some(cwd) = pi_client::sessions::cwd_of(&file)
+                        && !pi_client::sessions::belongs(&cwd, &self.root())
+                    {
+                        (self.hooks().moved)(self.key, cwd);
+                    }
+                    self.file.set(Some(file));
                 }
                 if let Some(name) = data["sessionName"].as_str().filter(|n| !n.is_empty()) {
                     self.title.set(shorten(name));
@@ -911,7 +959,7 @@ impl Session {
                     self.tree_changed.set(true);
                 }
                 if self.running_tools.get() == 0 {
-                    (self.hooks.files_changed)(self.tree_changed.replace(false));
+                    (self.hooks().files_changed)(self.tree_changed.replace(false));
                 }
             }
             // Also catches anything a tool changed after its end event.
@@ -932,12 +980,16 @@ impl Session {
                 }
                 self.notice(format!("Pi rejected {command}: {error}"), true);
             }
-            // An extension consumed the prompt; no run or settle event follows.
+            // An extension consumed the prompt; no run or settle event
+            // follows. A command can have moved Pi to another folder.
             Event::Response {
                 command,
                 handled: true,
                 ..
-            } if command == "prompt" => self.finish_run(),
+            } if command == "prompt" => {
+                self.finish_run();
+                self.with_process(|pi| pi.request("get_state"));
+            }
             Event::Response { command, data, .. } => self.handle_response(&command, data),
             Event::Ask(ask) => {
                 let (title, message) = (ask.title.clone(), ask.message.clone());
@@ -972,7 +1024,17 @@ impl Session {
                 if key == "pet"
                     && let Some(cue) = text.as_deref().and_then(pet_cue)
                 {
-                    (self.hooks.cue)(self.key, cue);
+                    (self.hooks().cue)(self.key, cue);
+                }
+                // An extension saying which folder Pi now works in, as a
+                // workspace tool can after making one and moving into it.
+                if key == "workspace"
+                    && let Some(folder) = text.as_deref().map(str::trim).filter(|t| !t.is_empty())
+                {
+                    let folder = PathBuf::from(folder);
+                    if folder.is_dir() && !pi_client::sessions::belongs(&folder, &self.root()) {
+                        (self.hooks().moved)(self.key, folder);
+                    }
                 }
             }
             Event::Exited(message) => {
@@ -991,7 +1053,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         if self.holding.replace(false) {
-            self.documents.release_saves();
+            self.documents().release_saves();
         }
         self.scope.dispose();
     }
@@ -1022,6 +1084,9 @@ mod tests {
                 cue: Box::new(|key, cue| CUES.with_borrow_mut(|cues| cues.push((key, cue)))),
                 renew: Box::new(|key, goal| {
                     CUES.with_borrow_mut(|cues| cues.push((key, format!("renew:{goal}"))))
+                }),
+                moved: Box::new(|key, to| {
+                    CUES.with_borrow_mut(|cues| cues.push((key, format!("moved:{}", to.display()))))
                 }),
             });
             let session = Session::new(
@@ -1247,6 +1312,51 @@ mod tests {
             session.sending.set(true);
             assert!(!session.submit("again".into(), false));
             assert!(session.entries().get().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_session_file_in_another_folder_means_pi_moved_there() {
+        with_session(|session, _| {
+            CUES.with_borrow_mut(Vec::clear);
+            let elsewhere = tempfile::tempdir().unwrap();
+            let file = elsewhere.path().join("s.jsonl");
+            let header = json!({"type": "session", "id": "x", "cwd": elsewhere.path()});
+            std::fs::write(&file, format!("{header}\n")).unwrap();
+            session.handle(Event::Response {
+                command: "get_state".into(),
+                error: None,
+                handled: false,
+                data: json!({"sessionFile": file}),
+            });
+            let moved = CUES.with_borrow(Clone::clone);
+            assert_eq!(
+                moved,
+                vec![(1, format!("moved:{}", elsewhere.path().display()))]
+            );
+            assert_eq!(session.file().get(), Some(file));
+        });
+    }
+
+    #[test]
+    fn an_extension_can_say_pi_now_works_in_another_folder() {
+        with_session(|session, _| {
+            CUES.with_borrow_mut(Vec::clear);
+            let elsewhere = tempfile::tempdir().unwrap();
+            let status = |text: Option<&str>| {
+                session.handle(Event::Status {
+                    key: "workspace".into(),
+                    text: text.map(String::from),
+                })
+            };
+            status(Some("/no/such/folder"));
+            status(None);
+            status(Some(&elsewhere.path().to_string_lossy()));
+            assert_eq!(
+                CUES.with_borrow(Clone::clone),
+                vec![(1, format!("moved:{}", elsewhere.path().display()))],
+                "only a folder that exists"
+            );
         });
     }
 

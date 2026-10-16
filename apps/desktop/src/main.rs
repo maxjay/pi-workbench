@@ -20,6 +20,7 @@ mod syntax;
 mod terminal;
 mod ui;
 mod watcher;
+mod window;
 mod workspace;
 
 use anyhow::{Context, Result, ensure};
@@ -73,11 +74,8 @@ fn open_folder() {
 
 /// Opens a workspace folder in a new window.
 fn open_window(path: &Path) -> Result<()> {
-    let (root, layout) = workspace_paths(path)?;
-    floem::new_window(
-        move |id| ui::workbench(id, root, layout),
-        Some(window_config()),
-    );
+    let (root, _) = workspace_paths(path)?;
+    floem::new_window(move |id| ui::workbench(id, root), Some(window_config()));
     Ok(())
 }
 
@@ -157,12 +155,9 @@ fn run() -> Result<()> {
         args.next().is_none(),
         "Usage: pi-workbench [workspace-folder]"
     );
-    let (root, layout) = workspace_paths(&path)?;
+    let (root, _) = workspace_paths(&path)?;
     floem::Application::new()
-        .window(
-            move |id| ui::workbench(id, root, layout),
-            Some(window_config()),
-        )
+        .window(move |id| ui::workbench(id, root), Some(window_config()))
         .run();
     Ok(())
 }

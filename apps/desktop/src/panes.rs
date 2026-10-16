@@ -612,8 +612,9 @@ impl Panes {
         saved: &SavedNode,
         mut restore: impl FnMut(&SavedTab) -> Option<Tab>,
     ) -> Vec<PaneId> {
+        // Fresh ids, never the old ones: a view still showing an old pane
+        // must see a different tree, even when the layout is the same shape.
         self.panes.borrow_mut().clear();
-        self.next.set(0);
         let tree = self.restore_node(saved, &mut restore);
         let order = tree.leaves();
         self.set_layout(tree, Some(order.first().copied().unwrap_or(1)));
