@@ -24,7 +24,7 @@ use floem::views::editor::{
 use pi_client::{Launch, sessions::SessionSummary};
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
@@ -99,6 +99,30 @@ type Dropped = (PathBuf, PaneId, Option<usize>, bool);
 const ZOOMS: [f64; 13] = [
     0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
 ];
+
+/// What Pi is asked when a session is replaced: only what the fresh one
+/// strictly needs.
+const HANDOFF: &str = "This session has run so long that it has lost the thread, and is \
+about to be replaced by a fresh one. Write the handoff the fresh session starts from, \
+keeping only what is strictly important: the goal; decisions and constraints that still \
+hold; the current state of the work (done, in progress, broken); the files that matter and \
+why; open problems; and the next step. Leave out dead ends, chatter, and anything the fresh \
+session can find again in the code. Be brief and concrete. No preamble: start with the goal.";
+
+/// The title of a session started afresh from one titled `title`: short
+/// enough to keep its " (fresh)", and never "(fresh) (fresh)".
+fn fresh_title(title: &str) -> String {
+    const FRESH: &str = " (fresh)";
+    let mut base = title.trim();
+    while let Some(rest) = base.strip_suffix(FRESH) {
+        base = rest.trim_end();
+    }
+    let base = match base.char_indices().nth(38) {
+        Some((cut, _)) => format!("{}…", base[..cut].trim_end()),
+        None => base.to_string(),
+    };
+    format!("{base}{FRESH}")
+}
 
 /// The zoom a step from `now`: larger (`step` > 0), smaller, or the usual.
 fn zoom_step(now: f64, step: i32) -> f64 {
@@ -218,6 +242,9 @@ pub struct Workbench {
     pub panes: Rc<Panes>,
     scope: Scope,
     pending: RefCell<HashSet<PathBuf>>,
+    /// Sessions being started afresh by `/kill`, each with the scope its
+    /// handoff runs in.
+    renewing: RefCell<HashMap<u64, Scope>>,
     root: PathBuf,
     layout_path: PathBuf,
     layout: RwSignal<Layout>,
@@ -353,6 +380,7 @@ impl Workbench {
             panes,
             scope: Scope::current(),
             pending: RefCell::new(HashSet::new()),
+            renewing: RefCell::new(HashMap::new()),
             root,
             layout_path,
             layout_writable,
@@ -889,6 +917,153 @@ impl Workbench {
                 std::time::Duration::from_secs(180),
             ))
         });
+    }
+
+    /// `/kill`: a session that has run so long it has lost the thread is
+    /// replaced by a fresh one. Pi reads the old one (a copy, with no tools)
+    /// and writes down only what is strictly important; the fresh session
+    /// takes the old one's place in every pane with that in its composer,
+    /// ready to check and send. The old session stops and stays in Recent.
+    pub fn renew_session(self: &Rc<Self>, key: u64, goal: String) {
+        let Some(old) = self.sessions.find(key) else {
+            return;
+        };
+        if self.renewing.borrow().contains_key(&key) {
+            self.status
+                .set("Already starting that session afresh…".into());
+            return;
+        }
+        let scope = self.scope.create_child();
+        self.renewing.borrow_mut().insert(key, scope);
+        self.pets.pet(key).thinking.set(true);
+        self.status
+            .set("Keeping what matters from the session…".into());
+        // A run /kill stopped is still writing its last turn; Pi reads the
+        // session once it has.
+        let (state, working, started) = (Rc::downgrade(self), old.working(), Cell::new(false));
+        scope.enter(|| {
+            Effect::new(move |_| {
+                if working.get() || started.replace(true) {
+                    return;
+                }
+                if let Some(state) = state.upgrade() {
+                    floem::reactive::Effect::untrack(|| state.write_handoff(key, &goal));
+                }
+            });
+        });
+    }
+
+    /// Has Pi write the handoff for a session `/kill` is starting afresh.
+    fn write_handoff(self: &Rc<Self>, key: u64, goal: &str) {
+        let state = Rc::downgrade(self);
+        let finish = create_ext_action(self.scope, move |result: anyhow::Result<String>| {
+            if let Some(state) = state.upgrade() {
+                state.finish_renew(key, result.map_err(|e| format!("{e:#}")));
+            }
+        });
+        let Some(file) = self
+            .sessions
+            .find(key)
+            .and_then(|s| s.file().get_untracked())
+        else {
+            // Nothing said yet, so nothing to keep; finished from the event
+            // loop all the same, not inside the effect that called this.
+            finish(Ok(String::new()));
+            return;
+        };
+        let question = if goal.is_empty() {
+            HANDOFF.to_string()
+        } else {
+            format!("{HANDOFF}\n\nWhat the new session is to do next: {goal}")
+        };
+        let (launch, root) = (self.sessions.launch().clone(), self.root.clone());
+        std::thread::spawn(move || {
+            finish(pi_client::ask_aside(
+                &launch,
+                &root,
+                Some(&file),
+                &question,
+                std::time::Duration::from_secs(300),
+            ))
+        });
+    }
+
+    /// The handoff is written (or could not be): the fresh session replaces
+    /// the old, or the old one is left as it was.
+    fn finish_renew(self: &Rc<Self>, key: u64, handoff: Result<String, String>) {
+        if let Some(scope) = self.renewing.borrow_mut().remove(&key) {
+            scope.dispose();
+        }
+        // Closed meanwhile, and its pet gone with it: nothing to replace.
+        let Some(old) = self.sessions.find(key) else {
+            return;
+        };
+        let pet = self.pets.pet(key);
+        pet.thinking.set(false);
+        let handoff = match handoff {
+            Ok(handoff) => handoff,
+            Err(err) => {
+                pet.answer(None, format!("I couldn't start a fresh session: {err}"));
+                self.status.set("The session was kept as it was.".into());
+                return;
+            }
+        };
+        let title = old.title().get_untracked();
+        let fresh = self.sessions.create();
+        // With nothing kept, its first prompt names it as usual.
+        if !handoff.trim().is_empty() {
+            fresh.rename(&fresh_title(&title));
+            fresh.set_draft(&format!(
+                "Continuing from an earlier session, \"{title}\", that was reset. \
+                 What matters:\n\n{}",
+                handoff.trim()
+            ));
+        }
+        self.replace_session_tab(key, fresh.key);
+        // A popped-out pet stays out, as the fresh session's.
+        if self.pets.out.get_untracked() == Some(key) {
+            self.pets.pop_out(fresh.key);
+        }
+        self.close_session(key);
+        self.sessions.select(fresh.key);
+        let fresh_pet = self.pets.pet(fresh.key);
+        fresh_pet.greet();
+        fresh_pet.answer(
+            Some(fresh.key),
+            if handoff.trim().is_empty() {
+                "Fresh start.".into()
+            } else {
+                "Fresh start. I kept what matters: it's in the box; check it and send.".into()
+            },
+        );
+        self.status.set(format!(
+            "Started afresh from {title}; the old session is in Recent."
+        ));
+    }
+
+    /// Puts one session's tab where another's was, in every pane.
+    fn replace_session_tab(&self, old: u64, new: u64) {
+        let (from, to) = (Tab::Session(old), Tab::Session(new));
+        let holding = self.panes.holding(&from);
+        if holding.is_empty() {
+            self.show_session(new);
+            return;
+        }
+        for id in holding {
+            let Some(pane) = self.panes.pane(id) else {
+                continue;
+            };
+            pane.tabs.update(|tabs| {
+                for tab in tabs.iter_mut() {
+                    if *tab == from {
+                        *tab = to.clone();
+                    }
+                }
+            });
+            if pane.active.get_untracked().as_ref() == Some(&from) {
+                pane.active.set(Some(to.clone()));
+            }
+        }
     }
 
     /// Asks for a new file's path, starting in the folder of the file showing.
@@ -2124,6 +2299,39 @@ mod tests {
             );
             assert_eq!(state.panes.focused().get_untracked(), pane);
         });
+    }
+
+    #[test]
+    fn a_fresh_session_takes_the_old_ones_place() {
+        with_workspace(|state, _| {
+            let left = focused(&state).id;
+            let a = file(&state, "a.rs", "a");
+            state.select_tab(left, Tab::File(a.clone()));
+            state.panes.show(left, Tab::Session(7));
+            let right = state.panes.split(left, Direction::Right).id;
+            state.panes.show(right, Tab::Session(7));
+            state.panes.show(right, Tab::File(a.clone()));
+            state.replace_session_tab(7, 8);
+            let tabs = |id| state.panes.pane(id).unwrap().tabs.get_untracked();
+            assert_eq!(tabs(left), vec![Tab::File(a.clone()), Tab::Session(8)]);
+            assert_eq!(showing(&state, left), Some(Tab::Session(8)), "in its place");
+            assert!(tabs(right).contains(&Tab::Session(8)));
+            assert!(!tabs(right).contains(&Tab::Session(7)));
+            assert_eq!(
+                showing(&state, right),
+                Some(Tab::File(a)),
+                "others untouched"
+            );
+        });
+    }
+
+    #[test]
+    fn a_fresh_title_keeps_its_mark_once() {
+        assert_eq!(fresh_title("Login fix"), "Login fix (fresh)");
+        assert_eq!(fresh_title("Login fix (fresh)"), "Login fix (fresh)");
+        let long = fresh_title(&"word ".repeat(20));
+        assert!(long.ends_with("… (fresh)"), "{long}");
+        assert_eq!(crate::session::shorten(&long), long, "fits a title");
     }
 
     #[test]

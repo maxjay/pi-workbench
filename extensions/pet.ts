@@ -1,12 +1,15 @@
 /**
  * Cues for Pi Workbench's pet, Glitch.
  *
- * - `/kill` gets the pet shot and thrown across the screen.
  * - `/pet-say <text>` has it say something in its bubble.
  *
  * The workbench listens for the `pet` status line, which this sets for a
- * moment. Other Pi clients just show it briefly in their footer. Without
- * this extension the workbench still takes `/kill` itself.
+ * moment; other Pi clients just show it briefly in their footer. Any
+ * extension can cue the pet the same way: `kill:<id>` (shot and thrown),
+ * `say:<text>`, `wave` or `jump`.
+ *
+ * `/kill` itself belongs to the workbench: it shoots the pet and replaces
+ * the session with a fresh one that keeps only what matters.
  *
  * Install: copy into ~/.pi/agent/extensions/ (or a project's
  * .pi/extensions/), then reload Pi.
@@ -29,10 +32,6 @@ function cue(ctx: ExtensionContext, text: string) {
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.registerCommand("kill", {
-		description: "Shoot the workbench's pet",
-		handler: async (_args, ctx) => cue(ctx, `kill:${Date.now()}`),
-	});
 	pi.registerCommand("pet-say", {
 		description: "Have the workbench's pet say something",
 		handler: async (args, ctx) => {

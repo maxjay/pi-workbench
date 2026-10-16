@@ -170,12 +170,18 @@ Out on the desktop:
 
 Elsewhere, a popped-out pet sits in a small card instead, and a throw just drops it.
 
-**`/kill`** is for a session whose model has run on so long that it has lost the plot. That session's pet gets shot: the window shakes and the pet is thrown across it. Popped out, it is thrown across the screen. It lies there for a moment and gets up; in the window it walks back to where it was. The shot is the one animation kept for this.
+**`/kill`** is for a session whose model has run on so long that it has lost the plot. It starts the session afresh, keeping only what is strictly important:
 
-The workbench handles `/kill` as a stand-in until a Pi extension provides one, and while Pi is working, since Pi does not run extension commands mid-run. [extensions/pet.ts](extensions/pet.ts) shows the cue: it adds `/kill` and `/pet-say <text>` by setting Pi's `pet` status line. An extension that resets a session's context can do the same:
+1. That session's pet is shot. The window shakes and the pet is thrown across it, or, popped out, across the screen.
+2. Pi reads a copy of the old session, with no tools, and writes a handoff: the goal, decisions and constraints that still hold, the state of the work, the files that matter, open problems and the next step. Dead ends and chatter are left out.
+3. A fresh session takes the old one's place in every pane, with the handoff in its composer to check and send. The old session stops and stays in Recent.
+
+Add what to do next, as in `/kill finish the parser`, and the handoff ends with it. If the handoff cannot be written, the old session stays open; a run `/kill` stopped stays stopped.
+
+The workbench handles `/kill` itself; Pi never sees it. Extensions can still cue the pet through Pi's `pet` status line, and [extensions/pet.ts](extensions/pet.ts) adds `/pet-say <text>` that way:
 
 ```ts
-ctx.ui.setStatus("pet", `kill:${Date.now()}`); // this session's pet is shot
+ctx.ui.setStatus("pet", `kill:${Date.now()}`); // shot and thrown (just the animation)
 ctx.ui.setStatus("pet", "say:Tests pass");     // said in its bubble
 ctx.ui.setStatus("pet", "wave");               // or "jump"
 ```

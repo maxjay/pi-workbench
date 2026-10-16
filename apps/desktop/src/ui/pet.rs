@@ -1197,9 +1197,11 @@ impl Body {
     /// Its speech, just above its antenna (the pet at `at`, physical).
     fn speech_follows(&self, pets: &Pets, at: (i32, i32)) {
         if let Some(hwnd) = pets.speech_hwnd.get() {
-            let (_, _, _, height) = super::pet_window::window_rect(hwnd);
+            let (left, now, _, height) = super::pet_window::window_rect(hwnd);
             let top = at.1 + (f64::from(self.height()) * HEADROOM) as i32 - height - 4;
-            super::pet_window::move_window(hwnd, (at.0, top));
+            if (left, now) != (at.0, top) {
+                super::pet_window::move_window(hwnd, (at.0, top));
+            }
         }
     }
 }
@@ -1472,21 +1474,26 @@ impl Outside {
                 move_body.move_to(at);
                 move_body.speech_follows(&move_pets, at);
             });
-            // When it starts or stops talking, its speech finds it.
+            // When it starts or stops talking, or its chat opens, its speech
+            // finds it at once, frame or no frame.
             let (talk_body, talk_pets, talk_pet) = (body.clone(), pets.clone(), pet.clone());
-            let updates = pet.updates();
+            let (updates, chat_open) = (pet.updates(), pet.chat_open);
             Effect::new(move |_| {
                 updates.track();
+                chat_open.track();
                 let _ = talk_pet.questions();
                 let (body, pets) = (talk_body.clone(), talk_pets.clone());
                 floem::action::exec_after(std::time::Duration::from_millis(60), move |_| {
                     body.speech_follows(&pets, body.place());
                 });
             });
-            // Looks at the pointer anywhere on the screen.
-            let (look_body, look_pet) = (body.clone(), pet.clone());
+            // Looks at the pointer anywhere on the screen; and, every frame,
+            // its speech is just above it, however the speech has grown
+            // (opening the chat, say) or wherever it went.
+            let (look_body, look_pet, look_pets) = (body.clone(), pet.clone(), pets.clone());
             Effect::new(move |_| {
                 pose.track();
+                look_body.speech_follows(&look_pets, look_body.place());
                 let (x, y) = look_body.place();
                 let face = (
                     f64::from(x) + f64::from(look_body.width()) / 2.0,
