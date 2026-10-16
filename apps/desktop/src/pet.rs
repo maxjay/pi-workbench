@@ -15,6 +15,7 @@ use floem::{
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::HashMap,
+    f64::consts::{PI, TAU},
     rc::{Rc, Weak},
     time::{Duration, Instant},
 };
@@ -159,6 +160,9 @@ pub struct Flight {
     pub walk_home: bool,
     /// The hardest it hit something since the last step, to complain about.
     pub hit: f64,
+    /// How far round it has turned, and how fast it turns (radians a second).
+    pub angle: f64,
+    pub spin: f64,
 }
 
 /// Pulls it down, in pixels per second per second.
@@ -173,9 +177,29 @@ impl Flight {
         self.at.1 >= self.bounds.floor - 0.5 && self.velocity.1.abs() < f64::EPSILON
     }
 
-    /// Down, still, and home if it walks there: over.
+    /// Down, still, upright, and home if it walks there: over.
     pub fn done(&self) -> bool {
-        self.on_floor() && self.velocity.0.abs() < 1.0 && (!self.walk_home || self.at.0.abs() < 1.0)
+        self.on_floor()
+            && self.velocity.0.abs() < 1.0
+            && self.spin == 0.0
+            && self.angle == 0.0
+            && (!self.walk_home || self.at.0.abs() < 1.0)
+    }
+
+    /// Tumbling while it flies; on the floor it slows and rights itself.
+    fn turn(&mut self, dt: f64) {
+        self.angle += self.spin * dt;
+        if self.on_floor() {
+            self.spin *= 0.4_f64.powf(dt * 30.0);
+            if self.spin.abs() < 0.6 {
+                self.spin = 0.0;
+                let upright = (self.angle + PI).rem_euclid(TAU) - PI;
+                self.angle = upright * 0.7_f64.powf(dt * 30.0);
+                if self.angle.abs() < 0.02 {
+                    self.angle = 0.0;
+                }
+            }
+        }
     }
 
     /// Moves it on `dt` seconds: falling, bouncing off the walls, ceiling
@@ -184,6 +208,7 @@ impl Flight {
         let dt = dt.clamp(0.0, 0.05);
         let b = self.bounds;
         self.hit = 0.0;
+        self.turn(dt);
         if self.on_floor() && self.velocity.0.abs() < 1.0 {
             // Down and still: walk home, or stay.
             if self.walk_home {
@@ -203,10 +228,12 @@ impl Flight {
             self.at.0 = b.left;
             self.hit = self.hit.max(self.velocity.0.abs());
             self.velocity.0 = self.velocity.0.abs() * BOUNCE;
+            self.spin = -self.spin * 0.7;
         } else if self.at.0 > b.right {
             self.at.0 = b.right;
             self.hit = self.hit.max(self.velocity.0.abs());
             self.velocity.0 = -self.velocity.0.abs() * BOUNCE;
+            self.spin = -self.spin * 0.7;
         }
         if self.at.1 < b.top {
             self.at.1 = b.top;
@@ -226,9 +253,59 @@ impl Flight {
             } else {
                 self.velocity.1 = -self.velocity.1 * BOUNCE;
                 self.velocity.0 *= 0.85;
+                self.spin *= 0.6;
             }
         }
         self
+    }
+}
+
+/// Spinning a held pet round winds it up: the turns it makes add to the
+/// throw, and it tumbles as it flies.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Windup {
+    last: Option<f64>,
+    /// Radians turned while held, one way positive, the other negative.
+    pub turned: f64,
+}
+
+/// The fastest a pet can be thrown, in logical pixels a second.
+const TOP_SPEED: f64 = 9000.0;
+
+impl Windup {
+    /// The pointer (or the pet) moved this far.
+    pub fn moved(&mut self, dx: f64, dy: f64) {
+        if dx.hypot(dy) < 1.5 {
+            return;
+        }
+        let heading = dy.atan2(dx);
+        if let Some(last) = self.last {
+            let turn = (heading - last + PI).rem_euclid(TAU) - PI;
+            // Doubling back is a shake, not a swing round.
+            if turn.abs() < PI * 0.75 {
+                self.turned += turn;
+            }
+        }
+        self.last = Some(heading);
+    }
+
+    /// Whole turns wound up.
+    pub fn turns(&self) -> f64 {
+        self.turned.abs() / TAU
+    }
+
+    /// The throw for a release at `velocity`: faster for every turn wound
+    /// up, and spinning with them (and a little from the throw itself).
+    pub fn throw(&self, velocity: (f64, f64)) -> ((f64, f64), f64) {
+        let boost = (1.0 + 0.8 * self.turns()).min(5.0);
+        let (mut vx, mut vy) = (velocity.0 * boost, velocity.1 * boost);
+        let speed = vx.hypot(vy);
+        if speed > TOP_SPEED {
+            vx *= TOP_SPEED / speed;
+            vy *= TOP_SPEED / speed;
+        }
+        let spin = self.turned.signum() * self.turns().min(6.0) * 9.0 + vx / 400.0;
+        ((vx, vy), spin)
     }
 }
 
@@ -330,6 +407,8 @@ pub struct Pose {
     pub column: u32,
     pub thrown: (f64, f64),
     pub shake: (f64, f64),
+    /// Turned round this far, in radians, spinning or tumbling.
+    pub angle: f64,
 }
 
 const STILL: Pose = Pose {
@@ -337,6 +416,7 @@ const STILL: Pose = Pose {
     column: 0,
     thrown: (0.0, 0.0),
     shake: (0.0, 0.0),
+    angle: 0.0,
 };
 
 /// The first line of a reply, without its markdown, cut short.
@@ -372,8 +452,10 @@ pub struct Pet {
     shot: RwSignal<Option<u64>>,
     /// In the air after a fling or a hop.
     flight: RwSignal<Option<Flight>>,
-    /// Held by the pointer, this far from its place (in a conversation).
+    /// Held by the pointer, this far from its place.
     pub held: RwSignal<Option<(f64, f64)>>,
+    /// Held and swung round: how far round it has turned.
+    pub swing: RwSignal<Option<f64>>,
     /// When it last complained, so it does not say "Ow" every bounce.
     complained: Cell<u64>,
     /// How far a `/kill` throws, as the view with room for it decides.
@@ -407,6 +489,7 @@ impl Pet {
                 shot: RwSignal::new(None),
                 flight: RwSignal::new(None),
                 held: RwSignal::new(None),
+                swing: RwSignal::new(None),
                 complained: Cell::new(0),
                 throw_distance: Cell::new(240.0),
                 moving: RwSignal::new(None),
@@ -473,6 +556,14 @@ impl Pet {
                 column: frame.column,
                 thrown: frame.thrown,
                 shake: frame.shake,
+                angle: 0.0,
+            };
+        }
+        if let Some(angle) = self.swing.get() {
+            // Being whirled round: legs up, turning with it.
+            return Pose {
+                angle,
+                ..still(Anim::Jump, 2)
             };
         }
         if let Some(at) = self.held.get() {
@@ -499,6 +590,7 @@ impl Pet {
             };
             return Pose {
                 thrown: flight.at,
+                angle: flight.angle,
                 ..still(anim, column)
             };
         }
@@ -669,17 +761,27 @@ impl Pet {
             self.finished.set(None);
         }
         if self.shot.get_untracked().is_none() && self.flight.get_untracked().is_none() {
-            self.launch((0.0, 0.0), (0.0, -720.0), Bounds::HOP, false);
+            self.launch((0.0, 0.0), (0.0, -720.0), 0.0, Bounds::HOP, false);
         }
     }
 
     /// Let go of at `at`, moving at `velocity`: it flies, bounces off what
     /// is in the way, and lands, walking home after if `walk_home`.
-    pub fn launch(&self, at: (f64, f64), velocity: (f64, f64), bounds: Bounds, walk_home: bool) {
+    pub fn launch(
+        &self,
+        at: (f64, f64),
+        velocity: (f64, f64),
+        spin: f64,
+        bounds: Bounds,
+        walk_home: bool,
+    ) {
         if self.shot.get_untracked().is_some() {
             return;
         }
+        // Thrown spinning, it carries on from where the swing left it.
+        let angle = self.swing.get_untracked().unwrap_or(0.0);
         self.held.set(None);
+        self.swing.set(None);
         self.once.set(None);
         self.flight.set(Some(Flight {
             id: self.now(),
@@ -688,10 +790,22 @@ impl Pet {
             bounds,
             walk_home,
             hit: 0.0,
+            angle,
+            spin,
         }));
     }
 
+    /// Whether it is on the move: flying, thrown, swung or dragged, when
+    /// the clock runs faster.
+    fn busy(&self) -> bool {
+        self.flight.with_untracked(Option::is_some)
+            || self.shot.with_untracked(Option::is_some)
+            || self.swing.with_untracked(Option::is_some)
+            || self.moving.with_untracked(Option::is_some)
+    }
+
     /// In the air, rolling or walking home.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn flight(&self) -> RwSignal<Option<Flight>> {
         self.flight
     }
@@ -733,6 +847,7 @@ impl Pet {
         self.once.set(None);
         self.moving.set(None);
         self.held.set(None);
+        self.swing.set(None);
         self.flight.set(None);
         self.shot.set(Some(self.now()));
     }
@@ -788,6 +903,10 @@ fn replied(session: &Session) -> bool {
     })
 }
 
+/// A pet thrown out of the window: from where on the screen (logical
+/// pixels), how fast, and spinning how fast.
+pub type Launch = (floem::kurbo::Point, (f64, f64), f64);
+
 /// The pets of a window's sessions, their shared clock, and which one, if
 /// any, is popped out.
 pub struct Pets {
@@ -813,7 +932,9 @@ pub struct Pets {
     pub dock: RwSignal<(f64, f64)>,
     /// Thrown out of the window: from where on the screen (logical pixels),
     /// and how fast.
-    launch_out: Cell<Option<(floem::kurbo::Point, (f64, f64))>>,
+    launch_out: Cell<Option<Launch>>,
+    /// The popped-out pet's speech window, to move with it (Windows).
+    pub speech_hwnd: Cell<Option<isize>>,
 }
 
 impl Pets {
@@ -834,6 +955,7 @@ impl Pets {
                 shake: RwSignal::new((0.0, 0.0)),
                 dock: RwSignal::new((136.0, 34.0)),
                 launch_out: Cell::new(None),
+                speech_hwnd: Cell::new(None),
             })
         });
         pets.watch();
@@ -864,15 +986,15 @@ impl Pets {
     }
 
     /// Thrown out of the window: it flies on from that point on the screen.
-    pub fn fling_out(&self, key: u64, at: floem::kurbo::Point, velocity: (f64, f64)) {
-        self.launch_out.set(Some((at, velocity)));
+    pub fn fling_out(&self, key: u64, at: floem::kurbo::Point, velocity: (f64, f64), spin: f64) {
+        self.launch_out.set(Some((at, velocity, spin)));
         self.hidden.set(false);
         self.out.set(Some(key));
     }
 
     /// The throw a pet popped out with, if it was thrown out.
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn take_launch(&self) -> Option<(floem::kurbo::Point, (f64, f64))> {
+    pub fn take_launch(&self) -> Option<Launch> {
         self.launch_out.take()
     }
 
@@ -917,7 +1039,8 @@ impl Pets {
         }
     }
 
-    /// Advances the clock while pets are shown, about thirty times a second.
+    /// Advances the clock while pets are shown: about thirty times a second
+    /// at rest, over a hundred while one is on the move.
     fn tick(pets: Weak<Pets>) {
         let Some(this) = pets.upgrade() else { return };
         // Its window closed and its signals with it: the clock stops.
@@ -927,8 +1050,10 @@ impl Pets {
         if !hidden {
             this.advance();
         }
+        let busy = this.pets.borrow().values().any(|pet| pet.busy());
         drop(this);
-        exec_after(Duration::from_millis(33), move |_| Pets::tick(pets));
+        let every = if busy { 8 } else { 33 };
+        exec_after(Duration::from_millis(every), move |_| Pets::tick(pets));
     }
 
     /// Moves the clock on now, as while a popped-out pet is dragged and
@@ -1132,6 +1257,8 @@ mod tests {
             bounds,
             walk_home: false,
             hit: 0.0,
+            angle: 0.0,
+            spin: 14.0,
         };
         let mut hit_wall = false;
         for _ in 0..600 {
@@ -1140,7 +1267,7 @@ mod tests {
             hit_wall |= flight.hit > 1000.0 && flight.at.0 == -300.0;
         }
         assert!(hit_wall, "it hits the left wall hard");
-        assert!(flight.done(), "and comes to rest: {flight:?}");
+        assert!(flight.done(), "and comes to rest, upright: {flight:?}");
         // Walking home from where it landed.
         let mut home = Flight {
             walk_home: true,
@@ -1155,6 +1282,7 @@ mod tests {
             at: (0.0, 0.0),
             velocity: (0.0, -720.0),
             bounds: Bounds::HOP,
+            spin: 0.0,
             ..flight
         };
         let mut highest: f64 = 0.0;
@@ -1163,6 +1291,35 @@ mod tests {
             highest = highest.min(hop.at.1);
         }
         assert!(highest < -80.0 && hop.done() && hop.at.1 == 0.0);
+    }
+
+    #[test]
+    fn swinging_a_pet_round_winds_up_the_throw() {
+        let mut windup = Windup::default();
+        // Two turns round a circle, a step at a time.
+        for step in 0..=64 {
+            let a = f64::from(step) * TAU / 32.0;
+            windup.moved(-a.sin() * 10.0, a.cos() * 10.0);
+        }
+        assert!((windup.turns() - 2.0).abs() < 0.1, "{}", windup.turns());
+        let ((vx, vy), spin) = windup.throw((1000.0, 0.0));
+        assert!(vx > 2500.0 && vy == 0.0, "faster for the turns: {vx}");
+        assert!(spin > 15.0, "and spinning: {spin}");
+        // Back and forth winds nothing up.
+        let mut wobble = Windup::default();
+        for step in 0..40 {
+            let dx = if step % 2 == 0 { 10.0 } else { -10.0 };
+            wobble.moved(dx, 0.0);
+        }
+        assert!(wobble.turns() < 0.1);
+        // However hard, there is a limit.
+        let mut wound = Windup {
+            turned: 100.0,
+            ..Windup::default()
+        };
+        wound.moved(1.0, 1.0);
+        let ((vx, vy), _) = wound.throw((8000.0, 0.0));
+        assert!(vx.hypot(vy) <= TOP_SPEED + 1.0);
     }
 
     #[test]

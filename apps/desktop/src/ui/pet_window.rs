@@ -18,12 +18,12 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
             GetCursorPos, GetWindowRect, HTCAPTION, MA_NOACTIVATE, MF_STRING, PostMessageW,
-            RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SendMessageW, SetForegroundWindow,
-            ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA,
-            UpdateLayeredWindow, WM_CLOSE, WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOVING, WM_NCDESTROY, WM_NCLBUTTONDOWN,
-            WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-            WS_EX_TOPMOST, WS_POPUP,
+            RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            SendMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, TPM_NONOTIFY,
+            TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA, UpdateLayeredWindow, WM_CLOSE,
+            WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+            WM_MOVING, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -274,6 +274,16 @@ impl Layered {
         }
     }
 
+    /// Moves the window, leaving what it shows.
+    pub fn move_to(&self, at: (i32, i32)) {
+        move_window(self.hwnd as isize, at);
+        WINDOWS.with_borrow_mut(|w| {
+            if let Some(entry) = w.get_mut(&(self.hwnd as isize)) {
+                entry.left = at.0;
+            }
+        });
+    }
+
     /// Shows straight-alpha RGBA pixels, moving the window to `at` if given.
     pub fn draw(&self, rgba: &[u8], width: u32, height: u32, at: Option<(i32, i32)>) {
         if rgba.len() < (width * height * 4) as usize || width == 0 || height == 0 {
@@ -371,6 +381,50 @@ impl Drop for Layered {
             PostMessageW(self.hwnd, WM_CLOSE, 0, 0);
         }
     }
+}
+
+/// Moves any window of this app, at once, even while the system is
+/// dragging another (physical pixels).
+pub fn move_window(hwnd: isize, at: (i32, i32)) {
+    unsafe {
+        SetWindowPos(
+            hwnd as HWND,
+            std::ptr::null_mut(),
+            at.0,
+            at.1,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Where a window is and its size: left, top, width, height (physical).
+pub fn window_rect(hwnd: isize) -> (i32, i32, i32, i32) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe { GetWindowRect(hwnd as HWND, &mut rect) };
+    (
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    )
+}
+
+/// A Floem window's native handle, to move it directly.
+pub fn native(id: floem::window::WindowId) -> Option<isize> {
+    use floem::window::WindowIdExt;
+    use raw_window_handle::RawWindowHandle;
+    id.with_window_handle(|handle| match handle.as_raw() {
+        RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+        _ => None,
+    })
+    .flatten()
 }
 
 /// The pointer's place on the screen (physical pixels).

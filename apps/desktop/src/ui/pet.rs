@@ -2,8 +2,10 @@
 //! has to say; each session's pet in its view; and the one popped out onto
 //! the desktop, which a `/kill` throws across the screen.
 use super::{color, session::ask_card};
+#[cfg(windows)]
+use crate::pet::Bounds;
 use crate::{
-    pet::{Bounds, CELL, Pet, PetWindow, Pets},
+    pet::{CELL, Pet, PetWindow, Pets, Windup},
     workspace::Workbench,
 };
 use floem::{
@@ -53,6 +55,9 @@ fn release_velocity(trail: &[(std::time::Instant, (f64, f64))]) -> (f64, f64) {
 #[cfg_attr(not(windows), allow(dead_code))]
 const HEADROOM: f64 = 0.3;
 
+/// A frame's pixels, scaled.
+type Pixels = Rc<Vec<u8>>;
+
 /// A frame cut from the sheet, and its key in the renderer's cache.
 type Frame = (peniko::ImageBrush, Vec<u8>);
 
@@ -61,6 +66,9 @@ struct Sheet {
     image: image::RgbaImage,
     dark: bool,
     frames: RefCell<HashMap<(u32, u32), Frame>>,
+    /// Frames scaled for the popped-out pet.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    scaled: RefCell<HashMap<(u32, u32, u32, u32), Pixels>>,
 }
 
 impl Sheet {
@@ -93,15 +101,57 @@ impl Sheet {
 
     /// A frame scaled to a size, nearest-neighbour, as RGBA pixels.
     #[cfg_attr(not(windows), allow(dead_code))]
-    fn pixels(&self, row: u32, column: u32, width: u32, height: u32) -> Vec<u8> {
-        image::imageops::resize(
-            &self.cell(row, column),
-            width,
-            height,
-            image::imageops::FilterType::Nearest,
-        )
-        .into_raw()
+    fn pixels(&self, row: u32, column: u32, width: u32, height: u32) -> Rc<Vec<u8>> {
+        self.scaled
+            .borrow_mut()
+            .entry((row, column, width, height))
+            .or_insert_with(|| {
+                Rc::new(
+                    image::imageops::resize(
+                        &self.cell(row, column),
+                        width,
+                        height,
+                        image::imageops::FilterType::Nearest,
+                    )
+                    .into_raw(),
+                )
+            })
+            .clone()
     }
+}
+
+/// RGBA pixels turned `angle` radians about their middle, on a square
+/// canvas `side` wide that holds them at any angle.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn turned(pixels: &[u8], width: u32, height: u32, side: u32, angle: f64) -> Vec<u8> {
+    let mut out = vec![0u8; (side * side * 4) as usize];
+    let (pad_x, pad_y) = ((side - width) / 2, (side - height) / 2);
+    if angle == 0.0 {
+        for y in 0..height {
+            let from = (y * width * 4) as usize;
+            let to = (((y + pad_y) * side + pad_x) * 4) as usize;
+            out[to..to + (width * 4) as usize]
+                .copy_from_slice(&pixels[from..from + (width * 4) as usize]);
+        }
+        return out;
+    }
+    let middle = f64::from(side) / 2.0;
+    let (half_w, half_h) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+    // Each pixel of the canvas, turned back, lands on the one it shows.
+    let (sin, cos) = (-angle).sin_cos();
+    for y in 0..side {
+        for x in 0..side {
+            let (dx, dy) = (f64::from(x) + 0.5 - middle, f64::from(y) + 0.5 - middle);
+            let (sx, sy) = (dx * cos - dy * sin + half_w, dx * sin + dy * cos + half_h);
+            if sx < 0.0 || sy < 0.0 || sx >= f64::from(width) || sy >= f64::from(height) {
+                continue;
+            }
+            let from = ((sy as u32 * width + sx as u32) * 4) as usize;
+            let to = ((y * side + x) * 4) as usize;
+            out[to..to + 4].copy_from_slice(&pixels[from..from + 4]);
+        }
+    }
+    out
 }
 
 /// The sheet for a dark or light theme, decoded once.
@@ -120,6 +170,7 @@ fn sheet(dark: bool) -> Rc<Sheet> {
                     image,
                     dark,
                     frames: RefCell::new(HashMap::new()),
+                    scaled: RefCell::new(HashMap::new()),
                 })
             })
             .clone()
@@ -405,6 +456,9 @@ fn roaming(
         offset: Point,
         moved: bool,
         trail: Vec<(std::time::Instant, (f64, f64))>,
+        /// Swung round, it winds up.
+        windup: Windup,
+        pointer: Point,
     }
     let grab: Rc<RefCell<Option<Grab>>> = Rc::default();
     let body = sprite(&pet, DOCKED);
@@ -426,6 +480,8 @@ fn roaming(
                 offset: Point::new(at.x - left, at.y - top),
                 moved: false,
                 trail: Vec::new(),
+                windup: Windup::default(),
+                pointer: at,
             });
         })
         .on_event_stop(el::PointerMove, move |_, _| {
@@ -440,7 +496,16 @@ fn roaming(
                 return;
             }
             grab.moved = true;
-            if (left - before).abs() > 0.5 {
+            grab.windup
+                .moved(at.x - grab.pointer.x, at.y - grab.pointer.y);
+            grab.pointer = at;
+            if grab.windup.turns() > 0.15 {
+                // Swung round, it turns with the swing.
+                if move_pet.moving.get_untracked().is_some() {
+                    move_pet.moving.set(None);
+                }
+                move_pet.swing.set(Some(grab.windup.turned));
+            } else if (left - before).abs() > 0.5 {
                 move_pet.moving.set(Some(left > before));
             }
             let now = std::time::Instant::now();
@@ -459,9 +524,12 @@ fn roaming(
                 return;
             }
             // Thrown hard, it leaves the window, from where it is on the
-            // screen; let go gently, it stays where it is put.
-            let velocity = release_velocity(&grab.trail);
-            if cfg!(windows) && velocity.0.hypot(velocity.1) > FLING_SPEED {
+            // screen, faster and spinning for every turn it was swung; let
+            // go gently, it stays where it is put.
+            let (velocity, spin) = grab.windup.throw(release_velocity(&grab.trail));
+            if !(cfg!(windows) && velocity.0.hypot(velocity.1) > FLING_SPEED) {
+                up_pet.swing.set(None);
+            } else {
                 let sprite = body_id.get_visual_rect();
                 let origin = main
                     .position_on_screen_including_frame()
@@ -471,22 +539,27 @@ fn roaming(
                     });
                 if let Some(origin) = origin {
                     let at = Point::new(origin.x + sprite.x0, origin.y + sprite.y0);
-                    up_pets.fling_out(key, at, velocity);
+                    up_pets.fling_out(key, at, velocity, spin);
                 }
             }
         });
-    let figure = Stack::new((body, controls(&pets, &pet, hovered))).style(move |s| {
-        let thrown = pose.get().thrown;
-        s.translate_x(thrown.0).translate_y(thrown.1)
-    });
+    let figure = Stack::new((body, controls(&pets, &pet, hovered)))
+        .style(move |s| s.rotate(floem::unit::Angle::Rad(pose.get().angle)));
     // The bubble moves left to stay in the window near its right edge.
     let said = bubble(&state, &pet).style(move |s| {
         let (left, _) = dock.get();
         let room = window.get().width - left - BUBBLE_WIDTH - 8.0;
         s.translate_x(room.min(0.0).max(-left))
     });
+    // Thrown or hopping, what it says goes with it.
     Stack::vertical((said, figure))
-        .style(|s| s.items_start().gap(4))
+        .style(move |s| {
+            let thrown = pose.get().thrown;
+            s.items_start()
+                .gap(4)
+                .translate_x(thrown.0)
+                .translate_y(thrown.1)
+        })
         .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
         .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
 }
@@ -532,7 +605,7 @@ struct Outside {
     scope: floem::reactive::Scope,
     /// Held for as long as it is out; dropping it closes it.
     #[cfg(windows)]
-    _sprite: Rc<super::pet_window::Layered>,
+    _body: Rc<Body>,
 }
 
 impl Outside {
@@ -715,6 +788,8 @@ fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoVie
         Memo::new(move |_| !pet.questions().is_empty() || updates.with(|u| !u.is_empty()))
     };
     Effect::new(move |_| id.set_visible(speaking.get()));
+    #[cfg(windows)]
+    pets.speech_hwnd.set(super::pet_window::native(id));
     Stack::new((said,))
         .style(|s| {
             s.size_full()
@@ -730,6 +805,7 @@ fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoVie
         .on_event_cont(el::WindowClosed, move |_, _| {
             if pets.window.get() == PetWindow::Open(id) {
                 pets.window.set(PetWindow::Closed);
+                pets.speech_hwnd.set(None);
             }
         })
 }
@@ -745,10 +821,53 @@ impl Outside {
     }
 }
 
+/// The popped-out pet's see-through window. It is square, wide enough to
+/// turn the pet in, so the pet's own place is inset in it.
+#[cfg(windows)]
+struct Body {
+    layered: Rc<super::pet_window::Layered>,
+    width: u32,
+    height: u32,
+    side: u32,
+    scale: f64,
+}
+
+#[cfg(windows)]
+impl Body {
+    fn pad(&self) -> (i32, i32) {
+        (
+            ((self.side - self.width) / 2) as i32,
+            ((self.side - self.height) / 2) as i32,
+        )
+    }
+    /// The pet's own place on the screen: left, top (physical).
+    fn place(&self) -> (i32, i32) {
+        let (x, y, _, _) = self.layered.rect();
+        let pad = self.pad();
+        (x + pad.0, y + pad.1)
+    }
+    fn move_to(&self, at: (i32, i32)) {
+        let pad = self.pad();
+        self.layered.move_to((at.0 - pad.0, at.1 - pad.1));
+    }
+    fn paint(&self, pixels: &[u8], angle: f64) {
+        let canvas = turned(pixels, self.width, self.height, self.side, angle);
+        self.layered.draw(&canvas, self.side, self.side, None);
+    }
+    /// Its speech, just above its antenna (the pet at `at`, physical).
+    fn speech_follows(&self, pets: &Pets, at: (i32, i32)) {
+        if let Some(hwnd) = pets.speech_hwnd.get() {
+            let (_, _, _, height) = super::pet_window::window_rect(hwnd);
+            let top = at.1 + (f64::from(self.height) * HEADROOM) as i32 - height - 4;
+            super::pet_window::move_window(hwnd, (at.0, top));
+        }
+    }
+}
+
 #[cfg(windows)]
 impl Outside {
     /// The pet alone, see-through, on top of everything, with its speech
-    /// in a small window above it.
+    /// in a small window above it that goes where it goes.
     fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Self {
         use super::pet_window::{Events, Layered};
         let pets = state.pets.clone();
@@ -758,11 +877,16 @@ impl Outside {
         struct Handler {
             pets: std::rc::Weak<Pets>,
             pet: std::rc::Weak<Pet>,
-            /// Moves the speech above the pet after a drag.
-            place_speech: Box<dyn Fn()>,
-            /// Where the window was while dragged, to throw it with.
+            body: RefCell<Option<std::rc::Weak<Body>>>,
+            /// Where it was while dragged, to throw it with, and how far
+            /// round it has been swung.
             trail: RefCell<Vec<(std::time::Instant, (f64, f64))>>,
-            sprite: RefCell<Option<std::rc::Weak<Layered>>>,
+            windup: RefCell<Windup>,
+        }
+        impl Handler {
+            fn body(&self) -> Option<Rc<Body>> {
+                self.body.borrow().as_ref().and_then(|b| b.upgrade())
+            }
         }
         impl Events for Handler {
             fn clicked(&self) {
@@ -771,45 +895,66 @@ impl Outside {
                 }
             }
             fn dragged(&self, at: (i32, i32), dx: i32) {
+                let (Some(pets), Some(pet), Some(body)) =
+                    (self.pets.upgrade(), self.pet.upgrade(), self.body())
+                else {
+                    return;
+                };
+                let scale = body.scale;
+                let here = (f64::from(at.0) / scale, f64::from(at.1) / scale);
                 let now = std::time::Instant::now();
-                let mut trail = self.trail.borrow_mut();
-                trail.push((now, (f64::from(at.0), f64::from(at.1))));
-                trail.retain(|(when, _)| now - *when < std::time::Duration::from_millis(200));
-                drop(trail);
-                if let (Some(pets), Some(pet)) = (self.pets.upgrade(), self.pet.upgrade()) {
-                    if dx != 0 && pet.moving.get_untracked() != Some(dx > 0) {
-                        pet.moving.set(Some(dx > 0));
+                {
+                    let mut trail = self.trail.borrow_mut();
+                    if let Some(&(_, last)) = trail.last() {
+                        self.windup
+                            .borrow_mut()
+                            .moved(here.0 - last.0, here.1 - last.1);
                     }
-                    // The app's timers wait while the system moves the window.
-                    pets.advance();
+                    trail.push((now, here));
+                    trail.retain(|(when, _)| now - *when < std::time::Duration::from_millis(200));
                 }
+                let windup = *self.windup.borrow();
+                if windup.turns() > 0.15 {
+                    if pet.moving.get_untracked().is_some() {
+                        pet.moving.set(None);
+                    }
+                    pet.swing.set(Some(windup.turned));
+                } else if dx != 0 && pet.moving.get_untracked() != Some(dx > 0) {
+                    pet.moving.set(Some(dx > 0));
+                }
+                // Its speech keeps up, though the app's timers wait while the
+                // system moves the window.
+                let pad = body.pad();
+                body.speech_follows(&pets, (at.0 + pad.0, at.1 + pad.1));
+                pets.advance();
             }
             fn dropped(&self) {
                 let trail = std::mem::take(&mut *self.trail.borrow_mut());
-                let Some(pet) = self.pet.upgrade() else {
+                let windup = std::mem::take(&mut *self.windup.borrow_mut());
+                let (Some(pets), Some(pet), Some(body)) =
+                    (self.pets.upgrade(), self.pet.upgrade(), self.body())
+                else {
                     return;
                 };
                 pet.moving.set(None);
-                let sprite = self.sprite.borrow().as_ref().and_then(|s| s.upgrade());
-                if let Some(sprite) = sprite {
-                    let scale = sprite.scale();
-                    let velocity = release_velocity(&trail);
-                    let velocity = (velocity.0 / scale, velocity.1 / scale);
-                    if velocity.0.hypot(velocity.1) > FLING_SPEED {
-                        // Off it goes, inside the screen, onto the taskbar.
-                        let (x, y, w, h) = sprite.rect();
-                        let (left, top, right, bottom) = sprite.work_area();
-                        let bounds = Bounds {
-                            left: f64::from(left - x) / scale,
-                            right: f64::from(right - w - x) / scale,
-                            top: f64::from(top - y) / scale,
-                            floor: f64::from(bottom - h - y) / scale,
-                        };
-                        pet.launch((0.0, 0.0), velocity, bounds, false);
-                        return;
-                    }
+                let (velocity, spin) = windup.throw(release_velocity(&trail));
+                if velocity.0.hypot(velocity.1) > FLING_SPEED {
+                    // Off it goes, inside the screen, onto the taskbar.
+                    let scale = body.scale;
+                    let (x, y) = body.place();
+                    let (w, h) = (body.width as i32, body.height as i32);
+                    let (left, top, right, bottom) = body.layered.work_area();
+                    let bounds = Bounds {
+                        left: f64::from(left - x) / scale,
+                        right: f64::from(right - w - x) / scale,
+                        top: f64::from(top - y) / scale,
+                        floor: f64::from(bottom - h - y) / scale,
+                    };
+                    pet.launch((0.0, 0.0), velocity, spin, bounds, false);
+                    return;
                 }
-                (self.place_speech)();
+                pet.swing.set(None);
+                body.speech_follows(&pets, body.place());
             }
             fn chose(&self, index: usize) {
                 if let Some(pets) = self.pets.upgrade() {
@@ -824,45 +969,31 @@ impl Outside {
             }
         }
 
-        // Floem works in logical pixels, the window in physical ones.
-        let speech_at = Rc::new(Cell::new(Point::ZERO));
-        let sprite_cell: Rc<RefCell<Option<std::rc::Weak<Layered>>>> = Rc::default();
-        let place = {
-            let (pets, sprite_cell, speech_at) =
-                (Rc::downgrade(&pets), sprite_cell.clone(), speech_at.clone());
-            move || {
-                let Some(sprite) = sprite_cell.borrow().as_ref().and_then(|s| s.upgrade()) else {
-                    return;
-                };
-                let scale = sprite.scale();
-                let (x, y, _, height) = sprite.rect();
-                let top = f64::from(y) / scale + f64::from(height) / scale * HEADROOM;
-                let at = Point::new(f64::from(x) / scale, top);
-                speech_at.set(at);
-                if let Some(pets) = pets.upgrade()
-                    && let PetWindow::Open(id) = pets.window.get()
-                    && let Some(size) = id.bounds_of_content_on_screen()
-                {
-                    id.set_outer_location(Point::new(at.x, at.y - size.height() - 4.0));
-                }
-            }
-        };
         let handler = Rc::new(Handler {
             pets: Rc::downgrade(&pets),
             pet: Rc::downgrade(&pet),
-            place_speech: Box::new(place.clone()),
+            body: RefCell::new(None),
             trail: RefCell::new(Vec::new()),
-            sprite: RefCell::new(None),
+            windup: RefCell::new(Windup::default()),
         });
-        let sprite =
+        let layered =
             Rc::new(Layered::open((0, 0), handler.clone()).expect("a layered window opens"));
-        *handler.sprite.borrow_mut() = Some(Rc::downgrade(&sprite));
-        *sprite_cell.borrow_mut() = Some(Rc::downgrade(&sprite));
-        let scale = sprite.scale();
+        // Floem works in logical pixels, the window in physical ones.
+        let scale = layered.scale();
         let (width, height) = (
             (f64::from(CELL.0) * POPPED * scale).round() as u32,
             (f64::from(CELL.1) * POPPED * scale).round() as u32,
         );
+        let side = f64::from(width).hypot(f64::from(height)).ceil() as u32 + 2;
+        let body = Rc::new(Body {
+            layered,
+            width,
+            height,
+            side,
+            scale,
+        });
+        *handler.body.borrow_mut() = Some(Rc::downgrade(&body));
+
         // Thrown out of the window, it carries on from where it left it.
         let launch = pets.take_launch();
         let start = launch.map_or_else(|| start_point(main, f64::from(height) / scale), |l| l.0);
@@ -870,77 +1001,95 @@ impl Outside {
             (start.x * scale).round() as i32,
             (start.y * scale).round() as i32,
         );
-        if let Some((_, velocity)) = launch {
-            let pose = pet.pose().get_untracked();
-            let pixels =
-                sheet(color::is_dark()).pixels(pose.anim.row(), pose.column, width, height);
-            sprite.draw(&pixels, width, height, Some(home));
-            let (left, top, right, bottom) = sprite.work_area();
+        let pose_now = pet.pose().get_untracked();
+        body.paint(
+            &sheet(color::is_dark()).pixels(pose_now.anim.row(), pose_now.column, width, height),
+            pose_now.angle,
+        );
+        body.move_to(home);
+        if let Some((_, velocity, spin)) = launch {
+            let (left, top, right, bottom) = body.layered.work_area();
             let bounds = Bounds {
                 left: f64::from(left - home.0) / scale,
                 right: f64::from(right - width as i32 - home.0) / scale,
                 top: f64::from(top - home.1) / scale,
                 floor: f64::from(bottom - height as i32 - home.1) / scale,
             };
-            pet.launch((0.0, 0.0), velocity, bounds, false);
+            pet.launch((0.0, 0.0), velocity, spin, bounds, false);
         }
 
         scope.enter(|| {
-            // Drawn whenever the frame, the throw or the theme changes; moved
-            // only while thrown, so a drag is left alone.
             let pose = pet.pose();
+            // Drawn when the frame, its angle or the theme changes.
+            let look = Memo::new(move |_| {
+                let pose = pose.get();
+                (
+                    pose.anim.row(),
+                    pose.column,
+                    (pose.angle * 100.0).round() as i64,
+                    color::is_dark(),
+                )
+            });
+            let paint_body = body.clone();
+            Effect::new(move |_| {
+                let (row, column, angle, dark) = look.get();
+                let pixels = sheet(dark).pixels(row, column, width, height);
+                paint_body.paint(&pixels, angle as f64 / 100.0);
+            });
+            // Moved while thrown by a /kill, flung or hopping, from where
+            // each found it; its speech goes with it.
             let (shot, flight) = (pet.shot(), pet.flight());
             let from = Cell::new(None::<((bool, u64), (i32, i32))>);
-            // Placed once, unless it was thrown out and is already flying.
-            let first = Cell::new(launch.is_none().then_some(home));
-            let (draw_sprite, throw_pet) = (sprite.clone(), pet.clone());
-            let after_throw = place.clone();
+            let (move_body, move_pets, throw_pet) = (body.clone(), pets.clone(), pet.clone());
             Effect::new(move |_| {
                 let pose = pose.get();
-                let pixels =
-                    sheet(color::is_dark()).pixels(pose.anim.row(), pose.column, width, height);
-                // Thrown by a /kill, flung or hopping: moved from where it was.
                 let motion = shot
                     .get()
                     .map(|began| (true, began))
                     .or_else(|| flight.with(|f| f.map(|f| (false, f.id))));
-                let at = match motion {
-                    Some(motion) => {
-                        let start = match from.get() {
-                            Some((was, start)) if was == motion => start,
-                            _ => {
-                                let (x, y, _, _) = draw_sprite.rect();
-                                if motion.0 {
-                                    // As far left as the screen allows.
-                                    throw_pet
-                                        .throw_distance
-                                        .set((f64::from(x) / scale / 1.15).clamp(0.0, 420.0));
-                                }
-                                from.set(Some((motion, (x, y))));
-                                (x, y)
-                            }
-                        };
-                        let dx = (pose.thrown.0 + pose.shake.0) * scale;
-                        let dy = (pose.thrown.1 + pose.shake.1) * scale;
-                        Some((start.0 + dx.round() as i32, start.1 + dy.round() as i32))
-                    }
-                    None => {
-                        if from.take().is_some() {
-                            after_throw();
+                let Some(motion) = motion else {
+                    from.set(None);
+                    return;
+                };
+                let start = match from.get() {
+                    Some((was, start)) if was == motion => start,
+                    _ => {
+                        let start = move_body.place();
+                        if motion.0 {
+                            // As far left as the screen allows.
+                            throw_pet
+                                .throw_distance
+                                .set((f64::from(start.0) / scale / 1.15).clamp(0.0, 420.0));
                         }
-                        first.take()
+                        from.set(Some((motion, start)));
+                        start
                     }
                 };
-                draw_sprite.draw(&pixels, width, height, at);
+                let dx = ((pose.thrown.0 + pose.shake.0) * scale).round() as i32;
+                let dy = ((pose.thrown.1 + pose.shake.1) * scale).round() as i32;
+                let at = (start.0 + dx, start.1 + dy);
+                move_body.move_to(at);
+                move_body.speech_follows(&move_pets, at);
+            });
+            // When it starts or stops talking, its speech finds it.
+            let (talk_body, talk_pets, talk_pet) = (body.clone(), pets.clone(), pet.clone());
+            let updates = pet.updates();
+            Effect::new(move |_| {
+                updates.track();
+                let _ = talk_pet.questions();
+                let (body, pets) = (talk_body.clone(), talk_pets.clone());
+                floem::action::exec_after(std::time::Duration::from_millis(60), move |_| {
+                    body.speech_follows(&pets, body.place());
+                });
             });
             // Looks at the pointer anywhere on the screen.
-            let (look_sprite, look_pet) = (sprite.clone(), pet.clone());
+            let (look_body, look_pet) = (body.clone(), pet.clone());
             Effect::new(move |_| {
                 pose.track();
-                let (x, y, w, h) = look_sprite.rect();
+                let (x, y) = look_body.place();
                 let face = (
-                    f64::from(x) + f64::from(w) / 2.0,
-                    f64::from(y) + f64::from(h) * 0.62,
+                    f64::from(x) + f64::from(look_body.width) / 2.0,
+                    f64::from(y) + f64::from(look_body.height) * 0.62,
                 );
                 let at = super::pet_window::pointer();
                 look_pet.look_at(
@@ -948,13 +1097,16 @@ impl Outside {
                     (f64::from(at.0) / scale, f64::from(at.1) / scale),
                 );
             });
-            place();
-            Outside::speech_window(state, &pet, speech_at.get(), false);
+            let speech_at = Point::new(
+                f64::from(home.0) / scale,
+                f64::from(home.1) / scale + f64::from(height) / scale * HEADROOM - 44.0,
+            );
+            Outside::speech_window(state, &pet, speech_at, false);
         });
         Outside {
             key,
             scope,
-            _sprite: sprite,
+            _body: body,
         }
     }
 }

@@ -155,13 +155,13 @@ Glitch is your sessions' pet. Each session has its own, and the one in the windo
 - **Getting about:** it starts at the foot of the sessions rail and goes wherever you drag it. Click it and it jumps. It watches the pointer and waves hello.
 - **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
 
-**Throw it** and it leaves the window. It flies on across the screen, bounces off the monitor's edges (complaining if you throw it hard enough), and lands on the taskbar. **Pop out**, on hover, sends it out without the throw.
+**Throw it** and it leaves the window. It flies on across the screen, bounces off the monitor's edges (complaining if you throw it hard enough), and lands on the taskbar. **Swing it round** while you hold it: it spins as you swing, every turn makes the throw faster, and it tumbles through the air until it lands upright. **Pop out**, on hover, sends it out without the throw.
 
 Out on the desktop:
 
 - **See-through:** on Windows it is just Glitch, with no window around it. Its speech appears above it when it has something to say.
 - **Still that session's:** it speaks up on each of its session's replies. It also brings the other sessions' news and questions, its own session's first.
-- **Moving and dismissing:** drag it to move it, and it runs the way you drag. Throw it to fling it again. Click it to make it jump. Right-click for **Pop in** and **Hide**.
+- **Moving and dismissing:** drag it to move it, and it runs the way you drag. Throw it, or swing it round first, to fling it again; its speech goes where it goes. Click it to make it jump. Right-click for **Pop in** and **Hide**.
 - **Commands:** *Pet: pop the front session's pet out, or back in* and *Pet: show or hide* are in the command picker.
 - **Saved:** whether a pet is out or hidden is saved per workspace.
 

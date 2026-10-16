@@ -3000,6 +3000,7 @@ dependencies = [
  "notify",
  "pi-client",
  "pulldown-cmark",
+ "raw-window-handle",
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
