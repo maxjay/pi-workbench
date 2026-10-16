@@ -3,6 +3,9 @@
 //! the folder of the session in front, so it follows wherever that session
 //! is: picked from the sidebar, started in another folder, or moved there
 //! by Pi itself (an extension can switch Pi to a session in another folder).
+//!
+//! Only what was opened is listed: the folders opened in the window and the
+//! sessions opened in each, which come back as they were left.
 use crate::workspace::{Integrations, WindowLink, Workbench};
 use floem::{
     ext_event::create_ext_action,
@@ -19,8 +22,8 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     rc::{Rc, Weak},
-    time::SystemTime,
 };
+use workbench_core::layout;
 
 pub struct Window {
     pub id: WindowId,
@@ -29,18 +32,24 @@ pub struct Window {
     launch: Launch,
     /// Session keys, unique across the window's folders.
     session_keys: Rc<Cell<u64>>,
-    /// Open folders, in the order they were opened.
+    /// Folders whose workspaces are loaded, in the order they were loaded.
     workspaces: RwSignal<Vec<Rc<Workbench>>>,
+    /// Each loaded folder's scope, disposed when the folder is closed.
+    scopes: RefCell<HashMap<PathBuf, Scope>>,
     /// The folder shown.
     active: RwSignal<PathBuf>,
-    /// Folders Pi has sessions in, newest first.
-    folders: RwSignal<Vec<(PathBuf, SystemTime)>>,
-    /// Stored sessions of folders that are not open, once asked for.
+    /// The folders opened in the window, in the rail's order, loaded or
+    /// not: a folder loads when it is first shown.
+    opened: RwSignal<Vec<PathBuf>>,
+    /// The sessions open in folders not loaded yet, as they were left.
     stored: RwSignal<HashMap<PathBuf, Vec<SessionSummary>>>,
-    /// Folders open in the sidebar.
-    pub expanded: RwSignal<HashSet<PathBuf>>,
+    /// Folders folded away in the sidebar.
+    pub collapsed: RwSignal<HashSet<PathBuf>>,
     /// Folders that have finished closing, while the window closes.
     closed: RefCell<HashSet<PathBuf>>,
+    /// The window is closing, showing each folder in turn; what it shows
+    /// then is not what to come back to.
+    closing: Rc<Cell<bool>>,
 }
 
 impl Window {
@@ -52,12 +61,58 @@ impl Window {
             launch,
             session_keys: Rc::default(),
             workspaces: RwSignal::new(Vec::new()),
+            scopes: RefCell::new(HashMap::new()),
             active: RwSignal::new(PathBuf::new()),
-            folders: RwSignal::new(Vec::new()),
+            opened: RwSignal::new(Vec::new()),
             stored: RwSignal::new(HashMap::new()),
-            expanded: RwSignal::new(HashSet::new()),
+            collapsed: RwSignal::new(HashSet::new()),
             closed: RefCell::new(HashSet::new()),
+            closing: Rc::default(),
         })
+    }
+
+    /// Opens what the window had open last time, showing `folder` if given,
+    /// else the folder shown last, else `fallback`. What is open is saved as
+    /// it changes.
+    pub fn start(&self, folder: Option<PathBuf>, fallback: PathBuf) -> Option<Rc<Workbench>> {
+        let saved = layout::window_state_path()
+            .map(|path| layout::load_window(&path))
+            .unwrap_or_default();
+        let opened: Vec<PathBuf> = saved
+            .folders
+            .iter()
+            .filter_map(|folder| folder.canonicalize().ok())
+            .filter(|folder| folder.is_dir())
+            .fold(Vec::new(), |mut opened, folder| {
+                if !opened.contains(&folder) {
+                    opened.push(folder);
+                }
+                opened
+            });
+        self.opened.set(opened.clone());
+        let first = folder
+            .or_else(|| saved.active.filter(|active| active.is_dir()))
+            .unwrap_or(fallback);
+        let shown = self.show(&first);
+        for folder in opened {
+            if self.workspace(&folder).is_none() {
+                self.load_stored(folder);
+            }
+        }
+        let (opened, active, closing) = (self.opened, self.active, self.closing.clone());
+        Effect::new(move |_| {
+            if closing.get() {
+                return;
+            }
+            let state = layout::WindowState {
+                folders: opened.get(),
+                active: Some(active.get()).filter(|a| !a.as_os_str().is_empty()),
+            };
+            if let Ok(path) = layout::window_state_path() {
+                let _ = layout::save_window(&path, &state);
+            }
+        });
+        shown
     }
 
     pub fn workspaces(&self) -> ReadSignal<Vec<Rc<Workbench>>> {
@@ -69,13 +124,13 @@ impl Window {
         self.active.read_only()
     }
 
-    /// An open folder's workspace.
+    /// A loaded folder's workspace.
     pub fn workspace(&self, root: &Path) -> Option<Rc<Workbench>> {
         self.workspaces
             .with_untracked(|open| open.iter().find(|w| w.root() == root).cloned())
     }
 
-    /// Tracked: an open folder's workspace.
+    /// Tracked: a loaded folder's workspace.
     pub fn workspace_tracked(&self, root: &Path) -> Option<Rc<Workbench>> {
         self.workspaces
             .with(|open| open.iter().find(|w| w.root() == root).cloned())
@@ -87,52 +142,23 @@ impl Window {
     }
 
     pub fn folders_untracked(&self) -> Vec<PathBuf> {
-        Effect::untrack(|| self.folders())
+        self.opened.get_untracked()
     }
 
-    /// The folders for the sidebar: the open ones, as opened, then the
-    /// others Pi has sessions in, newest first. Tracked.
+    /// The folders opened in the window, in the rail's order. Tracked.
     pub fn folders(&self) -> Vec<PathBuf> {
-        let mut folders: Vec<PathBuf> = self
-            .workspaces
-            .with(|open| open.iter().map(|w| w.root().to_path_buf()).collect());
-        self.folders.with(|known| {
-            for (folder, _) in known {
-                if !folders.contains(folder) {
-                    folders.push(folder.clone());
-                }
-            }
-        });
-        folders
+        self.opened.get()
     }
 
-    /// The session files open in any of the window's folders. Tracked.
-    pub fn open_files(&self) -> HashSet<PathBuf> {
-        self.workspaces.with(|open| {
-            open.iter()
-                .flat_map(|state| state.sessions.open().get())
-                .filter_map(|session| session.file().get())
-                .collect()
-        })
+    /// The sessions open in a folder not loaded yet. Tracked.
+    pub fn stored(&self, folder: &Path) -> Vec<SessionSummary> {
+        self.stored
+            .with(|stored| stored.get(folder).cloned().unwrap_or_default())
     }
 
-    /// When a session last changed in a folder Pi knows. Tracked.
-    pub fn last_used(&self, folder: &Path) -> Option<SystemTime> {
-        self.folders.with(|known| {
-            known
-                .iter()
-                .find(|(known, _)| sessions::belongs(known, folder))
-                .map(|(_, when)| *when)
-        })
-    }
-
-    /// Stored sessions of a folder that is not open, once read. Tracked.
-    pub fn stored(&self, folder: &Path) -> Option<Vec<SessionSummary>> {
-        self.stored.with(|stored| stored.get(folder).cloned())
-    }
-
-    /// Reads a folder's stored sessions, off the UI thread.
-    pub fn load_stored(&self, folder: PathBuf) {
+    /// Reads which sessions a folder not loaded yet had open, off the UI
+    /// thread: its saved layout says, and Pi's store has their titles.
+    fn load_stored(&self, folder: PathBuf) {
         let stored = self.stored;
         let finish = create_ext_action(self.scope, move |(folder, list)| {
             stored.update(|stored| {
@@ -140,26 +166,18 @@ impl Window {
             })
         });
         std::thread::spawn(move || {
-            let list = sessions::list(&folder);
+            let list: Vec<SessionSummary> = layout::state_path(&folder)
+                .and_then(|path| layout::load(&path))
+                .map(|saved| saved.sessions)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|path| sessions::summarize(path))
+                .collect();
             finish((folder, list))
         });
     }
 
-    /// Re-reads which folders Pi has sessions in, off the UI thread.
-    pub fn refresh_folders(&self) {
-        let folders = self.folders;
-        let finish = create_ext_action(self.scope, move |list| folders.set(list));
-        std::thread::spawn(move || {
-            // In the form open folders take, so each is listed once.
-            let list: Vec<(PathBuf, SystemTime)> = sessions::folders()
-                .into_iter()
-                .map(|(folder, when)| (folder.canonicalize().unwrap_or(folder), when))
-                .collect();
-            finish(list)
-        });
-    }
-
-    /// A folder's workspace, opened (and its saved layout restored) if it
+    /// A folder's workspace, loaded (and its saved layout restored) if it
     /// was not.
     pub fn open(&self, folder: &Path) -> anyhow::Result<Rc<Workbench>> {
         let (root, layout) = crate::workspace_paths(folder)?;
@@ -218,22 +236,32 @@ impl Window {
             });
         });
         state.restore();
+        self.scopes.borrow_mut().insert(root.clone(), scope);
+        self.stored.update(|stored| {
+            stored.remove(&root);
+        });
+        self.opened.update(|opened| {
+            if !opened.contains(&root) {
+                opened.push(root);
+            }
+        });
         self.workspaces.update(|open| open.push(state.clone()));
         Ok(state)
     }
 
-    /// Shows a folder, opening it if need be; `None` (and a message in the
+    /// Shows a folder, loading it if need be; `None` (and a message in the
     /// status bar) if it cannot be opened.
     pub fn show(&self, folder: &Path) -> Option<Rc<Workbench>> {
         match self.open(folder) {
             Ok(state) => {
+                self.closing.set(false);
                 let root = state.root().to_path_buf();
                 if self.active.get_untracked() != root {
                     self.active.set(root.clone());
                 }
                 self.mark_shown();
-                self.expanded.update(|open| {
-                    open.insert(root);
+                self.collapsed.update(|folded| {
+                    folded.remove(&root);
                 });
                 Some(state)
             }
@@ -271,7 +299,7 @@ impl Window {
         }
     }
 
-    /// Resumes a stored session, in its folder.
+    /// Opens a session from Pi's store, in its folder.
     pub fn resume(&self, folder: &Path, summary: SessionSummary) {
         if let Some(state) = self.show(folder) {
             state.when_restored(move |state| {
@@ -279,6 +307,65 @@ impl Window {
                 state.show_session(session.key);
             });
         }
+    }
+
+    /// Takes a session off a folder not loaded yet; it stays in Pi's store.
+    pub fn forget(&self, folder: &Path, session: &Path) {
+        self.stored.update(|stored| {
+            if let Some(list) = stored.get_mut(folder) {
+                list.retain(|s| s.path != session);
+            }
+        });
+        if let Ok(path) = layout::state_path(folder)
+            && let Ok(mut saved) = layout::load(&path)
+        {
+            saved.sessions.retain(|s| s != session);
+            let _ = layout::save(&path, &saved);
+        }
+    }
+
+    /// Closes a folder in the window: its layout saved and its sessions
+    /// stopped, all of them still in Pi's store. Another folder is shown if
+    /// it was; the last folder stays.
+    pub fn close_folder(&self, folder: &Path) {
+        let others: Vec<PathBuf> = self
+            .opened
+            .get_untracked()
+            .into_iter()
+            .filter(|other| other != folder)
+            .collect();
+        let report = |message: String| {
+            if let Some(shown) = self.shown() {
+                shown.report(message);
+            }
+        };
+        if self.active.get_untracked() == folder {
+            let Some(next) = others.first() else {
+                report("The window's only folder stays open".into());
+                return;
+            };
+            if self.show(next).is_none() {
+                return;
+            }
+        }
+        if let Some(state) = self.workspace(folder) {
+            if let Err(err) = state.release() {
+                report(err);
+                return;
+            }
+            self.workspaces
+                .update(|open| open.retain(|w| !Rc::ptr_eq(w, &state)));
+            if let Some(scope) = self.scopes.borrow_mut().remove(folder) {
+                scope.dispose();
+            }
+        }
+        self.stored.update(|stored| {
+            stored.remove(folder);
+        });
+        self.collapsed.update(|folded| {
+            folded.remove(folder);
+        });
+        self.opened.set(others);
     }
 
     /// Pi moved a session from one folder to another: the session goes to
@@ -323,7 +410,6 @@ impl Window {
                 state.pets.pop_out(key);
             }
         });
-        self.refresh_folders();
     }
 
     /// Tells each folder whether it is the one shown.
@@ -337,6 +423,7 @@ impl Window {
     /// Closes the window once every folder has: each saves its layout and
     /// asks about unsaved files, shown while it does.
     pub fn request_close(&self) {
+        self.closing.set(true);
         self.closed.borrow_mut().clear();
         self.close_next();
     }

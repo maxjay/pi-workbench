@@ -513,19 +513,18 @@ fn pane_tree(state: Rc<Workbench>) -> impl IntoView {
 }
 
 /// A window: the folders open in it, the one in front shown.
-pub fn workbench(window: WindowId, root: PathBuf) -> impl IntoView {
+pub fn workbench(window: WindowId, folder: Option<PathBuf>, fallback: PathBuf) -> impl IntoView {
     let (settings, settings_error) = crate::settings::current();
     let app = Window::new(
         window,
         Launch::from_settings(settings.pi.command(), &settings.pi.args),
     );
-    if let Some(first) = app.show(&root) {
+    if let Some(first) = app.start(folder, fallback) {
         first.start_with_session();
         if let Some(err) = settings_error.or_else(color::follow_settings) {
             first.report(err);
         }
     }
-    app.refresh_folders();
     // Glitch on the taskbar too, not just in the title bar; once the window
     // has its native handle.
     #[cfg(windows)]

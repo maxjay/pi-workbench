@@ -404,7 +404,7 @@ impl Workbench {
                 }
             }
         });
-        Rc::new(Self {
+        let state = Rc::new(Self {
             documents,
             explorer,
             lens,
@@ -449,7 +449,44 @@ impl Workbench {
             shown: RwSignal::new(true),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
-        })
+        });
+        // What is open is saved as it changes, not only on closing, once the
+        // saved layout is in place.
+        let (open, saver) = (state.sessions.open(), Rc::downgrade(&state));
+        Effect::new(move |_| {
+            open.with(|open| open.iter().for_each(|session| session.file().track()));
+            if let Some(state) = saver.upgrade()
+                && state.restored.get()
+            {
+                Effect::untrack(|| {
+                    if let Err(err) = state.persist_layout() {
+                        state.status.set(format!("Could not save layout: {err}"));
+                    }
+                });
+            }
+        });
+        state
+    }
+
+    /// Closes this folder in its window: its layout saved, its sessions
+    /// stopped (they stay in Pi's store). Refused while it has unsaved files.
+    pub fn release(&self) -> Result<(), String> {
+        if !self.documents.all_saved() {
+            return Err("Save or close its unsaved files first".into());
+        }
+        self.persist_layout()
+            .map_err(|err| format!("Could not save layout: {err}"))?;
+        if self.pets.out.get_untracked().is_some() {
+            self.pets.pop_in();
+        }
+        let keys: Vec<u64> = self
+            .sessions
+            .open()
+            .with_untracked(|open| open.iter().map(|s| s.key).collect());
+        for key in keys {
+            self.close_session(key);
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -739,7 +776,11 @@ impl Workbench {
     /// Brings a session forward where it is shown, or else switches to it
     /// in the pane used for sessions: the conversation there gives way to it
     /// (and stays open in the rail), rather than gaining a tab beside it.
+    /// One reopened from before starts Pi now.
     pub fn show_session(&self, key: u64) {
+        if let Some(session) = self.sessions.find(key) {
+            self.sessions.wake(&session);
+        }
         let tab = Tab::Session(key);
         let pane = self.panes.find(&tab).unwrap_or_else(|| {
             let to = self.session_pane();
@@ -776,11 +817,17 @@ impl Workbench {
             .unwrap_or_else(|| self.panes.focused().get_untracked())
     }
 
-    /// Shows the front session, starting one if there is none.
+    /// Shows the front session, or the first open one, starting one if
+    /// there is none.
     pub fn show_conversation(&self) -> Rc<Session> {
         let session = self
             .sessions
             .active_untracked()
+            .or_else(|| {
+                self.sessions
+                    .open()
+                    .with_untracked(|open| open.first().cloned())
+            })
             .unwrap_or_else(|| self.sessions.create());
         self.show_session(session.key);
         session
@@ -945,6 +992,7 @@ impl Workbench {
         // Startup runs once, before interaction. Reserve the saved files so
         // interactive opens share the same limit and do not read twice.
         self.pending.borrow_mut().extend(files.iter().cloned());
+        let kept = layout.sessions.clone();
         let state = self.clone();
         let finish = create_ext_action(self.scope, move |(files, summaries)| {
             state.finish_restore(layout, tree, files, summaries);
@@ -960,10 +1008,12 @@ impl Workbench {
                     (path, result)
                 })
                 .collect();
-            // Only this workspace's sessions are resumed.
+            // Only this workspace's sessions are resumed: those in panes, and
+            // the others it had open.
             let known = pi_client::sessions::list(&root);
             let summaries: Vec<SessionSummary> = sessions
                 .iter()
+                .chain(&kept)
                 .filter_map(|path| known.iter().find(|s| s.path == *path).cloned())
                 .collect();
             finish((files, summaries))
@@ -998,6 +1048,13 @@ impl Workbench {
             match result {
                 Ok(text) => self.documents.insert(path, text),
                 Err(err) => self.status.set(err),
+            }
+        }
+        // The sessions it had open come back first, in their order, waiting
+        // to be picked; those in panes start as their panes come back.
+        for path in &layout.sessions {
+            if let Some(summary) = summaries.iter().find(|s| s.path == *path) {
+                self.sessions.keep(summary);
             }
         }
         // Tabs opened while the layout was loading are kept.
@@ -2276,6 +2333,11 @@ impl Workbench {
         layout.focused = order.iter().position(|&id| id == focused).unwrap_or(0);
         layout.pet_popped = self.pets.popped();
         layout.pet_hidden = self.pets.hidden.get_untracked();
+        layout.sessions = self.sessions.open().with_untracked(|open| {
+            open.iter()
+                .filter_map(|session| session.file().get_untracked())
+                .collect()
+        });
         layout::save(&self.layout_path, &layout)
     }
 
@@ -2412,6 +2474,50 @@ mod tests {
         );
         state.select_tab(focused(state).id, Tab::File(path.clone()));
         path
+    }
+
+    #[test]
+    fn sessions_left_open_come_back_waiting_in_their_order() {
+        with_workspace(|state, _| {
+            let summary = |name: &str| SessionSummary {
+                path: state.root.join(name),
+                id: name.into(),
+                title: name.into(),
+                prompts: 1,
+                modified: std::time::SystemTime::UNIX_EPOCH,
+                cwd: None,
+            };
+            let (a, b) = (summary("a.jsonl"), summary("b.jsonl"));
+            let layout = Layout {
+                sessions: vec![
+                    b.path.clone(),
+                    a.path.clone(),
+                    state.root.join("gone.jsonl"),
+                ],
+                ..Default::default()
+            };
+            let empty = SavedNode::Pane {
+                tabs: Vec::new(),
+                active: None,
+                zoom: 1.0,
+            };
+            state.finish_restore(layout, empty, Vec::new(), vec![a.clone(), b.clone()]);
+            let open = state.sessions.open().get_untracked();
+            let titles: Vec<String> = open.iter().map(|s| s.title().get_untracked()).collect();
+            assert_eq!(
+                titles,
+                ["b.jsonl", "a.jsonl"],
+                "in order; the gone one left out"
+            );
+            assert!(
+                open.iter().all(|s| s.waiting()),
+                "Pi is not started on them"
+            );
+            // What is open is what is saved.
+            state.persist_layout().unwrap();
+            let saved = layout::load(&state.layout_path).unwrap();
+            assert_eq!(saved.sessions, vec![b.path, a.path]);
+        });
     }
 
     #[test]
