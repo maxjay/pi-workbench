@@ -5,6 +5,7 @@ use crate::{
     explorer::Explorer,
     lens::{Comparison, Lens},
     panes::{Direction, Pane, PaneId, Panes, Tab},
+    pet::Pets,
     session::Session,
     sessions::Sessions,
     syntax::Syntax,
@@ -195,6 +196,7 @@ pub struct Workbench {
     pub lens: Rc<Lens>,
     pub syntax: Rc<Syntax>,
     pub sessions: Rc<Sessions>,
+    pub pets: Rc<Pets>,
     pub panes: Rc<Panes>,
     scope: Scope,
     pending: RefCell<HashSet<PathBuf>>,
@@ -292,6 +294,8 @@ impl Workbench {
                 .unwrap_or_default();
             turns_lens.set_turns(turns);
         });
+        let pets = Pets::new(Scope::current(), sessions.clone());
+        pets.restore(layout.pet_popped, layout.pet_hidden);
         let panes = Panes::new(Scope::current());
         let (last_pane, last_terminal) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
         // The front session is the one in the focused pane, and Ctrl+` keeps
@@ -325,6 +329,7 @@ impl Workbench {
             lens,
             syntax: Syntax::new(Scope::current()),
             sessions,
+            pets,
             panes,
             scope: Scope::current(),
             pending: RefCell::new(HashSet::new()),
@@ -802,6 +807,57 @@ impl Workbench {
             }
             Err(err) => self.status.set(format!("Settings: {err:#}")),
         }
+    }
+
+    /// Something said to a session's pet. To the session itself when one is
+    /// picked; otherwise a side question (`/btw`): Pi answers it with the
+    /// session's history for context, through the pet, and the session is
+    /// left as it was.
+    pub fn tell_pet(self: &Rc<Self>, key: u64, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let pet = self.pets.pet(key);
+        if let Some(to) = pet.target.get_untracked() {
+            match self.sessions.find(to) {
+                Some(session) if session.submit(text, false) => {
+                    pet.quip(&format!("Sent to {}", session.title().get_untracked()));
+                }
+                Some(_) => pet.quip("That session is busy sending."),
+                None => {
+                    // Back to asking aside.
+                    pet.target.set(None);
+                    pet.quip("That session has closed. Asking aside from now on.");
+                }
+            }
+            return;
+        }
+        let session = self.sessions.find(key);
+        let file = session.as_ref().and_then(|s| s.file().get_untracked());
+        pet.answer(None, format!("You: {text}"));
+        pet.thinking.set(true);
+        let reply_pet = Rc::downgrade(&pet);
+        let finish = create_ext_action(self.scope, move |result: anyhow::Result<String>| {
+            let Some(pet) = reply_pet.upgrade() else {
+                return;
+            };
+            pet.thinking.set(false);
+            match result {
+                Ok(answer) => pet.answer(Some(pet.key), answer),
+                Err(err) => pet.answer(None, format!("I couldn't ask: {err:#}")),
+            }
+        });
+        let (launch, root) = (self.sessions.launch().clone(), self.root.clone());
+        std::thread::spawn(move || {
+            finish(pi_client::ask_aside(
+                &launch,
+                &root,
+                file.as_deref(),
+                &text,
+                std::time::Duration::from_secs(180),
+            ))
+        });
     }
 
     /// Asks for a new file's path, starting in the folder of the file showing.
@@ -1743,6 +1799,8 @@ impl Workbench {
         let order = self.panes.tree().with_untracked(|tree| tree.leaves());
         let focused = self.panes.focused().get_untracked();
         layout.focused = order.iter().position(|&id| id == focused).unwrap_or(0);
+        layout.pet_popped = self.pets.popped();
+        layout.pet_hidden = self.pets.hidden.get_untracked();
         layout::save(&self.layout_path, &layout)
     }
 
@@ -1758,7 +1816,17 @@ impl Workbench {
         // A theme only previewed must not stay on in the other windows.
         self.dismiss_finder();
         match self.persist_layout() {
-            Ok(()) => (self.close_window)(),
+            Ok(()) => {
+                // A popped-out pet goes with the workbench's window, or is
+                // called off if it is still being made.
+                self.pets.out.set(None);
+                if let crate::pet::PetWindow::Open(id) =
+                    self.pets.window.replace(crate::pet::PetWindow::Closed)
+                {
+                    floem::close_window(id);
+                }
+                (self.close_window)()
+            }
             Err(err) => self.status.set(format!("Could not save layout: {err}")),
         }
         self.dismiss_confirmation();

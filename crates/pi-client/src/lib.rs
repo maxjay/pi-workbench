@@ -80,6 +80,114 @@ fn resolve(program: &str) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// Asks Pi something on the side ("by the way"), with a session's history
+/// for context but leaving it untouched: the session is forked into a
+/// folder of its own that is thrown away after, and Pi answers once, with
+/// no tools, and exits. `session` is the session's file, if it has one.
+/// Blocks until Pi answers or `timeout` passes.
+pub fn ask_aside(
+    launch: &Launch,
+    cwd: &Path,
+    session: Option<&Path>,
+    question: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let aside = std::env::temp_dir().join(format!(
+        "pi-workbench-btw-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_nanos())
+    ));
+    std::fs::create_dir_all(&aside).context("Could not make a folder for the side question")?;
+    let mut command = Command::new(resolve(&launch.program));
+    command
+        .args(&launch.args)
+        .args(["-p", "--no-tools", "--session-dir"])
+        .arg(&aside);
+    match session {
+        Some(session) => command.arg("--fork").arg(session),
+        None => command.arg("--no-session"),
+    };
+    command
+        .arg("--")
+        .arg(question)
+        .envs(launch.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let result = (|| {
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("Could not start `{}`", launch.program))?;
+        // The whole tree: on Windows the child is the `.cmd` shim, with Pi
+        // under it, and both must end on a timeout.
+        let tree = Tree::adopt(&child);
+        // Both pipes are drained at once, so neither fills and stalls Pi.
+        let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+            let (sent, got) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_string(&mut text);
+                }
+                let _ = sent.send(text);
+            });
+            got
+        };
+        let answer = drain(child.stdout.take().map(|p| Box::new(p) as _));
+        let errors = drain(child.stderr.take().map(|p| Box::new(p) as _));
+        let started = std::time::Instant::now();
+        let mut timed_out = false;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if started.elapsed() >= timeout {
+                timed_out = true;
+                if let Some(tree) = tree {
+                    tree.kill();
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        if timed_out {
+            anyhow::bail!("Pi took too long to answer");
+        }
+        // Anything still holding the pipes open is not waited on for long.
+        let collect = |got: std::sync::mpsc::Receiver<String>| {
+            got.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
+        };
+        let (answer, errors) = (collect(answer), collect(errors));
+        let answer = answer.trim().to_string();
+        if status.is_some_and(|s| s.success()) && !answer.is_empty() {
+            Ok(answer)
+        } else {
+            anyhow::bail!(
+                "{}",
+                errors
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("Pi could not answer")
+                    .trim()
+            )
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&aside);
+    result
+}
+
 /// A reply to an extension's question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {

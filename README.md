@@ -11,7 +11,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 ## Features
 
 - **Sessions:** every Pi session is a tab in the sessions rail. Sessions resume from Pi's own store with their history, so the Pi command line and the workbench see the same sessions.
-- **Conversation:** replies render as markdown; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
+- **Conversation:** replies render as markdown, with Copy beside each one for the original text; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
 - **Changes lens:** everything is read against one baseline you pick in the status bar: where your branch left develop, the start of the session, Pi's last turn, or the last commit. The explorer marks changed files, editors show removed lines as ghost lines in place, and you walk the changes file to file without opening a diff.
 - **Who changed it:** changed lines are coloured by who wrote them: Pi, you, or someone else on the branch. Reformatting is filtered out, and the changed files are grouped by the Pi turn that changed them.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
@@ -19,6 +19,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **Panes you arrange:** split any pane right or down as often as you like. Every pane holds tabs of files, Pi sessions and terminals, and tabs drag between panes or onto a pane's edge to split it. The layout is saved per workspace.
 - **Terminals, settings, worktrees:** terminal tabs anywhere, a commented settings file, and sessions that work in their own git worktree.
 - **One quick picker, extended by Pi:** files, commands and colour themes in one VS Code-style picker. Pi's own slash commands are in it too, including the ones your Pi extensions, prompt templates and skills add.
+- **A pet per session:** the front session's Glitch roams the window, says the gist of each reply, and brings its questions to answer on the spot. Throw it out onto the desktop, see-through on Windows, and it bounces off the screen's edges and keeps you posted from there. `/kill` gets it shot.
 - **Themes:** 30 bundled themes, including Catppuccin, Dracula, Nord, Gruvbox, Solarized, One Half, GitHub and Monokai, or any `.tmTheme` file, with a live preview.
 - Background saves, and nothing on screen you have to learn first: one search box, and controls where they act.
 
@@ -142,6 +143,45 @@ The window is yours to arrange. Every pane is a row of tabs, and a tab is a file
 
 Clicking a session in the rail shows it where it already is, or in the focused pane. The panes, their tabs, sizes and zoom are saved per workspace, and the sessions in them resume when you reopen it.
 
+## Glitch, the pet
+
+![Glitch saying the gist of a reply](docs/screenshots/pet.png)
+
+Glitch is your sessions' pet. Each session has its own, and the one in the window is the front session's: switch sessions and it is that session's Glitch.
+
+- **Its session:** it works while the session works, waits when it needs you, and looks pleased when it finishes.
+- **Each reply:** it says the gist of each reply. Click that to dismiss it.
+- **Questions:** when an extension asks something, the question appears in its bubble with its answers, so you can reply there.
+- **Getting about:** it starts at the foot of the sessions rail and goes wherever you drag it. Click it and it jumps. It watches the pointer and waves hello.
+- **Its size:** drag one of the corner grips that appear on hover to make it bigger or smaller. It grows up from its feet.
+- **Talking to it:** **Chat**, on hover, opens a box under its bubble. A message is a side question about its session, `/btw`: Pi answers with the session's history for context, in the pet's bubble, and the session is left as it was. Pick a session in the list left of the box to send to that session instead.
+- **Lost it?** When it is not in the window, the status bar says **Glitch is out** or **Glitch is hidden**. Click that, or run *Pet: find Glitch*, to bring it back.
+- **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
+
+**Throw it** and it leaves the window. It flies on across the screen, bounces off the monitor's edges (complaining if you throw it hard enough), and lands on the taskbar. **Swing it round** while you hold it: it spins as you swing, every turn makes the throw faster, and it tumbles through the air until it lands upright. **Pop out**, on hover, sends it out without the throw.
+
+Out on the desktop:
+
+- **See-through:** on Windows it is just Glitch, with no window around it. Its speech appears above it when it has something to say.
+- **Still that session's:** it speaks up on each of its session's replies. It also brings the other sessions' news and questions, its own session's first.
+- **Moving and dismissing:** drag it to move it, and it runs the way you drag. Throw it, or swing it round first, to fling it again; its speech goes where it goes. Click it to make it jump. Right-click for **Pop in** and **Hide**.
+- **Commands:** *Pet: pop the front session's pet out, or back in* and *Pet: show or hide* are in the command picker.
+- **Saved:** whether a pet is out or hidden is saved per workspace.
+
+Elsewhere, a popped-out pet sits in a small card instead, and a throw just drops it.
+
+**`/kill`** is for a session whose model has run on so long that it has lost the plot. That session's pet gets shot: the window shakes and the pet is thrown across it. Popped out, it is thrown across the screen. It lies there for a moment and gets up; in the window it walks back to where it was. The shot is the one animation kept for this.
+
+The workbench handles `/kill` as a stand-in until a Pi extension provides one, and while Pi is working, since Pi does not run extension commands mid-run. [extensions/pet.ts](extensions/pet.ts) shows the cue: it adds `/kill` and `/pet-say <text>` by setting Pi's `pet` status line. An extension that resets a session's context can do the same:
+
+```ts
+ctx.ui.setStatus("pet", `kill:${Date.now()}`); // this session's pet is shot
+ctx.ui.setStatus("pet", "say:Tests pass");     // said in its bubble
+ctx.ui.setStatus("pet", "wave");               // or "jump"
+```
+
+To install it, copy it into `~/.pi/agent/extensions/`.
+
 ## Terminals, settings and worktrees
 
 ![A terminal tab running git](docs/screenshots/terminal.png)
@@ -217,6 +257,9 @@ Use Ctrl on Windows/Linux or Cmd on macOS. Session cycling uses Ctrl everywhere,
 | [ui/terminal.rs](apps/desktop/src/ui/terminal.rs) | A terminal tab |
 | [panes.rs](apps/desktop/src/panes.rs) | The pane tree: splits, tabs, moving, saving |
 | [ui/editor.rs](apps/desktop/src/ui/editor.rs) | A pane: its tab bar, dragging tabs, and what the active tab shows |
+| [pet.rs](apps/desktop/src/pet.rs) | Each session's Glitch: animations, moods, what it says, questions, and the `/kill` timeline |
+| [ui/pet.rs](apps/desktop/src/ui/pet.rs) | Glitch on screen: the sprite, its bubble, roaming the window or popped out |
+| [ui/pet_window.rs](apps/desktop/src/ui/pet_window.rs) | The see-through window a popped-out Glitch lives in on Windows |
 | [workbench-core](crates/workbench-core/src) | File operations, layout storage, settings, line diffs, merges, git access (read-only, plus worktrees), blame, difftastic |
 | [workbench-text](crates/workbench-text/src) | Syntax highlighting, themes, the gitignore-aware file index and fuzzy matching, content search |
 | [pi-client](crates/pi-client/src) | Starting Pi in RPC mode, its events and commands, its session store |

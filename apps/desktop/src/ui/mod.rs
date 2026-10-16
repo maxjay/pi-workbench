@@ -5,6 +5,9 @@ mod explorer;
 mod finder;
 mod lens_doc;
 mod overlays;
+mod pet;
+#[cfg(windows)]
+mod pet_window;
 mod rail;
 mod session;
 mod terminal;
@@ -511,6 +514,9 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
     });
     state.start_with_session();
     state.restore();
+    state.pets.start();
+    pet::follow_popping(state.clone(), window);
+    let shake = pet::shake(&state);
     if let Some(err) = settings_error.or_else(color::follow_settings) {
         state.report(err);
     }
@@ -619,10 +625,37 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 .apply_if(on, |s| s.background(color::highlight()))
         })
         .on_event_stop(el::Click, move |_, _| toggle_lens.toggle_focus());
+    // Where the pet went, when it is not in the window; a click brings it
+    // back.
+    let pet_chip = {
+        let (pets, front) = (state.pets.clone(), state.sessions.active_key());
+        let (out, hidden) = (pets.out, pets.hidden);
+        let away = move || {
+            if hidden.get() {
+                Some("Glitch is hidden")
+            } else if out.get().is_some() && out.get() == front.get() {
+                Some("Glitch is out")
+            } else {
+                None
+            }
+        };
+        let label_away = away;
+        Label::derived(move || label_away().unwrap_or_default().to_string())
+            .style(move |s| {
+                s.color(color::accent())
+                    .padding_horiz(6)
+                    .border_radius(5)
+                    .cursor(floem::style::CursorStyle::Pointer)
+                    .hover(|s| s.background(color::border()))
+                    .apply_if(away().is_none(), |s| s.hide())
+            })
+            .on_event_stop(el::Click, move |_, _| pets.find())
+    };
     let footer = Stack::horizontal((
         lens_summary,
         focus_chip,
         legend,
+        pet_chip,
         Label::derived(move || status.get()).style(|s| {
             s.color(color::muted())
                 .flex_grow(1.0_f32)
@@ -677,23 +710,30 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
         ))
         .style(|s| s.size_full()),
         lens_menu(menu_state, lens_open),
+        pet::docked(state.clone(), window),
         popup_menu(state.clone()),
         drag_ghost(state.clone()),
         finder::finder(state.clone()),
         confirmation(state),
     ))
-    .style(|s| {
+    .style(move |s| {
+        // A /kill shakes everything.
+        let (x, y) = shake.get();
         s.size_full()
             .background(color::bg())
             .color(color::text())
             .font_size(13)
+            .translate_x(x)
+            .translate_y(y)
     })
     // Tab drags are followed here, over the whole window.
     .on_event_cont_with_config(el::PointerMove, CAPTURE, {
         let state = pointer_state.clone();
         move |_, event| {
             let held = !event.current.buttons.is_empty();
-            state.pointer_moved(event.current.logical_point(), held);
+            let at = event.current.logical_point();
+            state.pointer_moved(at, held);
+            state.pets.pointer_at(at);
         }
     })
     .on_event_cont_with_config(el::PointerDown, CAPTURE, {

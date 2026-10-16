@@ -28,6 +28,10 @@ pub enum Command {
     ZoomOut,
     ZoomReset,
     NewFile,
+    /// The pet: into a window of its own and back, or out of sight.
+    PetPopOut,
+    PetShow,
+    PetFind,
     Conversation,
     StopSession,
     NewSession,
@@ -90,6 +94,9 @@ pub const COMMANDS: &[Command] = &[
     Command::ZoomOut,
     Command::ZoomReset,
     Command::NewFile,
+    Command::PetPopOut,
+    Command::PetShow,
+    Command::PetFind,
     Command::Conversation,
     Command::StopSession,
     Command::NewSession,
@@ -312,6 +319,9 @@ impl Command {
             Self::ZoomOut => ("Zoom out (this pane)", ctrl("-")),
             Self::ZoomReset => ("Reset zoom (this pane)", ctrl("0")),
             Self::NewFile => ("New file…", None),
+            Self::PetPopOut => ("Pet: pop the front session's pet out, or back in", None),
+            Self::PetShow => ("Pet: show or hide", None),
+            Self::PetFind => ("Pet: find Glitch (back in the window)", None),
             Self::Conversation => ("Show Pi session", ctrl("j")),
             Self::StopSession => ("Stop Pi in this session", None),
             Self::NewSession => ("New Pi session", ctrl("n")),
@@ -389,6 +399,9 @@ pub fn execute(state: &std::rc::Rc<Workbench>, command: Command) {
         Command::ZoomOut => state.zoom(state.focused().get_untracked(), -1),
         Command::ZoomReset => state.zoom(state.focused().get_untracked(), 0),
         Command::NewFile => state.new_file(),
+        Command::PetPopOut => state.pets.toggle_out(),
+        Command::PetShow => state.pets.toggle_hidden(),
+        Command::PetFind => state.pets.find(),
         Command::Conversation => {
             state.show_conversation();
         }
