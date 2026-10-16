@@ -868,13 +868,17 @@ impl Session {
                 if let Some(file) = data["sessionFile"].as_str() {
                     let file = PathBuf::from(file);
                     // An extension can move Pi to a session in another
-                    // folder; the session's file says which.
-                    if let Some(cwd) = pi_client::sessions::cwd_of(&file)
+                    // folder; the new session's file says which. The same
+                    // file again is no news, whatever folder it names (an
+                    // extension may have said where Pi works since).
+                    let switched = self.file.get_untracked().is_some_and(|known| known != file);
+                    self.file.set(Some(file.clone()));
+                    if switched
+                        && let Some(cwd) = pi_client::sessions::cwd_of(&file)
                         && !pi_client::sessions::belongs(&cwd, &self.root())
                     {
                         (self.hooks().moved)(self.key, cwd);
                     }
-                    self.file.set(Some(file));
                 }
                 if let Some(name) = data["sessionName"].as_str().filter(|n| !n.is_empty()) {
                     self.title.set(shorten(name));
@@ -1323,12 +1327,19 @@ mod tests {
             let file = elsewhere.path().join("s.jsonl");
             let header = json!({"type": "session", "id": "x", "cwd": elsewhere.path()});
             std::fs::write(&file, format!("{header}\n")).unwrap();
-            session.handle(Event::Response {
-                command: "get_state".into(),
-                error: None,
-                handled: false,
-                data: json!({"sessionFile": file}),
-            });
+            let state = |file: &std::path::Path| {
+                session.handle(Event::Response {
+                    command: "get_state".into(),
+                    error: None,
+                    handled: false,
+                    data: json!({"sessionFile": file}),
+                })
+            };
+            // Pi's own file, then another one in another folder, then the
+            // same one again.
+            state(std::path::Path::new("/s/1.jsonl"));
+            state(&file);
+            state(&file);
             let moved = CUES.with_borrow(Clone::clone);
             assert_eq!(
                 moved,

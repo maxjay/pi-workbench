@@ -308,6 +308,8 @@ pub struct Workbench {
     after_restore: AfterRestore,
     /// Other folders are the window's business, as it shows one at a time.
     window: RefCell<Option<Rc<WindowLink>>>,
+    /// Whether this folder is the one its window shows.
+    shown: RwSignal<bool>,
 }
 
 type AfterRestore = RefCell<Vec<Box<dyn FnOnce(&Rc<Workbench>)>>>;
@@ -315,8 +317,10 @@ type AfterRestore = RefCell<Vec<Box<dyn FnOnce(&Rc<Workbench>)>>>;
 /// What a workspace may ask of its window.
 pub struct WindowLink {
     /// Brings a folder forward; with `Some(draft)`, in a new session there
-    /// with the draft in its composer.
-    pub go: Box<dyn Fn(PathBuf, Option<String>)>,
+    /// with the draft in its composer. Whether it could be opened.
+    pub go: Box<dyn Fn(PathBuf, Option<String>) -> bool>,
+    /// Closes the window, each folder in turn.
+    pub close: Box<dyn Fn()>,
     /// Folders Pi has worked in, open ones first.
     pub folders: Box<dyn Fn() -> Vec<PathBuf>>,
 }
@@ -442,6 +446,7 @@ impl Workbench {
             restored: Cell::new(false),
             after_restore: RefCell::new(Vec::new()),
             window: RefCell::new(None),
+            shown: RwSignal::new(true),
             kept: RefCell::new(Vec::new()),
             close_window: Box::new(close_window),
         })
@@ -471,15 +476,42 @@ impl Workbench {
     }
 
     /// Brings `folder` forward in the window; with `Some(draft)`, in a new
-    /// session there with the draft in its composer.
-    pub fn open_folder(&self, folder: PathBuf, draft: Option<String>) {
+    /// session there with the draft in its composer. Whether it could be
+    /// opened.
+    pub fn open_folder(&self, folder: PathBuf, draft: Option<String>) -> bool {
         let link = self.window.borrow().clone();
         match link {
             Some(link) => (link.go)(folder, draft),
-            None => self
-                .status
-                .set("This window cannot open other folders".into()),
+            None => {
+                self.status
+                    .set("This window cannot open other folders".into());
+                false
+            }
         }
+    }
+
+    /// Closes the whole window, every folder in it; just this workspace if
+    /// it has no window.
+    pub fn quit(&self) {
+        let link = self.window.borrow().clone();
+        match link {
+            Some(link) => (link.close)(),
+            None => self.request_quit(),
+        }
+    }
+
+    /// Whether this folder is the one its window shows.
+    pub fn shown(&self) -> ReadSignal<bool> {
+        self.shown.read_only()
+    }
+
+    /// Shows or hides this folder in its window. Hidden, its pet comes back
+    /// in and keeps still.
+    pub fn set_shown(&self, shown: bool) {
+        if self.shown.get_untracked() != shown {
+            self.shown.set(shown);
+        }
+        self.pets.set_away(!shown);
     }
 
     /// Where a session that has not started yet should run: a menu at `at`
@@ -559,6 +591,21 @@ impl Workbench {
         self.open_menu(at, items);
     }
 
+    /// The system's folder picker, for a folder to bring forward here.
+    pub fn pick_folder(self: &Rc<Self>) {
+        let state = self.clone();
+        floem::open_file(
+            floem::FileDialogOptions::new()
+                .select_directories()
+                .title("Open folder"),
+            move |picked| {
+                if let Some(path) = picked.and_then(|info| info.path.into_iter().next()) {
+                    state.open_folder(path, None);
+                }
+            },
+        );
+    }
+
     /// The system's folder picker, for where a session that has not begun
     /// should start.
     fn browse_for_folder(self: &Rc<Self>, key: u64) {
@@ -586,10 +633,11 @@ impl Workbench {
             return;
         };
         let draft = session.draft.text().to_string();
-        if !session.has_conversation() {
+        // Only once the folder has opened: a draft is not lost to one that
+        // cannot be.
+        if self.open_folder(folder, Some(draft)) && !session.has_conversation() {
             self.close_session(key);
         }
-        self.open_folder(folder, Some(draft));
     }
     pub fn focused(&self) -> ReadSignal<PaneId> {
         self.panes.focused()
@@ -1038,21 +1086,26 @@ impl Workbench {
     }
 
     /// Checks out the current commit as a new branch in a sibling folder and
-    /// opens it in a new window with a fresh session, so Pi works apart from
-    /// this checkout.
-    pub fn new_worktree_session(&self) {
+    /// starts a fresh session there, so Pi works apart from this checkout;
+    /// the window follows it.
+    pub fn new_worktree_session(self: &Rc<Self>) {
         self.status.set("Creating a worktree…".into());
-        let status = self.status;
+        let state = Rc::downgrade(self);
         let finish = create_ext_action(
             self.scope,
-            move |result: anyhow::Result<(PathBuf, String)>| match result.and_then(
-                |(path, branch)| {
-                    crate::open_window(&path)?;
-                    Ok(branch)
-                },
-            ) {
-                Ok(branch) => status.set(format!("Opened a new window on branch {branch}")),
-                Err(err) => status.set(format!("Worktree: {err:#}")),
+            move |result: anyhow::Result<(PathBuf, String)>| {
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok((path, branch)) => {
+                        state.open_folder(path, Some(String::new()));
+                        state
+                            .status
+                            .set(format!("Started a session on branch {branch}"));
+                    }
+                    Err(err) => state.status.set(format!("Worktree: {err:#}")),
+                }
             },
         );
         let root = self.root.clone();

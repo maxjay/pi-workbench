@@ -208,7 +208,7 @@ To install it, copy it into `~/.pi/agent/extensions/`.
 
 Settings apply as you save, except fonts and shortcuts, which apply to new windows.
 
-**New Pi session in its own worktree** (palette) checks out the current commit as a new branch `pi/pi-<time>` in a sibling folder `<repository>-worktrees/`, and opens it in a new window with a fresh session. Pi then works apart from your checkout, and merging its branch is up to you.
+**New Pi session in its own worktree** (palette) checks out the current commit as a new branch `pi/pi-<time>` in a sibling folder `<repository>-worktrees/`, and starts a fresh session there, the window following it. Pi then works apart from your checkout, and merging its branch is up to you.
 
 ## Shortcuts
 

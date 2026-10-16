@@ -98,13 +98,22 @@ impl Window {
             .with(|open| open.iter().map(|w| w.root().to_path_buf()).collect());
         self.folders.with(|known| {
             for (folder, _) in known {
-                let folder = folder.canonicalize().unwrap_or_else(|_| folder.clone());
-                if !folders.contains(&folder) {
-                    folders.push(folder);
+                if !folders.contains(folder) {
+                    folders.push(folder.clone());
                 }
             }
         });
         folders
+    }
+
+    /// The session files open in any of the window's folders. Tracked.
+    pub fn open_files(&self) -> HashSet<PathBuf> {
+        self.workspaces.with(|open| {
+            open.iter()
+                .flat_map(|state| state.sessions.open().get())
+                .filter_map(|session| session.file().get())
+                .collect()
+        })
     }
 
     /// When a session last changed in a folder Pi knows. Tracked.
@@ -140,7 +149,14 @@ impl Window {
     pub fn refresh_folders(&self) {
         let folders = self.folders;
         let finish = create_ext_action(self.scope, move |list| folders.set(list));
-        std::thread::spawn(move || finish(sessions::folders()));
+        std::thread::spawn(move || {
+            // In the form open folders take, so each is listed once.
+            let list: Vec<(PathBuf, SystemTime)> = sessions::folders()
+                .into_iter()
+                .map(|(folder, when)| (folder.canonicalize().unwrap_or(folder), when))
+                .collect();
+            finish(list)
+        });
     }
 
     /// A folder's workspace, opened (and its saved layout restored) if it
@@ -164,11 +180,14 @@ impl Window {
                 }
             })
         });
-        let (go, known) = (self.me.clone(), self.me.clone());
+        let (go, known, close) = (self.me.clone(), self.me.clone(), self.me.clone());
         state.link_window(WindowLink {
             go: Box::new(move |folder, draft| {
-                if let Some(window) = go.upgrade() {
-                    window.go(&folder, draft);
+                go.upgrade().is_some_and(|window| window.go(&folder, draft))
+            }),
+            close: Box::new(move || {
+                if let Some(window) = close.upgrade() {
+                    window.request_close();
                 }
             }),
             folders: Box::new(move || {
@@ -212,6 +231,7 @@ impl Window {
                 if self.active.get_untracked() != root {
                     self.active.set(root.clone());
                 }
+                self.mark_shown();
                 self.expanded.update(|open| {
                     open.insert(root);
                 });
@@ -227,10 +247,10 @@ impl Window {
     }
 
     /// Brings a folder forward; with `Some(draft)`, in a new session there
-    /// with the draft in its composer.
-    pub fn go(&self, folder: &Path, draft: Option<String>) {
+    /// with the draft in its composer. Whether it could be opened.
+    pub fn go(&self, folder: &Path, draft: Option<String>) -> bool {
         let Some(state) = self.show(folder) else {
-            return;
+            return false;
         };
         if let Some(draft) = draft {
             state.when_restored(move |state| {
@@ -241,6 +261,7 @@ impl Window {
                 }
             });
         }
+        true
     }
 
     /// Brings an open session forward, in its folder.
@@ -305,6 +326,14 @@ impl Window {
         self.refresh_folders();
     }
 
+    /// Tells each folder whether it is the one shown.
+    fn mark_shown(&self) {
+        let shown = self.active.get_untracked();
+        for state in self.workspaces.get_untracked() {
+            state.set_shown(state.root() == shown);
+        }
+    }
+
     /// Closes the window once every folder has: each saves its layout and
     /// asks about unsaved files, shown while it does.
     pub fn request_close(&self) {
@@ -322,6 +351,7 @@ impl Window {
             Some(state) => {
                 if self.active.get_untracked() != state.root() {
                     self.active.set(state.root().to_path_buf());
+                    self.mark_shown();
                 }
                 state.request_quit();
             }

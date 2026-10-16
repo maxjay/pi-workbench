@@ -175,11 +175,19 @@ fn folder_sessions(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
     )
     .style(|s| s.flex_col().width_full());
     // An open folder knows its own; others are read when first shown.
+    // Without sessions open anywhere in the window, which can be one Pi
+    // moved from here.
     let recent = {
         let (app, folder) = (app.clone(), folder.clone());
-        move || match app.workspace_tracked(&folder) {
-            Some(state) => state.sessions.recent(),
-            None => app.stored(&folder).unwrap_or_default(),
+        move || {
+            let open = app.open_files();
+            match app.workspace_tracked(&folder) {
+                Some(state) => state.sessions.recent(),
+                None => app.stored(&folder).unwrap_or_default(),
+            }
+            .into_iter()
+            .filter(|summary| !open.contains(&summary.path))
+            .collect::<Vec<_>>()
         }
     };
     let (count, hide_more) = (recent.clone(), recent.clone());
@@ -267,7 +275,7 @@ fn folder_group(app: Rc<Window>, folder: PathBuf) -> impl IntoView {
                         .hover(|s| s.background(color::border()))
                 })
                 .on_event_stop(el::Click, move |_, _| {
-                    new_app.go(&new_folder, Some(String::new()))
+                    new_app.go(&new_folder, Some(String::new()));
                 }),
             || Label::new("New session here").style(|s| s.padding(4).font_size(11)),
         ),

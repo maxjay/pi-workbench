@@ -659,7 +659,10 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
         )
     });
     let session_state = state.clone();
-    let session_visible = Memo::new(move |_| session_key.get().is_some());
+    // Only in the folder the window shows: a hidden composer must not take
+    // the keyboard.
+    let shown = state.shown();
+    let session_visible = Memo::new(move |_| session_key.get().is_some() && shown.get());
     // Keys left in a terminal follow focus here, to the composer; an empty
     // pane takes them from the terminal too.
     let keys_state = state.clone();

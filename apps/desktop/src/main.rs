@@ -56,29 +56,6 @@ fn icon() -> Option<floem::window::Icon> {
         .map(floem::window::Icon::from)
 }
 
-fn open_folder() {
-    floem::open_file(
-        floem::FileDialogOptions::new()
-            .select_directories()
-            .title("Open workspace"),
-        |selected| {
-            if let Some(info) = selected
-                && let Some(path) = info.path.first()
-                && let Err(err) = open_window(path)
-            {
-                report(&format!("Cannot open workspace: {err:#}"));
-            }
-        },
-    );
-}
-
-/// Opens a workspace folder in a new window.
-fn open_window(path: &Path) -> Result<()> {
-    let (root, _) = workspace_paths(path)?;
-    floem::new_window(move |id| ui::workbench(id, root), Some(window_config()));
-    Ok(())
-}
-
 /// WSLg's GPU-backed OpenGL loses the device while wgpu sets up, which Floem
 /// cannot recover from; Mesa's software renderer works. `PI_WORKBENCH_GPU=1`
 /// keeps the GPU for setups where it works.
