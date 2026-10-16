@@ -2980,7 +2980,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pi-client"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -2990,7 +2990,7 @@ dependencies = [
 
 [[package]]
 name = "pi-workbench"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -5225,7 +5225,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workbench-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -5237,7 +5237,7 @@ dependencies = [
 
 [[package]]
 name = "workbench-text"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "grep-matcher",
