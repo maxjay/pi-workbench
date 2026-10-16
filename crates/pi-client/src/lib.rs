@@ -152,7 +152,9 @@ pub fn ask_aside(
             }
             if started.elapsed() >= timeout {
                 timed_out = true;
-                drop(tree);
+                if let Some(tree) = tree {
+                    tree.kill();
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
