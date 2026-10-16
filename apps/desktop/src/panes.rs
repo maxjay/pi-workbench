@@ -515,6 +515,20 @@ impl Panes {
             .collect()
     }
 
+    /// Puts `to` where `from` is in a pane, showing it if `from` was shown.
+    pub fn swap(&self, id: PaneId, from: &Tab, to: Tab) {
+        let Some(pane) = self.pane(id) else { return };
+        pane.tabs.update(|tabs| {
+            tabs.retain(|t| *t != to);
+            if let Some(at) = tabs.iter().position(|t| t == from) {
+                tabs[at] = to.clone();
+            }
+        });
+        if pane.active.get_untracked().as_ref() == Some(from) {
+            pane.active.set(Some(to));
+        }
+    }
+
     /// Where a tab already is: the focused pane if it has it, else the first.
     pub fn find(&self, tab: &Tab) -> Option<PaneId> {
         let holding = self.holding(tab);
