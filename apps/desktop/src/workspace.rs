@@ -24,7 +24,7 @@ use floem::views::editor::{
 use pi_client::{Launch, sessions::SessionSummary};
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
@@ -108,6 +108,21 @@ keeping only what is strictly important: the goal; decisions and constraints tha
 hold; the current state of the work (done, in progress, broken); the files that matter and \
 why; open problems; and the next step. Leave out dead ends, chatter, and anything the fresh \
 session can find again in the code. Be brief and concrete. No preamble: start with the goal.";
+
+/// The title of a session started afresh from one titled `title`: short
+/// enough to keep its " (fresh)", and never "(fresh) (fresh)".
+fn fresh_title(title: &str) -> String {
+    const FRESH: &str = " (fresh)";
+    let mut base = title.trim();
+    while let Some(rest) = base.strip_suffix(FRESH) {
+        base = rest.trim_end();
+    }
+    let base = match base.char_indices().nth(38) {
+        Some((cut, _)) => format!("{}…", base[..cut].trim_end()),
+        None => base.to_string(),
+    };
+    format!("{base}{FRESH}")
+}
 
 /// The zoom a step from `now`: larger (`step` > 0), smaller, or the usual.
 fn zoom_step(now: f64, step: i32) -> f64 {
@@ -227,6 +242,9 @@ pub struct Workbench {
     pub panes: Rc<Panes>,
     scope: Scope,
     pending: RefCell<HashSet<PathBuf>>,
+    /// Sessions being started afresh by `/kill`, each with the scope its
+    /// handoff runs in.
+    renewing: RefCell<HashMap<u64, Scope>>,
     root: PathBuf,
     layout_path: PathBuf,
     layout: RwSignal<Layout>,
@@ -362,6 +380,7 @@ impl Workbench {
             panes,
             scope: Scope::current(),
             pending: RefCell::new(HashSet::new()),
+            renewing: RefCell::new(HashMap::new()),
             root,
             layout_path,
             layout_writable,
@@ -909,26 +928,54 @@ impl Workbench {
         let Some(old) = self.sessions.find(key) else {
             return;
         };
-        let pet = self.pets.pet(key);
-        let Some(file) = old.file().get_untracked() else {
-            // Nothing said yet, so nothing to keep.
-            self.finish_renew(key, Ok(String::new()));
+        if self.renewing.borrow().contains_key(&key) {
+            self.status
+                .set("Already starting that session afresh…".into());
             return;
-        };
-        pet.thinking.set(true);
+        }
+        let scope = self.scope.create_child();
+        self.renewing.borrow_mut().insert(key, scope);
+        self.pets.pet(key).thinking.set(true);
         self.status
             .set("Keeping what matters from the session…".into());
-        let question = if goal.is_empty() {
-            HANDOFF.to_string()
-        } else {
-            format!("{HANDOFF}\n\nWhat the new session is to do next: {goal}")
-        };
+        // A run /kill stopped is still writing its last turn; Pi reads the
+        // session once it has.
+        let (state, working, started) = (Rc::downgrade(self), old.working(), Cell::new(false));
+        scope.enter(|| {
+            Effect::new(move |_| {
+                if working.get() || started.replace(true) {
+                    return;
+                }
+                if let Some(state) = state.upgrade() {
+                    floem::reactive::Effect::untrack(|| state.write_handoff(key, &goal));
+                }
+            });
+        });
+    }
+
+    /// Has Pi write the handoff for a session `/kill` is starting afresh.
+    fn write_handoff(self: &Rc<Self>, key: u64, goal: &str) {
         let state = Rc::downgrade(self);
         let finish = create_ext_action(self.scope, move |result: anyhow::Result<String>| {
             if let Some(state) = state.upgrade() {
                 state.finish_renew(key, result.map_err(|e| format!("{e:#}")));
             }
         });
+        let Some(file) = self
+            .sessions
+            .find(key)
+            .and_then(|s| s.file().get_untracked())
+        else {
+            // Nothing said yet, so nothing to keep; finished from the event
+            // loop all the same, not inside the effect that called this.
+            finish(Ok(String::new()));
+            return;
+        };
+        let question = if goal.is_empty() {
+            HANDOFF.to_string()
+        } else {
+            format!("{HANDOFF}\n\nWhat the new session is to do next: {goal}")
+        };
         let (launch, root) = (self.sessions.launch().clone(), self.root.clone());
         std::thread::spawn(move || {
             finish(pi_client::ask_aside(
@@ -944,11 +991,15 @@ impl Workbench {
     /// The handoff is written (or could not be): the fresh session replaces
     /// the old, or the old one is left as it was.
     fn finish_renew(self: &Rc<Self>, key: u64, handoff: Result<String, String>) {
-        let pet = self.pets.pet(key);
-        pet.thinking.set(false);
+        if let Some(scope) = self.renewing.borrow_mut().remove(&key) {
+            scope.dispose();
+        }
+        // Closed meanwhile, and its pet gone with it: nothing to replace.
         let Some(old) = self.sessions.find(key) else {
             return;
         };
+        let pet = self.pets.pet(key);
+        pet.thinking.set(false);
         let handoff = match handoff {
             Ok(handoff) => handoff,
             Err(err) => {
@@ -959,8 +1010,9 @@ impl Workbench {
         };
         let title = old.title().get_untracked();
         let fresh = self.sessions.create();
-        fresh.rename(&format!("{title} (fresh)"));
+        // With nothing kept, its first prompt names it as usual.
         if !handoff.trim().is_empty() {
+            fresh.rename(&fresh_title(&title));
             fresh.set_draft(&format!(
                 "Continuing from an earlier session, \"{title}\", that was reset. \
                  What matters:\n\n{}",
@@ -2271,6 +2323,15 @@ mod tests {
                 "others untouched"
             );
         });
+    }
+
+    #[test]
+    fn a_fresh_title_keeps_its_mark_once() {
+        assert_eq!(fresh_title("Login fix"), "Login fix (fresh)");
+        assert_eq!(fresh_title("Login fix (fresh)"), "Login fix (fresh)");
+        let long = fresh_title(&"word ".repeat(20));
+        assert!(long.ends_with("… (fresh)"), "{long}");
+        assert_eq!(crate::session::shorten(&long), long, "fits a title");
     }
 
     #[test]

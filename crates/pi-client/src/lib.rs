@@ -316,6 +316,11 @@ impl PiProcess {
         self.send(json!({ "type": command }))
     }
 
+    /// The name Pi keeps for the session and lists it by.
+    pub fn set_session_name(&mut self, name: &str) -> Result<()> {
+        self.send(json!({ "type": "set_session_name", "name": name }))
+    }
+
     pub fn set_model(&mut self, provider: &str, id: &str) -> Result<()> {
         self.send(json!({ "type": "set_model", "provider": provider, "modelId": id }))
     }

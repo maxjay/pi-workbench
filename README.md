@@ -176,7 +176,7 @@ Elsewhere, a popped-out pet sits in a small card instead, and a throw just drops
 2. Pi reads a copy of the old session, with no tools, and writes a handoff: the goal, decisions and constraints that still hold, the state of the work, the files that matter, open problems and the next step. Dead ends and chatter are left out.
 3. A fresh session takes the old one's place in every pane, with the handoff in its composer to check and send. The old session stops and stays in Recent.
 
-Add what to do next, as in `/kill finish the parser`, and the handoff ends with it. If the handoff cannot be written, the old session is left as it was.
+Add what to do next, as in `/kill finish the parser`, and the handoff ends with it. If the handoff cannot be written, the old session stays open; a run `/kill` stopped stays stopped.
 
 The workbench handles `/kill` itself; Pi never sees it. Extensions can still cue the pet through Pi's `pet` status line, and [extensions/pet.ts](extensions/pet.ts) adds `/pet-say <text>` that way:
 

@@ -619,10 +619,16 @@ impl Session {
         }
     }
 
-    /// Gives the session a title its first prompt will not replace.
+    /// Gives the session a title its first prompt will not replace, kept by
+    /// Pi too, so Recent lists it by that name.
     pub fn rename(&self, title: &str) {
+        let title = shorten(title);
         self.named.set(true);
-        self.title.set(shorten(title));
+        self.title.set(title.clone());
+        if let Some(pi) = self.process.borrow_mut().as_mut() {
+            // Pi not taking the name only costs Recent the title.
+            let _ = pi.set_session_name(&title);
+        }
     }
 
     /// Puts text in the composer, in place of what was there, ready to send.
