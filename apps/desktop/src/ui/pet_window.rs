@@ -17,14 +17,14 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
         WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-            GetCursorPos, GetWindowRect, HTCAPTION, IDC_SIZENWSE, LoadCursorW, MA_NOACTIVATE,
-            MF_STRING, PostMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
-            SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow, SetWindowPos,
-            ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA,
-            UpdateLayeredWindow, WM_CLOSE, WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOVING, WM_NCDESTROY, WM_NCLBUTTONDOWN,
-            WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            GetCursorPos, GetWindowRect, HTCAPTION, IDC_ARROW, IDC_SIZENWSE, LoadCursorW,
+            MA_NOACTIVATE, MF_STRING, PostMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
+            SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow,
+            SetWindowPos, ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA,
+            UpdateLayeredWindow, WM_CAPTURECHANGED, WM_CLOSE, WM_EXITSIZEMOVE, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOVING, WM_NCDESTROY,
+            WM_NCLBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -201,6 +201,18 @@ unsafe extern "system" fn procedure(
             }
             return 0;
         }
+        // Capture lost mid-drag (Alt+Tab, say): the resize or press ends.
+        WM_CAPTURECHANGED => {
+            let resizing = WINDOWS.with_borrow_mut(|w| {
+                w.get_mut(&key).is_some_and(|e| {
+                    e.pressed = None;
+                    std::mem::replace(&mut e.resizing, false)
+                })
+            });
+            if resizing && let Some(events) = events(hwnd) {
+                events.resized();
+            }
+        }
         WM_NCDESTROY => {
             WINDOWS.with_borrow_mut(|w| w.remove(&key));
         }
@@ -221,6 +233,8 @@ fn register() {
     let class = wide(CLASS);
     let info = WNDCLASSW {
         lpfnWndProc: Some(procedure),
+        // The usual pointer over the pet; grips change it while over them.
+        hCursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) },
         hInstance: unsafe { GetModuleHandleW(std::ptr::null()) },
         lpszClassName: class.as_ptr(),
         ..Default::default()
@@ -433,6 +447,13 @@ pub fn move_window(hwnd: isize, at: (i32, i32)) {
             0,
             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+    }
+}
+
+/// Shows a window without making it the active one, or hides it.
+pub fn show_window(hwnd: isize, show: bool) {
+    unsafe {
+        ShowWindow(hwnd as HWND, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
 }
 

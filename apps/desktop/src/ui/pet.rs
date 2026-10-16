@@ -853,7 +853,11 @@ pub(super) fn follow_popping(state: Rc<Workbench>, main: WindowId) {
             old.close(&pets);
         }
         if let Some(key) = wanted {
-            *current.borrow_mut() = Some(Outside::open(&state, main, key));
+            match Outside::open(&state, main, key) {
+                Some(outside) => *current.borrow_mut() = Some(outside),
+                // It cannot go out; it stays in.
+                None => pets.out.set(None),
+            }
         }
     });
 }
@@ -1059,9 +1063,21 @@ fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoVie
             open.get() || !pet.questions().is_empty() || updates.with(|u| !u.is_empty())
         })
     };
-    Effect::new(move |_| id.set_visible(speaking.get()));
     #[cfg(windows)]
     pets.speech_hwnd.set(super::pet_window::native(id));
+    // Shown without taking the keyboard from whatever you are typing in;
+    // a click on it (to chat) gives it the keyboard.
+    let shown_pets = pets.clone();
+    Effect::new(move |_| {
+        let show = speaking.get();
+        #[cfg(windows)]
+        if let Some(hwnd) = shown_pets.speech_hwnd.get() {
+            super::pet_window::show_window(hwnd, show);
+            return;
+        }
+        let _ = &shown_pets;
+        id.set_visible(show);
+    });
     Stack::new((said,))
         .style(|s| {
             s.size_full()
@@ -1075,21 +1091,24 @@ fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoVie
             });
         })
         .on_event_cont(el::WindowClosed, move |_, _| {
+            // Closed by the system (Alt+F4, say): the pet comes back in
+            // rather than staying out without a word.
             if pets.window.get() == PetWindow::Open(id) {
                 pets.window.set(PetWindow::Closed);
                 pets.speech_hwnd.set(None);
+                pets.out.try_update(|out| *out = None);
             }
         })
 }
 
 #[cfg(not(windows))]
 impl Outside {
-    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Self {
+    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Option<Self> {
         let pet = state.pets.pet(key);
         let scope = floem::reactive::Scope::new();
         let at = start_point(main, card_size(None).height);
         scope.enter(|| Outside::speech_window(state, &pet, at, true));
-        Outside { key, scope }
+        Some(Outside { key, scope })
     }
 }
 
@@ -1106,8 +1125,6 @@ struct Body {
     width: Cell<u32>,
     height: Cell<u32>,
     side: Cell<u32>,
-    /// The screen's pixels per logical pixel.
-    scale: f64,
     /// Being made bigger: where its feet stay (physical), the pointer and
     /// size it started from.
     resizing: Cell<Option<Resize>>,
@@ -1115,10 +1132,15 @@ struct Body {
 
 #[cfg(windows)]
 impl Body {
+    /// The pixels per logical pixel of the screen it is on now, which
+    /// changes as it is dragged from one screen to another.
+    fn scale(&self) -> f64 {
+        self.layered.scale()
+    }
     /// Sized for a scale (the pet's size as a multiple of the usual).
     fn sized(&self, grown: f64) {
-        let width = (f64::from(CELL.0) * POPPED * grown * self.scale).round() as u32;
-        let height = (f64::from(CELL.1) * POPPED * grown * self.scale).round() as u32;
+        let width = (f64::from(CELL.0) * POPPED * grown * self.scale()).round() as u32;
+        let height = (f64::from(CELL.1) * POPPED * grown * self.scale()).round() as u32;
         self.width.set(width);
         self.height.set(height);
         self.side
@@ -1146,7 +1168,7 @@ impl Body {
             (FIGURE.0, FIGURE.3),
             (FIGURE.2, FIGURE.3),
         ];
-        let reach = 14.0 * self.scale;
+        let reach = 14.0 * self.scale();
         corners.iter().any(|(cx, cy)| {
             let corner = (f64::from(x) + w * cx, f64::from(y) + h * cy);
             (f64::from(at.0) - corner.0).abs() < reach && (f64::from(at.1) - corner.1).abs() < reach
@@ -1185,8 +1207,9 @@ impl Body {
 #[cfg(windows)]
 impl Outside {
     /// The pet alone, see-through, on top of everything, with its speech
-    /// in a small window above it that goes where it goes.
-    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Self {
+    /// in a small window above it that goes where it goes. `None` if the
+    /// system would not make the window.
+    fn open(state: &Rc<Workbench>, main: WindowId, key: u64) -> Option<Self> {
         use super::pet_window::{Events, Layered};
         let pets = state.pets.clone();
         let pet = pets.pet(key);
@@ -1243,7 +1266,7 @@ impl Outside {
                 else {
                     return;
                 };
-                let scale = body.scale;
+                let scale = body.scale();
                 let here = (f64::from(at.0) / scale, f64::from(at.1) / scale);
                 let now = std::time::Instant::now();
                 {
@@ -1283,7 +1306,7 @@ impl Outside {
                 let (velocity, spin) = windup.throw(release_velocity(&trail));
                 if velocity.0.hypot(velocity.1) > FLING_SPEED {
                     // Off it goes, inside the screen, onto the taskbar.
-                    let scale = body.scale;
+                    let scale = body.scale();
                     let (x, y) = body.place();
                     let (w, h) = (body.width() as i32, body.height() as i32);
                     let (left, top, right, bottom) = body.layered.work_area();
@@ -1320,42 +1343,54 @@ impl Outside {
             trail: RefCell::new(Vec::new()),
             windup: RefCell::new(Windup::default()),
         });
-        let layered =
-            Rc::new(Layered::open((0, 0), handler.clone()).expect("a layered window opens"));
-        // Floem works in logical pixels, the window in physical ones.
-        let scale = layered.scale();
+        let layered = Rc::new(Layered::open((0, 0), handler.clone())?);
         let body = Rc::new(Body {
             layered,
             width: Cell::new(0),
             height: Cell::new(0),
             side: Cell::new(0),
-            scale,
             resizing: Cell::new(None),
         });
-        body.sized(pets.popped_scale.get_untracked());
-        let (width, height) = (body.width(), body.height());
         *handler.body.borrow_mut() = Some(Rc::downgrade(&body));
+        let grown_now = pets.popped_scale.get_untracked();
+        body.sized(grown_now);
 
-        // Thrown out of the window, it carries on from where it left it.
+        // Where it starts comes in the workbench's logical pixels; its own
+        // window is in the physical pixels of whichever screen that is.
+        let main_scale = main.scale();
         let launch = pets.take_launch();
-        let start = launch.map_or_else(|| start_point(main, f64::from(height) / scale), |l| l.0);
-        let home = (
-            (start.x * scale).round() as i32,
-            (start.y * scale).round() as i32,
+        let start = launch.map_or_else(
+            || start_point(main, f64::from(body.height()) / body.scale()),
+            |l| l.0,
         );
-        let pose_now = pet.pose().get_untracked();
-        body.paint(
-            &sheet(color::is_dark()).pixels(pose_now.anim.row(), pose_now.column, width, height),
-            pose_now.angle,
+        let home = (
+            (start.x * main_scale).round() as i32,
+            (start.y * main_scale).round() as i32,
         );
         body.move_to(home);
+        // Now on that screen, sized for it.
+        body.sized(grown_now);
+        body.move_to(home);
+        let pose_now = pet.pose().get_untracked();
+        body.paint(
+            &sheet(color::is_dark()).pixels(
+                pose_now.anim.row(),
+                pose_now.column,
+                body.width(),
+                body.height(),
+            ),
+            pose_now.angle,
+        );
+        // Thrown out of the window, it carries on from where it left it.
         if let Some((_, velocity, spin)) = launch {
+            let scale = body.scale();
+            let (width, height) = (body.width() as i32, body.height() as i32);
             let (left, top, right, bottom) = body.layered.work_area();
             let bounds = Bounds {
                 left: f64::from(left - home.0) / scale,
-                right: f64::from(right - width as i32 - home.0) / scale,
+                right: f64::from(right - width - home.0) / scale,
                 top: f64::from(top - home.1) / scale,
-                floor: f64::from(bottom - height as i32 - home.1) / scale,
+                floor: f64::from(bottom - height - home.1) / scale,
             };
             pet.launch((0.0, 0.0), velocity, spin, bounds, false);
         }
@@ -1382,7 +1417,7 @@ impl Outside {
                 let size = size as f64 / 1000.0;
                 let feet = paint_body.feet();
                 let resized = (f64::from(paint_body.width())
-                    - (f64::from(CELL.0) * POPPED * size * paint_body.scale).round())
+                    - (f64::from(CELL.0) * POPPED * size * paint_body.scale()).round())
                 .abs()
                     > 0.5;
                 if resized {
@@ -1420,15 +1455,17 @@ impl Outside {
                     _ => {
                         let start = move_body.place();
                         if motion.0 {
-                            // As far left as the screen allows.
+                            // As far left as its screen allows.
+                            let room = f64::from(start.0 - move_body.layered.work_area().0);
                             throw_pet
                                 .throw_distance
-                                .set((f64::from(start.0) / scale / 1.15).clamp(0.0, 420.0));
+                                .set((room / move_body.scale() / 1.15).clamp(0.0, 420.0));
                         }
                         from.set(Some((motion, start)));
                         start
                     }
                 };
+                let scale = move_body.scale();
                 let dx = ((pose.thrown.0 + pose.shake.0) * scale).round() as i32;
                 let dy = ((pose.thrown.1 + pose.shake.1) * scale).round() as i32;
                 let at = (start.0 + dx, start.1 + dy);
@@ -1456,21 +1493,23 @@ impl Outside {
                     f64::from(y) + f64::from(look_body.height()) * 0.62,
                 );
                 let at = super::pet_window::pointer();
+                let scale = look_body.scale();
                 look_pet.look_at(
                     (face.0 / scale, face.1 / scale),
                     (f64::from(at.0) / scale, f64::from(at.1) / scale),
                 );
             });
             let speech_at = Point::new(
-                f64::from(home.0) / scale,
-                f64::from(home.1) / scale + f64::from(height) / scale * HEADROOM - 44.0,
+                f64::from(home.0) / main_scale,
+                f64::from(home.1) / main_scale + f64::from(body.height()) / main_scale * HEADROOM
+                    - 44.0,
             );
             Outside::speech_window(state, &pet, speech_at, false);
         });
-        Outside {
+        Some(Outside {
             key,
             scope,
             _body: body,
-        }
+        })
     }
 }

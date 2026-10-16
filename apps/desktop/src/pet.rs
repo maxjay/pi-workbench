@@ -449,6 +449,8 @@ pub fn gist(reply: &str) -> Option<String> {
 /// the window, where it also brings news and questions from the others.
 pub struct Pet {
     pub key: u64,
+    /// Its signals and memos, disposed of when its session closes.
+    scope: Scope,
     sessions: Rc<Sessions>,
     clock: RwSignal<u64>,
     started: Instant,
@@ -494,9 +496,11 @@ pub struct Pet {
 
 impl Pet {
     fn new(pets: &Pets, key: u64) -> Rc<Self> {
-        pets.scope.enter(|| {
+        let scope = pets.scope.create_child();
+        scope.enter(|| {
             let pet = Rc::new(Pet {
                 key,
+                scope,
                 sessions: pets.sessions.clone(),
                 clock: pets.clock,
                 started: pets.started,
@@ -828,6 +832,16 @@ impl Pet {
         }
     }
 
+    /// Stops whatever it is in the middle of.
+    fn settle(&self) {
+        if self.busy() {
+            self.shot.set(None);
+            self.flight.set(None);
+            self.swing.set(None);
+            self.moving.set(None);
+        }
+    }
+
     /// Whether it is on the move: flying, thrown, swung or dragged, when
     /// the clock runs faster.
     fn busy(&self) -> bool {
@@ -1112,7 +1126,13 @@ impl Pets {
         let Some(hidden) = this.hidden.try_get_untracked() else {
             return;
         };
-        if !hidden {
+        if hidden {
+            // Out of sight, nothing is under way: no shot, flight or swing
+            // keeps the clock running fast.
+            for pet in this.pets.borrow().values() {
+                pet.settle();
+            }
+        } else {
             this.advance();
         }
         let busy = this.pets.borrow().values().any(|pet| pet.busy());
@@ -1202,7 +1222,11 @@ impl Pets {
                         .filter(|key| !open.iter().any(|s| s.key == *key))
                         .collect();
                     for key in closed {
-                        pets.pets.borrow_mut().remove(&key);
+                        if let Some(pet) = pets.pets.borrow_mut().remove(&key) {
+                            // Once its views have gone with it.
+                            let scope = pet.scope;
+                            exec_after(Duration::from_secs(2), move |_| scope.dispose());
+                        }
                         if pets.out.get_untracked() == Some(key) {
                             pets.out.set(None);
                         }

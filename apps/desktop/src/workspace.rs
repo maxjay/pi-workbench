@@ -825,7 +825,11 @@ impl Workbench {
                     pet.quip(&format!("Sent to {}", session.title().get_untracked()));
                 }
                 Some(_) => pet.quip("That session is busy sending."),
-                None => pet.quip("That session has closed."),
+                None => {
+                    // Back to asking aside.
+                    pet.target.set(None);
+                    pet.quip("That session has closed. Asking aside from now on.");
+                }
             }
             return;
         }

@@ -124,50 +124,52 @@ pub fn ask_aside(
         command.creation_flags(CREATE_NO_WINDOW);
     }
     let result = (|| {
-        let child = command
+        let mut child = command
             .spawn()
             .with_context(|| format!("Could not start `{}`", launch.program))?;
-        let child = Arc::new(Mutex::new(child));
-        // Gives up after `timeout`, rather than waiting on a stuck Pi.
-        let watch = child.clone();
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let finished = done.clone();
-        std::thread::spawn(move || {
-            let step = Duration::from_millis(200);
-            let mut waited = Duration::ZERO;
-            while waited < timeout {
-                if finished.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
+        // The whole tree: on Windows the child is the `.cmd` shim, with Pi
+        // under it, and both must end on a timeout.
+        let tree = Tree::adopt(&child);
+        // Both pipes are drained at once, so neither fills and stalls Pi.
+        let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+            let (sent, got) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                if let Some(mut pipe) = pipe {
+                    let _ = pipe.read_to_string(&mut text);
                 }
-                std::thread::sleep(step);
-                waited += step;
-            }
-            if let Ok(mut child) = watch.lock() {
-                let _ = child.kill();
-            }
-        });
-        let (stdout, stderr) = {
-            let mut child = child.lock().map_err(|_| anyhow::anyhow!("Pi's process"))?;
-            (child.stdout.take(), child.stderr.take())
+                let _ = sent.send(text);
+            });
+            got
         };
-        let mut answer = String::new();
-        if let Some(mut stdout) = stdout {
-            std::io::Read::read_to_string(&mut stdout, &mut answer)?;
+        let answer = drain(child.stdout.take().map(|p| Box::new(p) as _));
+        let errors = drain(child.stderr.take().map(|p| Box::new(p) as _));
+        let started = std::time::Instant::now();
+        let mut timed_out = false;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if started.elapsed() >= timeout {
+                timed_out = true;
+                drop(tree);
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        if timed_out {
+            anyhow::bail!("Pi took too long to answer");
         }
-        let mut errors = String::new();
-        if let Some(mut stderr) = stderr {
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut errors);
-        }
-        let status = child
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Pi's process"))?
-            .wait()?;
-        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        // Anything still holding the pipes open is not waited on for long.
+        let collect = |got: std::sync::mpsc::Receiver<String>| {
+            got.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
+        };
+        let (answer, errors) = (collect(answer), collect(errors));
         let answer = answer.trim().to_string();
-        if status.success() && !answer.is_empty() {
+        if status.is_some_and(|s| s.success()) && !answer.is_empty() {
             Ok(answer)
-        } else if waited_out(&errors, &answer) {
-            anyhow::bail!("Pi took too long to answer")
         } else {
             anyhow::bail!(
                 "{}",
@@ -182,11 +184,6 @@ pub fn ask_aside(
     })();
     let _ = std::fs::remove_dir_all(&aside);
     result
-}
-
-/// Pi was stopped for taking too long: no answer and nothing said why.
-fn waited_out(errors: &str, answer: &str) -> bool {
-    errors.trim().is_empty() && answer.is_empty()
 }
 
 /// A reply to an extension's question.
