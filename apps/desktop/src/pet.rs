@@ -125,6 +125,113 @@ const GET_UP: u64 = 700;
 /// Walking back, in logical pixels per millisecond.
 const WALK: f64 = 0.35;
 
+/// Where a flung pet may go, as offsets from where it was let go (or, in a
+/// conversation, from its place there): the walls, the ceiling and the
+/// floor it lands on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds {
+    pub left: f64,
+    pub right: f64,
+    pub top: f64,
+    pub floor: f64,
+}
+
+impl Bounds {
+    /// A hop where it stands: nothing in the way, and the floor under it.
+    pub const HOP: Bounds = Bounds {
+        left: f64::NEG_INFINITY,
+        right: f64::INFINITY,
+        top: f64::NEG_INFINITY,
+        floor: 0.0,
+    };
+}
+
+/// A pet in the air (or rolling, or walking home), in logical pixels and
+/// pixels per second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flight {
+    /// Tells one flight from another.
+    pub id: u64,
+    pub at: (f64, f64),
+    pub velocity: (f64, f64),
+    pub bounds: Bounds,
+    /// Walks back to (0, 0) once down, as in a conversation.
+    pub walk_home: bool,
+    /// The hardest it hit something since the last step, to complain about.
+    pub hit: f64,
+}
+
+/// Pulls it down, in pixels per second per second.
+const GRAVITY: f64 = 2600.0;
+/// Of its speed into a wall or the floor, how much comes back.
+const BOUNCE: f64 = 0.55;
+/// Slower than this on the floor, it stops bouncing.
+const SETTLE_SPEED: f64 = 140.0;
+
+impl Flight {
+    pub fn on_floor(&self) -> bool {
+        self.at.1 >= self.bounds.floor - 0.5 && self.velocity.1.abs() < f64::EPSILON
+    }
+
+    /// Down, still, and home if it walks there: over.
+    pub fn done(&self) -> bool {
+        self.on_floor() && self.velocity.0.abs() < 1.0 && (!self.walk_home || self.at.0.abs() < 1.0)
+    }
+
+    /// Moves it on `dt` seconds: falling, bouncing off the walls, ceiling
+    /// and floor, rolling to a stop, then walking home if it does.
+    pub fn step(mut self, dt: f64) -> Flight {
+        let dt = dt.clamp(0.0, 0.05);
+        let b = self.bounds;
+        self.hit = 0.0;
+        if self.on_floor() && self.velocity.0.abs() < 1.0 {
+            // Down and still: walk home, or stay.
+            if self.walk_home {
+                let step = WALK * 1000.0 * dt;
+                self.at.0 = if self.at.0 < 0.0 {
+                    (self.at.0 + step).min(0.0)
+                } else {
+                    (self.at.0 - step).max(0.0)
+                };
+            }
+            return self;
+        }
+        self.velocity.1 += GRAVITY * dt;
+        self.at.0 += self.velocity.0 * dt;
+        self.at.1 += self.velocity.1 * dt;
+        if self.at.0 < b.left {
+            self.at.0 = b.left;
+            self.hit = self.hit.max(self.velocity.0.abs());
+            self.velocity.0 = self.velocity.0.abs() * BOUNCE;
+        } else if self.at.0 > b.right {
+            self.at.0 = b.right;
+            self.hit = self.hit.max(self.velocity.0.abs());
+            self.velocity.0 = -self.velocity.0.abs() * BOUNCE;
+        }
+        if self.at.1 < b.top {
+            self.at.1 = b.top;
+            self.hit = self.hit.max(self.velocity.1.abs());
+            self.velocity.1 = self.velocity.1.abs() * BOUNCE;
+        }
+        if self.at.1 >= b.floor {
+            self.at.1 = b.floor;
+            self.hit = self.hit.max(self.velocity.1.abs());
+            if self.velocity.1 < SETTLE_SPEED {
+                self.velocity.1 = 0.0;
+                // Rolling to a stop.
+                self.velocity.0 *= 0.8_f64.powf(dt * 30.0);
+                if self.velocity.0.abs() < 12.0 {
+                    self.velocity.0 = 0.0;
+                }
+            } else {
+                self.velocity.1 = -self.velocity.1 * BOUNCE;
+                self.velocity.0 *= 0.85;
+            }
+        }
+        self
+    }
+}
+
 /// The whole `/kill`: shot from the right, thrown `distance` to the left
 /// in an arc, a bounce and a slide, lying still, then getting up, and
 /// walking back if `walk_home`. `None` once it is over.
@@ -263,6 +370,12 @@ pub struct Pet {
     once: RwSignal<Option<(Anim, u64)>>,
     /// When the current `/kill` began.
     shot: RwSignal<Option<u64>>,
+    /// In the air after a fling or a hop.
+    flight: RwSignal<Option<Flight>>,
+    /// Held by the pointer, this far from its place (in a conversation).
+    pub held: RwSignal<Option<(f64, f64)>>,
+    /// When it last complained, so it does not say "Ow" every bounce.
+    complained: Cell<u64>,
     /// How far a `/kill` throws, as the view with room for it decides.
     pub throw_distance: Cell<f64>,
     /// Being dragged, moving right (`true`) or left.
@@ -292,6 +405,9 @@ impl Pet {
                 out: pets.out,
                 once: RwSignal::new(None),
                 shot: RwSignal::new(None),
+                flight: RwSignal::new(None),
+                held: RwSignal::new(None),
+                complained: Cell::new(0),
                 throw_distance: Cell::new(240.0),
                 moving: RwSignal::new(None),
                 look: RwSignal::new(None),
@@ -357,6 +473,33 @@ impl Pet {
                 column: frame.column,
                 thrown: frame.thrown,
                 shake: frame.shake,
+            };
+        }
+        if let Some(at) = self.held.get() {
+            // Dangling: legs up, as in the air.
+            return Pose {
+                thrown: at,
+                ..still(Anim::Jump, 2)
+            };
+        }
+        if let Some(flight) = self.flight.get() {
+            let (anim, column) = if !flight.on_floor() {
+                (Anim::Jump, 2)
+            } else if flight.velocity.0.abs() >= 1.0 {
+                (Anim::Jump, 4)
+            } else if flight.walk_home && flight.at.0.abs() >= 1.0 {
+                let anim = if flight.at.0 < 0.0 {
+                    Anim::RunRight
+                } else {
+                    Anim::RunLeft
+                };
+                (anim, anim.column(ms, true))
+            } else {
+                (Anim::Jump, 4)
+            };
+            return Pose {
+                thrown: flight.at,
+                ..still(anim, column)
             };
         }
         if let Some(right) = self.moving.get() {
@@ -519,12 +662,69 @@ impl Pet {
         self.play(Anim::Wave);
     }
 
-    /// Clicked: a hop, and the pleased look is acknowledged.
+    /// Clicked: a jump where it stands, and the pleased look is
+    /// acknowledged.
     pub fn poke(&self) {
         if self.finished.with_untracked(Option::is_some) {
             self.finished.set(None);
         }
-        self.play(Anim::Jump);
+        if self.shot.get_untracked().is_none() && self.flight.get_untracked().is_none() {
+            self.launch((0.0, 0.0), (0.0, -720.0), Bounds::HOP, false);
+        }
+    }
+
+    /// Let go of at `at`, moving at `velocity`: it flies, bounces off what
+    /// is in the way, and lands, walking home after if `walk_home`.
+    pub fn launch(&self, at: (f64, f64), velocity: (f64, f64), bounds: Bounds, walk_home: bool) {
+        if self.shot.get_untracked().is_some() {
+            return;
+        }
+        self.held.set(None);
+        self.once.set(None);
+        self.flight.set(Some(Flight {
+            id: self.now(),
+            at,
+            velocity,
+            bounds,
+            walk_home,
+            hit: 0.0,
+        }));
+    }
+
+    /// In the air, rolling or walking home.
+    pub fn flight(&self) -> RwSignal<Option<Flight>> {
+        self.flight
+    }
+
+    /// Moves a flight on, and complains about hard knocks.
+    fn fly(&self, dt: f64) {
+        let Some(flight) = self.flight.get_untracked() else {
+            return;
+        };
+        // Ended a tick after it comes to rest, so where it lands is drawn.
+        if flight.done() {
+            self.flight.set(None);
+            return;
+        }
+        let next = flight.step(dt);
+        if next.hit > 1400.0 && self.now().saturating_sub(self.complained.get()) > 900 {
+            self.complained.set(self.now());
+            const OUCH: [&str; 6] = ["Ow!", "Hey!", "Easy!", "Why?!", "Rude.", "Ouch."];
+            let pick = (self.now() / 7) as usize % OUCH.len();
+            self.quip(OUCH[pick]);
+        }
+        self.flight.set(Some(next));
+    }
+
+    /// A short remark, gone in a moment.
+    fn quip(&self, text: &str) {
+        self.tell(None, text.to_string());
+        let id = self.next_update.get();
+        self.updates.update(|updates| {
+            if let Some(update) = updates.iter_mut().find(|u| u.id == id) {
+                update.until = Instant::now() + Duration::from_millis(1800);
+            }
+        });
     }
 
     /// Shot from the right and thrown. A kill while one is under way
@@ -532,6 +732,8 @@ impl Pet {
     pub fn kill(&self) {
         self.once.set(None);
         self.moving.set(None);
+        self.held.set(None);
+        self.flight.set(None);
         self.shot.set(Some(self.now()));
     }
 
@@ -714,10 +916,13 @@ impl Pets {
         let pets: Vec<Rc<Pet>> = self.pets.borrow().values().cloned().collect();
         // A finished /kill ends before the clock moves on, so a pet is never
         // drawn back where it was shot from for a frame.
+        let now = self.started.elapsed().as_millis() as u64;
+        let dt = now.saturating_sub(self.clock.get_untracked()) as f64 / 1000.0;
         for pet in &pets {
             pet.expire();
+            pet.fly(dt);
         }
-        self.clock.set(self.started.elapsed().as_millis() as u64);
+        self.clock.set(now);
         let shake = pets
             .iter()
             .find_map(|pet| pet.shake())
@@ -889,6 +1094,54 @@ mod tests {
         let long = "word ".repeat(60);
         let cut = gist(&long).unwrap();
         assert!(cut.ends_with('…') && cut.chars().count() <= GIST);
+    }
+
+    #[test]
+    fn a_flung_pet_bounces_off_walls_and_lands() {
+        let bounds = Bounds {
+            left: -300.0,
+            right: 50.0,
+            top: -400.0,
+            floor: 0.0,
+        };
+        let mut flight = Flight {
+            id: 1,
+            at: (0.0, -100.0),
+            velocity: (-2500.0, -300.0),
+            bounds,
+            walk_home: false,
+            hit: 0.0,
+        };
+        let mut hit_wall = false;
+        for _ in 0..600 {
+            flight = flight.step(1.0 / 60.0);
+            assert!(flight.at.0 >= -300.0 && flight.at.0 <= 50.0 && flight.at.1 <= 0.0);
+            hit_wall |= flight.hit > 1000.0 && flight.at.0 == -300.0;
+        }
+        assert!(hit_wall, "it hits the left wall hard");
+        assert!(flight.done(), "and comes to rest: {flight:?}");
+        // Walking home from where it landed.
+        let mut home = Flight {
+            walk_home: true,
+            ..flight
+        };
+        for _ in 0..600 {
+            home = home.step(1.0 / 60.0);
+        }
+        assert!(home.done() && home.at == (0.0, 0.0));
+        // A hop comes back down where it started.
+        let mut hop = Flight {
+            at: (0.0, 0.0),
+            velocity: (0.0, -720.0),
+            bounds: Bounds::HOP,
+            ..flight
+        };
+        let mut highest: f64 = 0.0;
+        for _ in 0..120 {
+            hop = hop.step(1.0 / 60.0);
+            highest = highest.min(hop.at.1);
+        }
+        assert!(highest < -80.0 && hop.done() && hop.at.1 == 0.0);
     }
 
     #[test]

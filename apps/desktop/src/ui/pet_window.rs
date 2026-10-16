@@ -8,7 +8,8 @@ use windows_sys::Win32::{
     Graphics::Gdi::{
         AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION,
         CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC,
-        ReleaseDC, SelectObject,
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC,
+        SelectObject,
     },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
@@ -31,8 +32,9 @@ use windows_sys::Win32::{
 pub trait Events {
     /// Clicked without moving.
     fn clicked(&self);
-    /// Being dragged; `dx` is how far it moved sideways just now.
-    fn dragged(&self, dx: i32);
+    /// Being dragged: where it is now (screen, physical pixels) and how far
+    /// it moved sideways just now.
+    fn dragged(&self, at: (i32, i32), dx: i32);
     /// Let go after a drag.
     fn dropped(&self);
     /// A choice from the right-click menu, by its index in `menu`.
@@ -124,10 +126,9 @@ unsafe extern "system" fn procedure(
                 Some(dx)
             });
             if let Some(dx) = dx
-                && dx != 0
                 && let Some(events) = events(hwnd)
             {
-                events.dragged(dx);
+                events.dragged((rect.left, rect.top), dx);
             }
         }
         WM_EXITSIZEMOVE => {
@@ -256,6 +257,21 @@ impl Layered {
             rect.right - rect.left,
             rect.bottom - rect.top,
         )
+    }
+
+    /// The part of its screen that is not the taskbar: left, top, right,
+    /// bottom (physical pixels).
+    pub fn work_area(&self) -> (i32, i32, i32, i32) {
+        unsafe {
+            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            GetMonitorInfoW(monitor, &mut info);
+            let work = info.rcWork;
+            (work.left, work.top, work.right, work.bottom)
+        }
     }
 
     /// Shows straight-alpha RGBA pixels, moving the window to `at` if given.

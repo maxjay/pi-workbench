@@ -152,14 +152,15 @@ Every session has its own Glitch, at the bottom right of its conversation.
 - **Its session:** it works while the session works, waits when it needs you, and looks pleased when it finishes.
 - **Each reply:** it says the gist of each reply. Click that to dismiss it.
 - **Questions:** when an extension asks something, the question appears in its bubble with its answers, so you can reply there.
-- **Its eyes:** it watches the pointer, hops when clicked, and waves hello.
+- **Its eyes:** it watches the pointer and waves hello.
+- **Fling it:** click it and it jumps. Grab it and throw it, and it flies across the conversation, bounces off the edges, complains if you throw it hard enough, lands, and walks back to its place.
 - **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
 
 **Pop out**, on hover, takes a session's pet out of the window onto the desktop:
 
 - **See-through:** on Windows it is only Glitch, with no window around it. Its speech appears above it when it has something to say.
 - **Still that session's:** it speaks up on each of its session's replies. It also brings the other sessions' news and questions, its own session's first.
-- **Moving and dismissing:** drag Glitch to move it, and it runs the way you drag. Right-click for **Pop in** and **Hide**.
+- **Moving and dismissing:** drag Glitch to move it, and it runs the way you drag. Throw it and it flies across the screen, bouncing off the edges and landing on the taskbar. Click it to make it jump. Right-click for **Pop in** and **Hide**.
 - **Commands:** *Pet: pop the front session's pet out, or back in* and *Pet: show or hide* are in the command picker.
 - **Saved:** whether a pet is out or hidden is saved per workspace.
 
