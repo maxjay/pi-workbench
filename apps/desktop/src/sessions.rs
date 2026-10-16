@@ -84,6 +84,11 @@ impl Sessions {
         })
     }
 
+    /// How Pi is started.
+    pub fn launch(&self) -> &Launch {
+        &self.launch
+    }
+
     /// The latest thing a session asked the pet to do.
     pub fn cue(&self) -> ReadSignal<Option<Cue>> {
         self.cue.read_only()

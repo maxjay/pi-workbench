@@ -625,10 +625,37 @@ pub fn workbench(window: WindowId, root: PathBuf, layout_path: PathBuf) -> impl 
                 .apply_if(on, |s| s.background(color::highlight()))
         })
         .on_event_stop(el::Click, move |_, _| toggle_lens.toggle_focus());
+    // Where the pet went, when it is not in the window; a click brings it
+    // back.
+    let pet_chip = {
+        let (pets, front) = (state.pets.clone(), state.sessions.active_key());
+        let (out, hidden) = (pets.out, pets.hidden);
+        let away = move || {
+            if hidden.get() {
+                Some("Glitch is hidden")
+            } else if out.get().is_some() && out.get() == front.get() {
+                Some("Glitch is out")
+            } else {
+                None
+            }
+        };
+        let label_away = away;
+        Label::derived(move || label_away().unwrap_or_default().to_string())
+            .style(move |s| {
+                s.color(color::accent())
+                    .padding_horiz(6)
+                    .border_radius(5)
+                    .cursor(floem::style::CursorStyle::Pointer)
+                    .hover(|s| s.background(color::border()))
+                    .apply_if(away().is_none(), |s| s.hide())
+            })
+            .on_event_stop(el::Click, move |_, _| pets.find())
+    };
     let footer = Stack::horizontal((
         lens_summary,
         focus_chip,
         legend,
+        pet_chip,
         Label::derived(move || status.get()).style(|s| {
             s.color(color::muted())
                 .flex_grow(1.0_f32)

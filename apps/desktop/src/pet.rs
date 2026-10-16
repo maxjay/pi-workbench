@@ -260,6 +260,13 @@ impl Flight {
     }
 }
 
+/// Where a pet sits in the window to begin with: its left edge, and its
+/// height above the window's bottom, at the foot of the sessions rail.
+const HOME: (f64, f64) = (136.0, 34.0);
+
+/// The smallest and largest a pet can be made, as multiples of the usual.
+pub const GROWN: (f64, f64) = (0.5, 4.0);
+
 /// Spinning a held pet round winds it up: the turns it makes add to the
 /// throw, and it tumbles as it flies.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -446,6 +453,8 @@ pub struct Pet {
     clock: RwSignal<u64>,
     started: Instant,
     out: RwSignal<Option<u64>>,
+    docked_scale: RwSignal<f64>,
+    popped_scale: RwSignal<f64>,
     /// A one-off animation and when it began, after which the mood resumes.
     once: RwSignal<Option<(Anim, u64)>>,
     /// When the current `/kill` began.
@@ -458,6 +467,13 @@ pub struct Pet {
     pub swing: RwSignal<Option<f64>>,
     /// When it last complained, so it does not say "Ow" every bounce.
     complained: Cell<u64>,
+    /// Its chat box is open.
+    pub chat_open: RwSignal<bool>,
+    /// Who its chat box talks to: `None` asks its session on the side
+    /// (`/btw`), or a session it sends to as a prompt.
+    pub target: RwSignal<Option<u64>>,
+    /// Waiting on an answer to a side question.
+    pub thinking: RwSignal<bool>,
     /// How far a `/kill` throws, as the view with room for it decides.
     pub throw_distance: Cell<f64>,
     /// Being dragged, moving right (`true`) or left.
@@ -485,12 +501,17 @@ impl Pet {
                 clock: pets.clock,
                 started: pets.started,
                 out: pets.out,
+                docked_scale: pets.docked_scale,
+                popped_scale: pets.popped_scale,
                 once: RwSignal::new(None),
                 shot: RwSignal::new(None),
                 flight: RwSignal::new(None),
                 held: RwSignal::new(None),
                 swing: RwSignal::new(None),
                 complained: Cell::new(0),
+                chat_open: RwSignal::new(false),
+                target: RwSignal::new(None),
+                thinking: RwSignal::new(false),
                 throw_distance: Cell::new(240.0),
                 moving: RwSignal::new(None),
                 look: RwSignal::new(None),
@@ -617,6 +638,9 @@ impl Pet {
     /// What the pet does when nothing in particular is happening: how its
     /// session is doing, then any question waiting for you.
     fn compute_mood(&self) -> Anim {
+        if self.thinking.get() {
+            return Anim::Working;
+        }
         match self.sessions.find_tracked(self.key).map(|s| s.status()) {
             Some(Status::NeedsInput) => return Anim::Waiting,
             Some(Status::Working) => return Anim::Working,
@@ -795,6 +819,15 @@ impl Pet {
         }));
     }
 
+    /// Its size, as a multiple of the usual.
+    pub fn grown(&self) -> f64 {
+        if self.out.get() == Some(self.key) {
+            self.popped_scale.get()
+        } else {
+            self.docked_scale.get()
+        }
+    }
+
     /// Whether it is on the move: flying, thrown, swung or dragged, when
     /// the clock runs faster.
     fn busy(&self) -> bool {
@@ -805,7 +838,6 @@ impl Pet {
     }
 
     /// In the air, rolling or walking home.
-    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn flight(&self) -> RwSignal<Option<Flight>> {
         self.flight
     }
@@ -830,8 +862,20 @@ impl Pet {
         self.flight.set(Some(next));
     }
 
+    /// Says something that stays until dismissed (or for a long while):
+    /// an answer to read.
+    pub fn answer(&self, session: Option<u64>, text: String) {
+        self.tell(session, text);
+        let id = self.next_update.get();
+        self.updates.update(|updates| {
+            if let Some(update) = updates.iter_mut().find(|u| u.id == id) {
+                update.until = Instant::now() + Duration::from_secs(600);
+            }
+        });
+    }
+
     /// A short remark, gone in a moment.
-    fn quip(&self, text: &str) {
+    pub fn quip(&self, text: &str) {
         self.tell(None, text.to_string());
         let id = self.next_update.get();
         self.updates.update(|updates| {
@@ -917,6 +961,10 @@ pub struct Pets {
     clock: RwSignal<u64>,
     ticking: Cell<bool>,
     pets: RefCell<HashMap<u64, Rc<Pet>>>,
+    /// How big pets are drawn, in the window and out of it, as multiples of
+    /// the usual; dragging a pet's corner changes it.
+    pub docked_scale: RwSignal<f64>,
+    pub popped_scale: RwSignal<f64>,
     /// The session whose pet is popped out of the window.
     pub out: RwSignal<Option<u64>>,
     pub hidden: RwSignal<bool>,
@@ -947,13 +995,15 @@ impl Pets {
                 clock: RwSignal::new(0),
                 ticking: Cell::new(false),
                 pets: RefCell::new(HashMap::new()),
+                docked_scale: RwSignal::new(1.0),
+                popped_scale: RwSignal::new(1.0),
                 out: RwSignal::new(None),
                 hidden: RwSignal::new(false),
                 window: Cell::new(PetWindow::Closed),
                 pop_out_when_ready: Cell::new(false),
                 statuses: RefCell::new(HashMap::new()),
                 shake: RwSignal::new((0.0, 0.0)),
-                dock: RwSignal::new((136.0, 34.0)),
+                dock: RwSignal::new(HOME),
                 launch_out: Cell::new(None),
                 speech_hwnd: Cell::new(None),
             })
@@ -1014,6 +1064,21 @@ impl Pets {
             (Some(_), _) => self.pop_in(),
             (None, Some(front)) => self.pop_out(front),
             (None, None) => self.pop_out_when_ready.set(true),
+        }
+    }
+
+    /// Brings a lost pet back: in the window, shown, the usual size, at the
+    /// foot of the sessions rail.
+    pub fn find(&self) {
+        self.pop_in();
+        self.hidden.set(false);
+        self.docked_scale.set(1.0);
+        self.popped_scale.set(1.0);
+        self.dock.set(HOME);
+        if let Some(front) = self.sessions.active_key().get_untracked() {
+            let pet = self.pet(front);
+            pet.flight().set(None);
+            pet.greet();
         }
     }
 

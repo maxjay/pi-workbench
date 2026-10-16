@@ -5,7 +5,7 @@ use super::{color, session::ask_card};
 #[cfg(windows)]
 use crate::pet::Bounds;
 use crate::{
-    pet::{CELL, Pet, PetWindow, Pets, Windup},
+    pet::{CELL, GROWN, Pet, PetWindow, Pets, Windup},
     workspace::Workbench,
 };
 use floem::{
@@ -14,7 +14,7 @@ use floem::{
     prelude::*,
     reactive::{Effect, Memo, ReadSignal},
     style::CursorStyle,
-    views::canvas,
+    views::{PlaceholderTextClass, TextInput, TextInputEnter, canvas},
     window::{WindowConfig, WindowId, WindowIdExt, WindowLevel},
 };
 use std::{
@@ -181,6 +181,7 @@ fn sheet(dark: bool) -> Rc<Sheet> {
 /// the charcoal one suits them.
 fn sprite(pet: &Rc<Pet>, scale: f64) -> floem::views::Canvas {
     let pose = pet.pose();
+    let grown_pet = pet.clone();
     canvas(move |cx, size| {
         let pose = pose.get();
         let sheet = sheet(color::is_dark());
@@ -194,10 +195,223 @@ fn sprite(pet: &Rc<Pet>, scale: f64) -> floem::views::Canvas {
         );
     })
     .style(move |s| {
+        let scale = scale * grown_pet.grown();
         s.width(f64::from(CELL.0) * scale)
             .height(f64::from(CELL.1) * scale)
             .cursor(CursorStyle::Pointer)
     })
+}
+
+/// Where in its cell the pet itself is, as shares of the cell: left, top,
+/// right, bottom. Its corners are what you drag to make it bigger.
+const FIGURE: (f64, f64, f64, f64) = (0.22, 0.3, 0.78, 0.94);
+
+/// What you say to a pet. By default a side question about its session
+/// (`/btw`), answered in its bubble and kept out of the session; pick a
+/// session on the left and it goes to that session instead.
+fn chat(state: &Rc<Workbench>, pet: &Rc<Pet>) -> impl IntoView {
+    let text = RwSignal::new(String::new());
+    let (target, open) = (pet.target, pet.chat_open);
+    let picking = RwSignal::new(false);
+    let sessions = state.sessions.clone();
+    let open_sessions = state.sessions.open();
+    let name = move |key: Option<u64>| match key {
+        None => "btw".to_string(),
+        Some(key) => sessions
+            .find_tracked(key)
+            .map(|s| crate::session::shorten(&s.title().get()))
+            .unwrap_or_else(|| "closed".into()),
+    };
+    let pill_name = name.clone();
+    let pill = Label::derived(move || format!("{} ▾", pill_name(target.get())))
+        .style(|s| {
+            s.font_size(11)
+                .padding_horiz(8)
+                .padding_vert(5)
+                .border_radius(6)
+                .max_width(110)
+                .text_ellipsis()
+                .flex_shrink(0.0_f32)
+                .color(color::text())
+                .background(color::highlight())
+                .cursor(CursorStyle::Pointer)
+        })
+        .on_event_stop(el::Click, move |_, _| picking.update(|p| *p = !*p));
+    // The choices, above the row: by the way, or any open session.
+    let options = dyn_stack(
+        move || {
+            let mut keys = vec![None];
+            keys.extend(open_sessions.get().iter().map(|s| Some(s.key)));
+            keys
+        },
+        |key| *key,
+        move |key| {
+            let label = match key {
+                None => "btw: ask aside, the session left as it is".to_string(),
+                Some(_) => format!("Send to {}", name(key)),
+            };
+            Label::new(label)
+                .style(move |s| {
+                    s.width_full()
+                        .padding_horiz(8)
+                        .padding_vert(4)
+                        .border_radius(5)
+                        .font_size(11)
+                        .text_ellipsis()
+                        .cursor(CursorStyle::Pointer)
+                        .hover(|s| s.background(color::highlight()))
+                        .apply_if(target.get() == key, |s| s.color(color::accent()))
+                })
+                .on_event_stop(el::Click, move |_, _| {
+                    target.set(key);
+                    picking.set(false);
+                })
+        },
+    )
+    .style(move |s| {
+        s.flex_col()
+            .width_full()
+            .padding(4)
+            .background(color::panel())
+            .border(1)
+            .border_color(color::border())
+            .border_radius(8)
+            .apply_if(!picking.get(), |s| s.hide())
+    });
+    let send_state = state.clone();
+    let key = pet.key;
+    let send = Rc::new(move || {
+        let said = text.get_untracked();
+        if !said.trim().is_empty() {
+            text.set(String::new());
+            send_state.tell_pet(key, said);
+        }
+    });
+    let enter = send.clone();
+    let input = TextInput::new(text)
+        .placeholder("Say something…")
+        .style(|s| {
+            s.flex_grow(1.0_f32)
+                .min_width(0)
+                .padding_horiz(8)
+                .padding_vert(5)
+                .font_size(12)
+                .border(1)
+                .border_color(color::border())
+                .border_radius(6)
+                .background(color::bg())
+                .color(color::text())
+                .focus(|s| s.border_color(color::accent()))
+                .class(PlaceholderTextClass, |s| s.color(color::muted()))
+        })
+        .on_event_stop(TextInputEnter::listener(), move |_, _| enter());
+    let input_id = input.view_id();
+    // Opening it puts the cursor there.
+    Effect::new(move |_| {
+        if open.get() {
+            floem::action::exec_after_animation_frame(move |_| input_id.request_focus());
+        }
+    });
+    let close = Label::new("×")
+        .style(|s| {
+            s.color(color::muted())
+                .padding_horiz(4)
+                .cursor(CursorStyle::Pointer)
+                .hover(|s| s.color(color::text()))
+        })
+        .on_event_stop(el::Click, move |_, _| open.set(false));
+    Stack::vertical((
+        options,
+        Stack::horizontal((pill, input, close)).style(|s| s.width_full().gap(6).items_center()),
+    ))
+    .style(move |s| {
+        s.width(BUBBLE_WIDTH)
+            .padding(8)
+            .gap(6)
+            .background(color::panel())
+            .border(1)
+            .border_color(color::border())
+            .border_radius(10)
+            .apply_if(!open.get(), |s| s.hide())
+    })
+    .on_event_cont(el::KeyDown, move |_, event| {
+        if event.key == Key::Named(NamedKey::Escape) {
+            open.set(false);
+        }
+    })
+}
+
+/// The corners to drag to make a docked pet bigger or smaller; it grows
+/// up from its feet.
+fn grips(state: &Rc<Workbench>, pet: &Rc<Pet>, hovered: Hover) -> impl IntoView {
+    let pets = state.pets.clone();
+    let grown = pets.docked_scale;
+    let dock = pets.dock;
+    let corner = |left: bool, top: bool| {
+        let (state, pet) = (state.clone(), pet.clone());
+        // Where the drag began, how big the pet was, and its feet (window).
+        let start = Rc::new(Cell::new(None::<(Point, f64, Point)>));
+        let (down, moving, up) = (start.clone(), start.clone(), start);
+        let (down_state, move_state) = (state.clone(), state);
+        let sprite_pet = pet.clone();
+        Empty::new()
+            .style(move |s| {
+                let size = (
+                    f64::from(CELL.0) * DOCKED * grown.get(),
+                    f64::from(CELL.1) * DOCKED * grown.get(),
+                );
+                let x = size.0 * if left { FIGURE.0 } else { FIGURE.2 } - 4.0;
+                let y = size.1 * if top { FIGURE.1 } else { FIGURE.3 } - 4.0;
+                s.absolute()
+                    .inset_left(x)
+                    .inset_top(y)
+                    .size(9, 9)
+                    .border_radius(2)
+                    .border(1)
+                    .border_color(color::accent())
+                    .background(color::panel())
+                    .cursor(if left == top {
+                        CursorStyle::NwseResize
+                    } else {
+                        CursorStyle::NeswResize
+                    })
+                    .apply_if(!hovered.get(), |s| s.hide())
+            })
+            .on_event_stop(el::PointerDown, move |cx, event| {
+                if let Some(id) = event.pointer.pointer_id {
+                    cx.request_pointer_capture(id);
+                }
+                let Some(sprite) = sprite_pet.sprite_view.get() else {
+                    return;
+                };
+                let rect = sprite.get_visual_rect();
+                let feet = Point::new(rect.center().x, rect.y1);
+                down.set(Some((down_state.pointer(), grown.get_untracked(), feet)));
+            })
+            .on_event_stop(el::PointerMove, move |_, _| {
+                let Some((from, was, feet)) = moving.get() else {
+                    return;
+                };
+                let at = move_state.pointer();
+                let before = from.distance(feet).max(8.0);
+                let now = (was * at.distance(feet) / before).clamp(GROWN.0, GROWN.1);
+                grown.set(now);
+                // Its feet stay where they are.
+                let width = f64::from(CELL.0) * DOCKED * now;
+                let (_, bottom) = dock.get_untracked();
+                dock.set(((feet.x - width / 2.0).max(0.0), bottom));
+            })
+            .on_event_stop(el::PointerUp, move |_, _| up.set(None))
+    };
+    Stack::new((
+        corner(true, true),
+        corner(false, true),
+        corner(true, false),
+        corner(false, false),
+    ))
+    // Takes no room of its own, so only the grips catch the pointer and
+    // the pet can still be picked up.
+    .style(|s| s.absolute().inset_left(0).inset_top(0).size(0, 0))
 }
 
 /// What the bubble shows: a question first, then the latest news.
@@ -273,6 +487,10 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
                             .text_wrap()
                             .cursor(CursorStyle::Pointer)
                     }),
+                    {
+                        let text = update.text.clone();
+                        super::session::copy_button(move || text.clone(), 1.0)
+                    },
                     Label::new("×")
                         .style(|s| {
                             s.color(color::muted())
@@ -321,6 +539,42 @@ fn bubble(state: &Rc<Workbench>, pet: &Rc<Pet>) -> Stack {
     })
 }
 
+/// Hovered, and staying so for a moment after the pointer leaves, so it
+/// can reach the pills that stick out past the pet.
+#[derive(Clone, Copy)]
+struct Hover {
+    shown: RwSignal<bool>,
+    /// Bumped on every enter and leave, so a late hide is dropped.
+    turn: RwSignal<u64>,
+}
+
+impl Hover {
+    fn new() -> Self {
+        Self {
+            shown: RwSignal::new(false),
+            turn: RwSignal::new(0),
+        }
+    }
+    fn get(&self) -> bool {
+        self.shown.get()
+    }
+    fn enter(&self) {
+        self.turn.update(|t| *t += 1);
+        if !self.shown.get_untracked() {
+            self.shown.set(true);
+        }
+    }
+    fn leave(&self) {
+        self.turn.update(|t| *t += 1);
+        let (turn, shown, now) = (self.turn, self.shown, self.turn.get_untracked());
+        floem::action::exec_after(std::time::Duration::from_millis(700), move |_| {
+            if turn.try_get_untracked() == Some(now) {
+                shown.try_update(|s| *s = false);
+            }
+        });
+    }
+}
+
 /// A small pill shown on hover.
 fn control(
     title: impl Fn() -> &'static str + 'static,
@@ -345,12 +599,14 @@ fn control(
 
 /// Pop out (or in) and hide, over the empty top of the sprite's cell, so
 /// showing them moves nothing.
-fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl IntoView {
+fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: Hover) -> impl IntoView {
     // Over the sprite's top, from its left edge.
     let (pop_pets, hide_pets) = (pets.clone(), pets.clone());
     let out = pets.out;
     let key = pet.key;
+    let chat_open = pet.chat_open;
     Stack::horizontal((
+        control(|| "Chat", move || chat_open.update(|o| *o = !*o)),
         control(
             move || {
                 if out.get() == Some(key) {
@@ -376,6 +632,8 @@ fn controls(pets: &Rc<Pets>, pet: &Rc<Pet>, hovered: RwSignal<bool>) -> impl Int
             .gap(4)
             .apply_if(!hovered.get(), |s| s.hide())
     })
+    .on_event_cont(el::PointerEnter, move |_, _| hovered.enter())
+    .on_event_cont(el::PointerLeave, move |_, _| hovered.leave())
 }
 
 /// The front session's pet in the window: switch sessions and it is that
@@ -386,6 +644,7 @@ pub(super) fn docked(state: Rc<Workbench>, main: WindowId) -> impl IntoView {
     let pets = state.pets.clone();
     let front = state.sessions.active_key();
     let (out, hidden, dock) = (pets.out, pets.hidden, pets.dock);
+    let grown = pets.docked_scale;
     let shown = Memo::new(move |_| {
         front
             .get()
@@ -405,7 +664,8 @@ pub(super) fn docked(state: Rc<Workbench>, main: WindowId) -> impl IntoView {
     view.style(move |s| {
         let (left, bottom) = dock.get();
         let size_now = window.get();
-        let pet = (f64::from(CELL.0) * DOCKED, f64::from(CELL.1) * DOCKED);
+        let grown = DOCKED * grown.get();
+        let pet = (f64::from(CELL.0) * grown, f64::from(CELL.1) * grown);
         // Kept in reach however small the window gets.
         let (left, bottom) = if size_now.width > 0.0 {
             (
@@ -439,8 +699,12 @@ fn roaming(
     let pet = pets.pet(key);
     let pose = pet.pose();
     let dock = pets.dock;
-    let hovered = RwSignal::new(false);
-    let size = (f64::from(CELL.0) * DOCKED, f64::from(CELL.1) * DOCKED);
+    let hovered = Hover::new();
+    let grown = pets.docked_scale;
+    let size = move || {
+        let scale = DOCKED * grown.get_untracked();
+        (f64::from(CELL.0) * scale, f64::from(CELL.1) * scale)
+    };
     // A /kill throws it as far left as the window allows.
     let throw_pet = pet.clone();
     Effect::new(move |_| {
@@ -475,7 +739,7 @@ fn roaming(
             }
             let at = down_state.pointer();
             let (left, bottom) = dock.get_untracked();
-            let top = window_size().height - bottom - size.1;
+            let top = window_size().height - bottom - size().1;
             *down_grab.borrow_mut() = Some(Grab {
                 offset: Point::new(at.x - left, at.y - top),
                 moved: false,
@@ -489,6 +753,7 @@ fn roaming(
             let Some(grab) = grab.as_mut() else { return };
             let at = move_state.pointer();
             let window = window_size();
+            let size = size();
             let left = (at.x - grab.offset.x).clamp(0.0, (window.width - size.0).max(0.0));
             let top = (at.y - grab.offset.y).clamp(0.0, (window.height - size.1).max(0.0));
             let (before, _) = dock.get_untracked();
@@ -543,8 +808,12 @@ fn roaming(
                 }
             }
         });
-    let figure = Stack::new((body, controls(&pets, &pet, hovered)))
-        .style(move |s| s.rotate(floem::unit::Angle::Rad(pose.get().angle)));
+    let figure = Stack::new((
+        body,
+        grips(&state, &pet, hovered),
+        controls(&pets, &pet, hovered),
+    ))
+    .style(move |s| s.rotate(floem::unit::Angle::Rad(pose.get().angle)));
     // The bubble moves left to stay in the window near its right edge.
     let said = bubble(&state, &pet).style(move |s| {
         let (left, _) = dock.get();
@@ -552,7 +821,7 @@ fn roaming(
         s.translate_x(room.min(0.0).max(-left))
     });
     // Thrown or hopping, what it says goes with it.
-    Stack::vertical((said, figure))
+    Stack::vertical((said, chat(&state, &pet), figure))
         .style(move |s| {
             let thrown = pose.get().thrown;
             s.items_start()
@@ -560,8 +829,8 @@ fn roaming(
                 .translate_x(thrown.0)
                 .translate_y(thrown.1)
         })
-        .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
-        .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
+        .on_event_cont(el::PointerEnter, move |_, _| hovered.enter())
+        .on_event_cont(el::PointerLeave, move |_, _| hovered.leave())
 }
 
 /// The window's content shakes while a `/kill` lands.
@@ -694,7 +963,7 @@ fn fit_window(id: WindowId, content: floem::ViewId, size: impl Fn(Option<Size>) 
 #[cfg_attr(windows, allow(dead_code))]
 fn card_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView {
     let pets = state.pets.clone();
-    let hovered = RwSignal::new(false);
+    let hovered = Hover::new();
     // Thrown from where each /kill finds the window.
     let from = Rc::new(Cell::new(None::<(u64, Point)>));
     let (shot, pose) = (pet.shot(), pet.pose());
@@ -763,8 +1032,8 @@ fn card_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView 
                 fit_window(id, content_id, card_size);
             }
         })
-        .on_event_cont(el::PointerEnter, move |_, _| hovered.set(true))
-        .on_event_cont(el::PointerLeave, move |_, _| hovered.set(false))
+        .on_event_cont(el::PointerEnter, move |_, _| hovered.enter())
+        .on_event_cont(el::PointerLeave, move |_, _| hovered.leave())
         .on_event_cont(el::WindowClosed, move |_, _| {
             // Closed by the system (Alt+F4, say): the pet comes back in.
             if pets.window.get() == PetWindow::Open(id) {
@@ -779,13 +1048,16 @@ fn card_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView 
 #[cfg_attr(not(windows), allow(dead_code))]
 fn speech_view(state: Rc<Workbench>, pet: Rc<Pet>, id: WindowId) -> impl IntoView {
     // Laid out at its own size, not squeezed to the window's.
-    let said = bubble(&state, &pet).style(|s| s.absolute().inset_left(0).inset_top(0));
+    let said = Stack::vertical((bubble(&state, &pet), chat(&state, &pet)))
+        .style(|s| s.absolute().inset_left(0).inset_top(0).gap(4));
     let said_id = said.view_id();
     let pets = state.pets.clone();
     let speaking = {
         let pet = pet.clone();
-        let updates = pet.updates();
-        Memo::new(move |_| !pet.questions().is_empty() || updates.with(|u| !u.is_empty()))
+        let (updates, open) = (pet.updates(), pet.chat_open);
+        Memo::new(move |_| {
+            open.get() || !pet.questions().is_empty() || updates.with(|u| !u.is_empty())
+        })
     };
     Effect::new(move |_| id.set_visible(speaking.get()));
     #[cfg(windows)]
@@ -823,22 +1095,67 @@ impl Outside {
 
 /// The popped-out pet's see-through window. It is square, wide enough to
 /// turn the pet in, so the pet's own place is inset in it.
+/// A resize under way: the feet that stay put, where the pointer started,
+/// and the size it started from.
+#[cfg(windows)]
+type Resize = ((i32, i32), (i32, i32), f64);
+
 #[cfg(windows)]
 struct Body {
     layered: Rc<super::pet_window::Layered>,
-    width: u32,
-    height: u32,
-    side: u32,
+    width: Cell<u32>,
+    height: Cell<u32>,
+    side: Cell<u32>,
+    /// The screen's pixels per logical pixel.
     scale: f64,
+    /// Being made bigger: where its feet stay (physical), the pointer and
+    /// size it started from.
+    resizing: Cell<Option<Resize>>,
 }
 
 #[cfg(windows)]
 impl Body {
+    /// Sized for a scale (the pet's size as a multiple of the usual).
+    fn sized(&self, grown: f64) {
+        let width = (f64::from(CELL.0) * POPPED * grown * self.scale).round() as u32;
+        let height = (f64::from(CELL.1) * POPPED * grown * self.scale).round() as u32;
+        self.width.set(width);
+        self.height.set(height);
+        self.side
+            .set(f64::from(width).hypot(f64::from(height)).ceil() as u32 + 2);
+    }
+    fn width(&self) -> u32 {
+        self.width.get()
+    }
+    fn height(&self) -> u32 {
+        self.height.get()
+    }
     fn pad(&self) -> (i32, i32) {
         (
-            ((self.side - self.width) / 2) as i32,
-            ((self.side - self.height) / 2) as i32,
+            ((self.side.get() - self.width()) / 2) as i32,
+            ((self.side.get() - self.height()) / 2) as i32,
         )
+    }
+    /// Whether a screen point is on one of the pet's corners.
+    fn on_corner(&self, at: (i32, i32)) -> bool {
+        let (x, y) = self.place();
+        let (w, h) = (f64::from(self.width()), f64::from(self.height()));
+        let corners = [
+            (FIGURE.0, FIGURE.1),
+            (FIGURE.2, FIGURE.1),
+            (FIGURE.0, FIGURE.3),
+            (FIGURE.2, FIGURE.3),
+        ];
+        let reach = 14.0 * self.scale;
+        corners.iter().any(|(cx, cy)| {
+            let corner = (f64::from(x) + w * cx, f64::from(y) + h * cy);
+            (f64::from(at.0) - corner.0).abs() < reach && (f64::from(at.1) - corner.1).abs() < reach
+        })
+    }
+    /// Its feet (physical).
+    fn feet(&self) -> (i32, i32) {
+        let (x, y) = self.place();
+        (x + self.width() as i32 / 2, y + self.height() as i32)
     }
     /// The pet's own place on the screen: left, top (physical).
     fn place(&self) -> (i32, i32) {
@@ -851,14 +1168,15 @@ impl Body {
         self.layered.move_to((at.0 - pad.0, at.1 - pad.1));
     }
     fn paint(&self, pixels: &[u8], angle: f64) {
-        let canvas = turned(pixels, self.width, self.height, self.side, angle);
-        self.layered.draw(&canvas, self.side, self.side, None);
+        let side = self.side.get();
+        let canvas = turned(pixels, self.width(), self.height(), side, angle);
+        self.layered.draw(&canvas, side, side, None);
     }
     /// Its speech, just above its antenna (the pet at `at`, physical).
     fn speech_follows(&self, pets: &Pets, at: (i32, i32)) {
         if let Some(hwnd) = pets.speech_hwnd.get() {
             let (_, _, _, height) = super::pet_window::window_rect(hwnd);
-            let top = at.1 + (f64::from(self.height) * HEADROOM) as i32 - height - 4;
+            let top = at.1 + (f64::from(self.height()) * HEADROOM) as i32 - height - 4;
             super::pet_window::move_window(hwnd, (at.0, top));
         }
     }
@@ -889,6 +1207,31 @@ impl Outside {
             }
         }
         impl Events for Handler {
+            fn grip(&self, at: (i32, i32)) -> bool {
+                self.body().is_some_and(|body| body.on_corner(at))
+            }
+            fn resize(&self, at: (i32, i32)) {
+                let (Some(pets), Some(body)) = (self.pets.upgrade(), self.body()) else {
+                    return;
+                };
+                let (feet, from, was) = match body.resizing.get() {
+                    Some(started) => started,
+                    None => {
+                        let started = (body.feet(), at, pets.popped_scale.get_untracked());
+                        body.resizing.set(Some(started));
+                        started
+                    }
+                };
+                let distance =
+                    |p: (i32, i32)| f64::from(p.0 - feet.0).hypot(f64::from(p.1 - feet.1));
+                let now = (was * distance(at) / distance(from).max(8.0)).clamp(GROWN.0, GROWN.1);
+                pets.popped_scale.set(now);
+            }
+            fn resized(&self) {
+                if let Some(body) = self.body() {
+                    body.resizing.set(None);
+                }
+            }
             fn clicked(&self) {
                 if let Some(pet) = self.pet.upgrade() {
                     pet.poke();
@@ -942,7 +1285,7 @@ impl Outside {
                     // Off it goes, inside the screen, onto the taskbar.
                     let scale = body.scale;
                     let (x, y) = body.place();
-                    let (w, h) = (body.width as i32, body.height as i32);
+                    let (w, h) = (body.width() as i32, body.height() as i32);
                     let (left, top, right, bottom) = body.layered.work_area();
                     let bounds = Bounds {
                         left: f64::from(left - x) / scale,
@@ -957,15 +1300,16 @@ impl Outside {
                 body.speech_follows(&pets, body.place());
             }
             fn chose(&self, index: usize) {
-                if let Some(pets) = self.pets.upgrade() {
+                if let (Some(pets), Some(pet)) = (self.pets.upgrade(), self.pet.upgrade()) {
                     match index {
-                        0 => pets.pop_in(),
+                        0 => pet.chat_open.update(|o| *o = !*o),
+                        1 => pets.pop_in(),
                         _ => pets.toggle_hidden(),
                     }
                 }
             }
             fn menu(&self) -> Vec<&'static str> {
-                vec!["Pop in", "Hide"]
+                vec!["Chat", "Pop in", "Hide"]
             }
         }
 
@@ -980,18 +1324,16 @@ impl Outside {
             Rc::new(Layered::open((0, 0), handler.clone()).expect("a layered window opens"));
         // Floem works in logical pixels, the window in physical ones.
         let scale = layered.scale();
-        let (width, height) = (
-            (f64::from(CELL.0) * POPPED * scale).round() as u32,
-            (f64::from(CELL.1) * POPPED * scale).round() as u32,
-        );
-        let side = f64::from(width).hypot(f64::from(height)).ceil() as u32 + 2;
         let body = Rc::new(Body {
             layered,
-            width,
-            height,
-            side,
+            width: Cell::new(0),
+            height: Cell::new(0),
+            side: Cell::new(0),
             scale,
+            resizing: Cell::new(None),
         });
+        body.sized(pets.popped_scale.get_untracked());
+        let (width, height) = (body.width(), body.height());
         *handler.body.borrow_mut() = Some(Rc::downgrade(&body));
 
         // Thrown out of the window, it carries on from where it left it.
@@ -1021,6 +1363,7 @@ impl Outside {
         scope.enter(|| {
             let pose = pet.pose();
             // Drawn when the frame, its angle or the theme changes.
+            let grown = pets.popped_scale;
             let look = Memo::new(move |_| {
                 let pose = pose.get();
                 (
@@ -1028,13 +1371,34 @@ impl Outside {
                     pose.column,
                     (pose.angle * 100.0).round() as i64,
                     color::is_dark(),
+                    (grown.get() * 1000.0).round() as i64,
                 )
             });
             let paint_body = body.clone();
+            let paint_pets = pets.clone();
             Effect::new(move |_| {
-                let (row, column, angle, dark) = look.get();
-                let pixels = sheet(dark).pixels(row, column, width, height);
+                let (row, column, angle, dark, size) = look.get();
+                // Grown or shrunk, its feet stay where they were.
+                let size = size as f64 / 1000.0;
+                let feet = paint_body.feet();
+                let resized = (f64::from(paint_body.width())
+                    - (f64::from(CELL.0) * POPPED * size * paint_body.scale).round())
+                .abs()
+                    > 0.5;
+                if resized {
+                    let feet = paint_body.resizing.get().map_or(feet, |r| r.0);
+                    paint_body.sized(size);
+                    paint_body.move_to((
+                        feet.0 - paint_body.width() as i32 / 2,
+                        feet.1 - paint_body.height() as i32,
+                    ));
+                }
+                let pixels =
+                    sheet(dark).pixels(row, column, paint_body.width(), paint_body.height());
                 paint_body.paint(&pixels, angle as f64 / 100.0);
+                if resized {
+                    paint_body.speech_follows(&paint_pets, paint_body.place());
+                }
             });
             // Moved while thrown by a /kill, flung or hopping, from where
             // each found it; its speech goes with it.
@@ -1088,8 +1452,8 @@ impl Outside {
                 pose.track();
                 let (x, y) = look_body.place();
                 let face = (
-                    f64::from(x) + f64::from(look_body.width) / 2.0,
-                    f64::from(y) + f64::from(look_body.height) * 0.62,
+                    f64::from(x) + f64::from(look_body.width()) / 2.0,
+                    f64::from(y) + f64::from(look_body.height()) * 0.62,
                 );
                 let at = super::pet_window::pointer();
                 look_pet.look_at(

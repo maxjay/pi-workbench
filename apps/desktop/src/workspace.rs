@@ -809,6 +809,53 @@ impl Workbench {
         }
     }
 
+    /// Something said to a session's pet. To the session itself when one is
+    /// picked; otherwise a side question (`/btw`): Pi answers it with the
+    /// session's history for context, through the pet, and the session is
+    /// left as it was.
+    pub fn tell_pet(self: &Rc<Self>, key: u64, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let pet = self.pets.pet(key);
+        if let Some(to) = pet.target.get_untracked() {
+            match self.sessions.find(to) {
+                Some(session) if session.submit(text, false) => {
+                    pet.quip(&format!("Sent to {}", session.title().get_untracked()));
+                }
+                Some(_) => pet.quip("That session is busy sending."),
+                None => pet.quip("That session has closed."),
+            }
+            return;
+        }
+        let session = self.sessions.find(key);
+        let file = session.as_ref().and_then(|s| s.file().get_untracked());
+        pet.answer(None, format!("You: {text}"));
+        pet.thinking.set(true);
+        let reply_pet = Rc::downgrade(&pet);
+        let finish = create_ext_action(self.scope, move |result: anyhow::Result<String>| {
+            let Some(pet) = reply_pet.upgrade() else {
+                return;
+            };
+            pet.thinking.set(false);
+            match result {
+                Ok(answer) => pet.answer(Some(pet.key), answer),
+                Err(err) => pet.answer(None, format!("I couldn't ask: {err:#}")),
+            }
+        });
+        let (launch, root) = (self.sessions.launch().clone(), self.root.clone());
+        std::thread::spawn(move || {
+            finish(pi_client::ask_aside(
+                &launch,
+                &root,
+                file.as_deref(),
+                &text,
+                std::time::Duration::from_secs(180),
+            ))
+        });
+    }
+
     /// Asks for a new file's path, starting in the folder of the file showing.
     pub fn new_file(&self) {
         let folder = self

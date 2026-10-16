@@ -17,19 +17,26 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
         WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-            GetCursorPos, GetWindowRect, HTCAPTION, MA_NOACTIVATE, MF_STRING, PostMessageW,
-            RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-            SendMessageW, SetForegroundWindow, SetWindowPos, ShowWindow, TPM_NONOTIFY,
-            TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA, UpdateLayeredWindow, WM_CLOSE,
-            WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-            WM_MOVING, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_RBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            GetCursorPos, GetWindowRect, HTCAPTION, IDC_SIZENWSE, LoadCursorW, MA_NOACTIVATE,
+            MF_STRING, PostMessageW, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+            SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetCursor, SetForegroundWindow, SetWindowPos,
+            ShowWindow, TPM_NONOTIFY, TPM_RETURNCMD, TrackPopupMenu, ULW_ALPHA,
+            UpdateLayeredWindow, WM_CLOSE, WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOVING, WM_NCDESTROY, WM_NCLBUTTONDOWN,
+            WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
 
 /// What the window tells the pet about.
 pub trait Events {
+    /// Whether a screen point is a grip that resizes rather than moves.
+    fn grip(&self, at: (i32, i32)) -> bool;
+    /// A grip dragged to here.
+    fn resize(&self, at: (i32, i32));
+    /// A grip let go of.
+    fn resized(&self);
     /// Clicked without moving.
     fn clicked(&self);
     /// Being dragged: where it is now (screen, physical pixels) and how far
@@ -45,6 +52,8 @@ pub trait Events {
 
 struct Entry {
     events: Rc<dyn Events>,
+    /// A grip is held.
+    resizing: bool,
     /// Pressed here (screen point), and not yet moved far enough to drag.
     pressed: Option<(i32, i32)>,
     /// Left edge at the last move, to tell which way it is dragged.
@@ -80,11 +89,19 @@ unsafe extern "system" fn procedure(
     match msg {
         // The pet never takes the keyboard from what you are doing.
         WM_MOUSEACTIVATE => return MA_NOACTIVATE as LRESULT,
+        WM_SETCURSOR => {
+            if events(hwnd).is_some_and(|events| events.grip(cursor())) {
+                unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_SIZENWSE)) };
+                return 1;
+            }
+        }
         WM_LBUTTONDOWN => {
             let at = cursor();
+            let grip = events(hwnd).is_some_and(|events| events.grip(at));
             WINDOWS.with_borrow_mut(|w| {
                 if let Some(entry) = w.get_mut(&key) {
-                    entry.pressed = Some(at);
+                    entry.resizing = grip;
+                    entry.pressed = (!grip).then_some(at);
                 }
             });
             unsafe { SetCapture(hwnd) };
@@ -92,6 +109,13 @@ unsafe extern "system" fn procedure(
         }
         WM_MOUSEMOVE => {
             let at = cursor();
+            let resizing = WINDOWS.with_borrow(|w| w.get(&key).is_some_and(|e| e.resizing));
+            if resizing {
+                if let Some(events) = events(hwnd) {
+                    events.resize(at);
+                }
+                return 0;
+            }
             let drag = WINDOWS.with_borrow_mut(|w| {
                 let entry = w.get_mut(&key)?;
                 let (x, y) = entry.pressed?;
@@ -107,6 +131,18 @@ unsafe extern "system" fn procedure(
             return 0;
         }
         WM_LBUTTONUP => {
+            let resized = WINDOWS.with_borrow_mut(|w| {
+                w.get_mut(&key)
+                    .map(|e| std::mem::replace(&mut e.resizing, false))
+                    .unwrap_or(false)
+            });
+            if resized {
+                unsafe { ReleaseCapture() };
+                if let Some(events) = events(hwnd) {
+                    events.resized();
+                }
+                return 0;
+            }
             let clicked =
                 WINDOWS.with_borrow_mut(|w| w.get_mut(&key).and_then(|e| e.pressed.take()));
             unsafe { ReleaseCapture() };
@@ -228,6 +264,7 @@ impl Layered {
                 hwnd as isize,
                 Entry {
                     events,
+                    resizing: false,
                     pressed: None,
                     left: at.0,
                 },

@@ -434,6 +434,30 @@ fn thinking_view(body: RwSignal<String>, zoom: f64) -> impl IntoView {
     .style(|s| s.width_full().gap(4))
 }
 
+/// Copies text, as written (markdown for a reply), and says so for a moment.
+pub(super) fn copy_button(text: impl Fn() -> String + 'static, zoom: f64) -> impl IntoView {
+    let copied = RwSignal::new(false);
+    Label::derived(move || if copied.get() { "Copied" } else { "Copy" }.to_string())
+        .style(move |s| {
+            s.font_size(10.0 * zoom)
+                .padding_horiz(6)
+                .padding_vert(1)
+                .border_radius(5)
+                .color(color::muted())
+                .cursor(CursorStyle::Pointer)
+                .hover(|s| s.color(color::text()).background(color::border()))
+        })
+        .on_event_stop(el::PointerDown, |_, _| {})
+        .on_event_stop(el::Click, move |_, _| {
+            if floem::Clipboard::set_contents(text()).is_ok() {
+                copied.set(true);
+                floem::action::exec_after(std::time::Duration::from_millis(1500), move |_| {
+                    copied.try_update(|c| *c = false);
+                });
+            }
+        })
+}
+
 fn entry_view(
     state: Rc<Workbench>,
     session: Rc<Session>,
@@ -468,8 +492,12 @@ fn entry_view(
             .into_any()
         }
         EntryKind::Assistant => Stack::vertical((
-            Label::new("Pi")
-                .style(move |s| s.color(color::accent()).font_bold().font_size(11.0 * zoom)),
+            Stack::horizontal((
+                Label::new("Pi")
+                    .style(move |s| s.color(color::accent()).font_bold().font_size(11.0 * zoom)),
+                copy_button(move || body.get_untracked(), zoom),
+            ))
+            .style(|s| s.gap(10).items_center()),
             markdown_view(body, zoom),
         ))
         .style(|s| s.width_full().gap(6))

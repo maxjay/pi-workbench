@@ -11,7 +11,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 ## Features
 
 - **Sessions:** every Pi session is a tab in the sessions rail. Sessions resume from Pi's own store with their history, so the Pi command line and the workbench see the same sessions.
-- **Conversation:** replies render as markdown; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
+- **Conversation:** replies render as markdown, with Copy beside each one for the original text; tool calls are cards that show each edit line by line while the model writes it; extension questions are answered inline; steer a running session or queue a follow-up.
 - **Changes lens:** everything is read against one baseline you pick in the status bar: where your branch left develop, the start of the session, Pi's last turn, or the last commit. The explorer marks changed files, editors show removed lines as ghost lines in place, and you walk the changes file to file without opening a diff.
 - **Who changed it:** changed lines are coloured by who wrote them: Pi, you, or someone else on the branch. Reformatting is filtered out, and the changed files are grouped by the Pi turn that changed them.
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
@@ -153,6 +153,9 @@ Glitch is your sessions' pet. Each session has its own, and the one in the windo
 - **Each reply:** it says the gist of each reply. Click that to dismiss it.
 - **Questions:** when an extension asks something, the question appears in its bubble with its answers, so you can reply there.
 - **Getting about:** it starts at the foot of the sessions rail and goes wherever you drag it. Click it and it jumps. It watches the pointer and waves hello.
+- **Its size:** drag one of the corner grips that appear on hover to make it bigger or smaller. It grows up from its feet.
+- **Talking to it:** **Chat**, on hover, opens a box under its bubble. A message is a side question about its session, `/btw`: Pi answers with the session's history for context, in the pet's bubble, and the session is left as it was. Pick a session in the list left of the box to send to that session instead.
+- **Lost it?** When it is not in the window, the status bar says **Glitch is out** or **Glitch is hidden**. Click that, or run *Pet: find Glitch*, to bring it back.
 - **Light and dark:** dark themes get the charcoal Glitch, light themes the ivory one.
 
 **Throw it** and it leaves the window. It flies on across the screen, bounces off the monitor's edges (complaining if you throw it hard enough), and lands on the taskbar. **Swing it round** while you hold it: it spins as you swing, every turn makes the throw faster, and it tumbles through the air until it lands upright. **Pop out**, on hover, sends it out without the throw.

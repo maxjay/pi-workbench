@@ -80,6 +80,115 @@ fn resolve(program: &str) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// Asks Pi something on the side ("by the way"), with a session's history
+/// for context but leaving it untouched: the session is forked into a
+/// folder of its own that is thrown away after, and Pi answers once, with
+/// no tools, and exits. `session` is the session's file, if it has one.
+/// Blocks until Pi answers or `timeout` passes.
+pub fn ask_aside(
+    launch: &Launch,
+    cwd: &Path,
+    session: Option<&Path>,
+    question: &str,
+    timeout: Duration,
+) -> Result<String> {
+    let aside = std::env::temp_dir().join(format!(
+        "pi-workbench-btw-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_nanos())
+    ));
+    std::fs::create_dir_all(&aside).context("Could not make a folder for the side question")?;
+    let mut command = Command::new(resolve(&launch.program));
+    command
+        .args(&launch.args)
+        .args(["-p", "--no-tools", "--session-dir"])
+        .arg(&aside);
+    match session {
+        Some(session) => command.arg("--fork").arg(session),
+        None => command.arg("--no-session"),
+    };
+    command
+        .arg("--")
+        .arg(question)
+        .envs(launch.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let result = (|| {
+        let child = command
+            .spawn()
+            .with_context(|| format!("Could not start `{}`", launch.program))?;
+        let child = Arc::new(Mutex::new(child));
+        // Gives up after `timeout`, rather than waiting on a stuck Pi.
+        let watch = child.clone();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished = done.clone();
+        std::thread::spawn(move || {
+            let step = Duration::from_millis(200);
+            let mut waited = Duration::ZERO;
+            while waited < timeout {
+                if finished.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(step);
+                waited += step;
+            }
+            if let Ok(mut child) = watch.lock() {
+                let _ = child.kill();
+            }
+        });
+        let (stdout, stderr) = {
+            let mut child = child.lock().map_err(|_| anyhow::anyhow!("Pi's process"))?;
+            (child.stdout.take(), child.stderr.take())
+        };
+        let mut answer = String::new();
+        if let Some(mut stdout) = stdout {
+            std::io::Read::read_to_string(&mut stdout, &mut answer)?;
+        }
+        let mut errors = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut errors);
+        }
+        let status = child
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Pi's process"))?
+            .wait()?;
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let answer = answer.trim().to_string();
+        if status.success() && !answer.is_empty() {
+            Ok(answer)
+        } else if waited_out(&errors, &answer) {
+            anyhow::bail!("Pi took too long to answer")
+        } else {
+            anyhow::bail!(
+                "{}",
+                errors
+                    .lines()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("Pi could not answer")
+                    .trim()
+            )
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&aside);
+    result
+}
+
+/// Pi was stopped for taking too long: no answer and nothing said why.
+fn waited_out(errors: &str, answer: &str) -> bool {
+    errors.trim().is_empty() && answer.is_empty()
+}
+
 /// A reply to an extension's question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
