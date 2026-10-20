@@ -17,6 +17,10 @@ workbench-text = { path = "crates/workbench-text" }
 pi-client = { path = "crates/pi-client" }
 floem = { git = "https://github.com/lapce/floem", rev = "1351ffb162faeb8be983f1301d718a0d5fb59c27", default-features = false, features = ["editor", "vger"] }
 
+# WSLg's mouse taken for a pen under X11: see patches/README.md.
+[patch."https://github.com/lapce/winit"]
+floem-winit-x11 = { path = "patches/winit-x11" }
+
 [profile.dev]
 debug = 0
 

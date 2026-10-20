@@ -1181,7 +1181,6 @@ dependencies = [
 [[package]]
 name = "floem-winit-x11"
 version = "25.10.0"
-source = "git+https://github.com/lapce/winit?rev=133268de675a4fda70816d78a7a1435eb972fea1#133268de675a4fda70816d78a7a1435eb972fea1"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
