@@ -702,6 +702,21 @@ impl Session {
         self.stop_requested.get() || self.stopped.get_untracked()
     }
 
+    /// Which of the prompts so far, counting from 0, was the latest one
+    /// with this text.
+    pub fn prompt_index(&self, text: &str) -> Option<usize> {
+        let text = text.trim();
+        self.entries.with_untracked(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.kind == EntryKind::User)
+                .enumerate()
+                .filter(|(_, entry)| entry.title.with_untracked(|title| title.trim() == text))
+                .map(|(index, _)| index)
+                .last()
+        })
+    }
+
     /// Whether the timeline ends on an error, as when Pi failed the prompt
     /// or could not start.
     pub fn ended_in_error(&self) -> bool {

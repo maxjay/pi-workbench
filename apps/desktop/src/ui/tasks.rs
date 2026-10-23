@@ -630,11 +630,13 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
             folder: task.folder.display().to_string(),
             prompt: task.prompt.clone(),
             schedule: task.schedule.clone(),
+            continuing: task.continuing,
         },
     );
     let name = RwSignal::new(draft.name);
     let folder = RwSignal::new(draft.folder);
     let controls = Controls::new(&draft.schedule);
+    let continuing = RwSignal::new(draft.continuing);
     let error = RwSignal::new(None::<String>);
     let prompt = text_editor(draft.prompt)
         .styling(SimpleStyling::builder().font_size(13).build())
@@ -662,6 +664,7 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
             folder: folder.get_untracked(),
             prompt: prompt_doc.text().to_string(),
             schedule,
+            continuing: continuing.get_untracked(),
         })
     });
     // In words, with when it would run next; or what is wrong.
@@ -764,6 +767,29 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
         field_label("When"),
         schedule_editor(tasks.clone(), controls, folder),
         hint,
+        field_label("Each run"),
+        Stack::horizontal((
+            chip(
+                || "New conversation".into(),
+                move || !continuing.get(),
+                move || continuing.set(false),
+            ),
+            chip(
+                || "Continue one conversation".into(),
+                move || continuing.get(),
+                move || continuing.set(true),
+            ),
+        ))
+        .style(|s| s.gap(6).items_center()),
+        Label::derived(move || {
+            if continuing.get() {
+                "Every run adds to the same conversation, so you can ask about earlier runs too. If Pi is busy in it when a run comes due, the run waits its turn."
+            } else {
+                "Every run starts a conversation of its own."
+            }
+            .to_string()
+        })
+        .style(|s| s.color(color::muted()).font_size(11).text_wrap()),
         field_label("What Pi should do"),
         prompt,
         Label::derived(move || error.get().unwrap_or_default()).style(move |s| {
@@ -861,7 +887,14 @@ fn run_view(tasks: Rc<Tasks>, task: u64, run: u64) -> impl IntoView {
     let body = dyn_container(
         move || key.get(),
         move |_| match body_tasks.session_untracked(run) {
-            Some((state, session)) => session_view(state, session, visible, 1.0).into_any(),
+            Some((state, session)) => {
+                // In a conversation the task keeps, where this run starts.
+                let jump = body_tasks
+                    .task_untracked(task)
+                    .filter(|task| task.continuing)
+                    .and_then(|task| task.run(run).and_then(|run| run.turn));
+                session_view(state, session, visible, 1.0, jump).into_any()
+            }
             None => {
                 let tasks = body_tasks.clone();
                 Label::derived(move || {

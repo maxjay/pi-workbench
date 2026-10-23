@@ -60,6 +60,7 @@ pub struct Draft {
     pub folder: String,
     pub prompt: String,
     pub schedule: Schedule,
+    pub continuing: bool,
 }
 
 pub struct Tasks {
@@ -300,6 +301,7 @@ impl Tasks {
             task.name = name;
             task.folder = folder;
             task.prompt = draft.prompt.trim().to_string();
+            task.continuing = draft.continuing;
             task.schedule = schedule;
             id
         });
@@ -345,6 +347,49 @@ impl Tasks {
         self.live.update(|live| {
             live.insert(run, None);
         });
+        // A continuing task carries on its conversation: open in the
+        // window, or opened from Pi's store.
+        if task.continuing
+            && let Some(path) = task.conversation().map(Path::to_path_buf)
+        {
+            if let Some((_, session)) = find_by_file(&window, &path) {
+                self.ask(id, run, &session, &task.prompt);
+                return;
+            }
+            let folder = sessions::cwd_of(&path)
+                .filter(|cwd| cwd.is_dir())
+                .unwrap_or_else(|| task.folder.clone());
+            let state = match window.open(&folder) {
+                Ok(state) => state,
+                Err(err) => {
+                    self.finish(id, run, Outcome::Failed, Some(format!("{err:#}")));
+                    return;
+                }
+            };
+            let me = self.me.clone();
+            let finish = create_ext_action(self.scope, move |summary| match summary {
+                Some(summary) => state.when_restored(move |state| {
+                    let session = state.sessions.open_behind(&summary);
+                    if let Some(me) = me.upgrade() {
+                        me.ask(id, run, &session, &task.prompt);
+                    }
+                }),
+                // Gone from Pi's store: the conversation starts again.
+                None => {
+                    if let Some(me) = me.upgrade() {
+                        me.start_conversation(&window, id, run, &task, now);
+                    }
+                }
+            });
+            std::thread::spawn(move || finish(sessions::summarize(&path)));
+            return;
+        }
+        self.start_conversation(&window, id, run, &task, now);
+    }
+
+    /// A run in a session of its own, named after the task (and the time,
+    /// unless the task keeps one conversation).
+    fn start_conversation(&self, window: &Window, id: u64, run: u64, task: &Task, now: Timestamp) {
         let state = match window.open(&task.folder) {
             Ok(state) => state,
             Err(err) => {
@@ -352,25 +397,34 @@ impl Tasks {
                 return;
             }
         };
-        let (me, title) = (
-            self.me.clone(),
-            format!("{} \u{b7} {}", task.name, tasks::stamp(now, &self.tz)),
-        );
+        let title = if task.continuing {
+            task.name.clone()
+        } else {
+            format!("{} \u{b7} {}", task.name, tasks::stamp(now, &self.tz))
+        };
+        let (me, prompt) = (self.me.clone(), task.prompt.clone());
         state.when_restored(move |state| {
             let Some(me) = me.upgrade() else { return };
             let session = state.sessions.create_behind();
             session.rename(&title);
-            if session.submit(task.prompt.clone(), false) {
-                me.follow(id, run, &session);
-            } else {
-                me.finish(id, run, Outcome::Failed, Some("Pi was not asked".into()));
-            }
+            me.ask(id, run, &session, &prompt);
         });
+    }
+
+    /// Gives a run's prompt to its session: as a follow-up for when Pi is
+    /// done, if it is busy in that conversation.
+    fn ask(&self, task: u64, run: u64, session: &Rc<Session>, prompt: &str) {
+        let busy = session.working().get_untracked();
+        if session.submit(prompt.to_string(), busy) {
+            self.follow(task, run, session, prompt.to_string());
+        } else {
+            self.finish(task, run, Outcome::Failed, Some("Pi was not asked".into()));
+        }
     }
 
     /// Keeps the run's record up to date with its session: the file Pi
     /// keeps it in, and how it ended.
-    fn follow(&self, task: u64, run: u64, session: &Rc<Session>) {
+    fn follow(&self, task: u64, run: u64, session: &Rc<Session>, prompt: String) {
         self.live.update(|live| {
             live.insert(run, Some(session.key));
         });
@@ -395,6 +449,7 @@ impl Tasks {
                         } else {
                             Outcome::Done
                         };
+                        me.note_turn(task, run, session.prompt_index(&prompt));
                         me.finish(task, run, outcome, None);
                         // Its work is done; not from inside itself.
                         exec_after(Duration::ZERO, move |_| scope.dispose());
@@ -402,6 +457,14 @@ impl Tasks {
                 });
                 working
             });
+        });
+    }
+
+    fn note_turn(&self, task: u64, run: u64, turn: Option<usize>) {
+        self.change(|file| {
+            if let Some(run) = file.task_mut(task).and_then(|t| t.run_mut(run)) {
+                run.turn = turn;
+            }
         });
     }
 
@@ -596,6 +659,24 @@ fn find_session(window: &Window, key: u64) -> Option<(Rc<Workbench>, Rc<Session>
     })
 }
 
+/// A session open in any of the window's folders, by its file.
+fn find_by_file(window: &Window, path: &Path) -> Option<(Rc<Workbench>, Rc<Session>)> {
+    window.workspaces().with_untracked(|open| {
+        open.iter().find_map(|state| {
+            state
+                .sessions
+                .open()
+                .with_untracked(|sessions| {
+                    sessions
+                        .iter()
+                        .find(|s| s.file().get_untracked().as_deref() == Some(path))
+                        .cloned()
+                })
+                .map(|session| (state.clone(), session))
+        })
+    })
+}
+
 /// A folder's name, for a task's row.
 pub fn folder_name(folder: &Path) -> String {
     folder.file_name().map_or_else(
@@ -621,6 +702,7 @@ mod tests {
                 hour: 9,
                 minute: 0,
             },
+            continuing: false,
         };
         let (folder, schedule) = Tasks::check(&good).unwrap();
         assert_eq!(folder, dir.path().canonicalize().unwrap());

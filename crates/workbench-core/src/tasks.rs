@@ -189,6 +189,9 @@ pub struct Run {
     pub error: Option<String>,
     /// Looked at since it finished.
     pub seen: bool,
+    /// Which of its session's prompts was this run's, counting from 0: in a
+    /// task that keeps one conversation, where this run starts.
+    pub turn: Option<usize>,
 }
 
 impl Run {
@@ -205,6 +208,8 @@ pub struct Task {
     pub folder: PathBuf,
     pub prompt: String,
     pub schedule: Schedule,
+    /// Each run carries on one conversation, rather than starting its own.
+    pub continuing: bool,
     pub paused: bool,
     /// When scheduling last settled: made, edited, resumed or run. The
     /// next run is the schedule's first time after it.
@@ -227,6 +232,15 @@ impl Task {
     /// the workbench was closed is due once, not once for each.
     pub fn due(&self, now: Timestamp, tz: &TimeZone) -> bool {
         self.next_run(tz).is_some_and(|next| next <= now)
+    }
+
+    /// The conversation a continuing task's next run carries on: the
+    /// latest run's session, if any run got one.
+    pub fn conversation(&self) -> Option<&Path> {
+        self.runs
+            .iter()
+            .rev()
+            .find_map(|run| run.session.as_deref())
     }
 
     pub fn running(&self) -> bool {
@@ -532,6 +546,25 @@ mod tests {
         task.paused = true;
         assert!(!task.due(at("2026-10-22T12:00:00Z"), &utc));
         assert_eq!(task.next_run(&utc), None);
+    }
+
+    #[test]
+    fn a_continuing_task_carries_on_its_latest_session() {
+        let mut task = Task {
+            continuing: true,
+            ..Task::default()
+        };
+        assert_eq!(task.conversation(), None, "no run yet");
+        task.begin_run(1, 0);
+        task.runs[0].session = Some("/pi/one.jsonl".into());
+        task.begin_run(2, 1);
+        assert_eq!(
+            task.conversation(),
+            Some(Path::new("/pi/one.jsonl")),
+            "the new run has none yet"
+        );
+        task.runs[1].session = Some("/pi/two.jsonl".into());
+        assert_eq!(task.conversation(), Some(Path::new("/pi/two.jsonl")));
     }
 
     #[test]

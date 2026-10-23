@@ -693,6 +693,7 @@ pub(super) fn pane(state: Rc<Workbench>, pane: Rc<Pane>) -> impl IntoView {
                 session,
                 session_visible,
                 f64::from_bits(zoom),
+                None,
             )
             .into_any(),
             None => Empty::new().into_any(),

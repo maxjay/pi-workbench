@@ -733,12 +733,15 @@ fn composer(
     .style(|s| s.width_full().gap(6).padding(14).flex_shrink(0.0_f32))
 }
 
-/// A session tab: the conversation, its header and the composer.
+/// A session tab: the conversation, its header and the composer. With
+/// `jump`, it opens at that prompt (counting from 0) rather than the end,
+/// as a run of a task that keeps one conversation does.
 pub(super) fn session_view(
     state: Rc<Workbench>,
     session: Rc<Session>,
     visible: Memo<bool>,
     zoom: f64,
+    jump: Option<usize>,
 ) -> impl IntoView {
     let entries = session.entries();
     let (title, stats, model) = (session.title(), session.stats(), session.model());
@@ -825,18 +828,37 @@ pub(super) fn session_view(
             .items_center()
             .apply_if(!entries.with(Vec::is_empty), |s| s.hide())
     });
+    let jumped = Rc::new(std::cell::Cell::new(jump.is_none()));
     let timeline = Stack::vertical((
         empty,
         dyn_stack(
             move || entries.get(),
             |entry| entry.id,
             move |entry| {
-                entry_view(
+                let target = !jumped.get()
+                    && entry.kind == EntryKind::User
+                    && entries.with_untracked(|all| {
+                        all.iter()
+                            .take_while(|other| other.id != entry.id)
+                            .filter(|other| other.kind == EntryKind::User)
+                            .count()
+                    }) == jump.unwrap_or_default();
+                let view = entry_view(
                     timeline_state.clone(),
                     timeline_session.clone(),
                     entry,
                     zoom,
                 )
+                .into_any();
+                if target {
+                    jumped.set(true);
+                    // Once laid out, and after the timeline has gone to its end.
+                    let id = view.id();
+                    floem::action::exec_after_animation_frame(move |_| {
+                        floem::action::exec_after_animation_frame(move |_| id.scroll_to(None));
+                    });
+                }
+                view
             },
         )
         .style(|s| s.flex_col().width_full()),
