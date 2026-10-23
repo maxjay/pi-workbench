@@ -48,7 +48,7 @@ pub(super) fn status_label(status: Status) -> &'static str {
     }
 }
 
-fn pill(
+pub(super) fn pill(
     text: impl Fn() -> String + 'static,
     color: impl Fn() -> Color + 'static,
     zoom: f64,

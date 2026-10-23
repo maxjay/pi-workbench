@@ -234,6 +234,9 @@ struct Refreshed {
     pi: PiLines,
 }
 
+/// Hands a snapshot's tree id, if one could be taken, to whoever asked.
+type SnapshotDone = Box<dyn FnOnce(Option<String>)>;
+
 pub struct Lens {
     scope: Scope,
     root: PathBuf,
@@ -264,6 +267,10 @@ pub struct Lens {
     /// One refresh runs at a time; another request runs once it ends.
     refreshing: Cell<bool>,
     again: Cell<bool>,
+    /// The repository is still being looked for, and the snapshots asked
+    /// for meanwhile, taken once it is found.
+    searching: Cell<bool>,
+    waiting: RefCell<Vec<SnapshotDone>>,
 }
 
 impl Lens {
@@ -292,6 +299,8 @@ impl Lens {
             changes_generation: Cell::new(0),
             refreshing: Cell::new(false),
             again: Cell::new(false),
+            searching: Cell::new(false),
+            waiting: RefCell::new(Vec::new()),
         })
     }
 
@@ -399,6 +408,7 @@ impl Lens {
     pub fn start(self: &Rc<Self>) {
         let lens = self.clone();
         let root = self.root.clone();
+        self.searching.set(true);
         let finish = create_ext_action(
             self.scope,
             move |found: Option<(Repo, PathBuf, Option<Base>, Option<String>)>| {
@@ -408,6 +418,11 @@ impl Lens {
                     lens.branch_base.set(base);
                     lens.head.set(head);
                     lens.refresh();
+                }
+                lens.searching.set(false);
+                let waiting = std::mem::take(&mut *lens.waiting.borrow_mut());
+                for done in waiting {
+                    lens.snapshot(done);
                 }
             },
         );
@@ -425,8 +440,14 @@ impl Lens {
         });
     }
 
-    /// Takes a snapshot of the workspace for a session turn; `done` gets the tree id.
+    /// Takes a snapshot of the workspace for a session turn; `done` gets the
+    /// tree id. A prompt sent as the folder opens, as a task due at launch
+    /// is, waits for the repository to be found rather than going without.
     pub fn snapshot(&self, done: impl FnOnce(Option<String>) + 'static) {
+        if self.searching.get() {
+            self.waiting.borrow_mut().push(Box::new(done));
+            return;
+        }
         let Some(repo) = self.repo.borrow().clone() else {
             done(None);
             return;

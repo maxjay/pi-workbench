@@ -702,6 +702,17 @@ impl Session {
         self.stop_requested.get() || self.stopped.get_untracked()
     }
 
+    /// Whether the timeline ends on an error, as when Pi failed the prompt
+    /// or could not start.
+    pub fn ended_in_error(&self) -> bool {
+        self.entries.with_untracked(|entries| {
+            entries.last().is_some_and(|entry| {
+                entry.kind == EntryKind::Notice
+                    && entry.state.get_untracked() == Some(ToolState::Failed)
+            })
+        })
+    }
+
     pub fn set_model(&self, model: &Model) {
         self.with_process(|pi| pi.set_model(&model.provider, &model.id));
     }

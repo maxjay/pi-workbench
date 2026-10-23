@@ -31,6 +31,12 @@ debug = 0
 [profile.dev.package.floem]
 debug-assertions = false
 
+# tiny-skia, the software renderer, asserts in debug builds when a fill under
+# two pixels wide straddles a pixel edge and leaves no whole pixel between;
+# a text cursor at some offsets does. Release builds draw the edges and go on.
+[profile.dev.package.tiny-skia]
+debug-assertions = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
