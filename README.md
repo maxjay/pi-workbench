@@ -17,6 +17,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 - **No overwrite prompts:** Pi's edits fold into open files. Unsaved edits are merged; overlapping changes stay in the file between conflict markers.
 - **Editor:** syntax highlighting, open by name (Ctrl+P), search across files (Ctrl+Shift+F), cursor and scroll kept per tab, and an explorer that hides what `.gitignore` ignores.
 - **Panes you arrange:** split any pane right or down as often as you like. Every pane holds tabs of files, Pi sessions and terminals, and tabs drag between panes or onto a pane's edge to split it. The layout is saved per workspace.
+- **Scheduled tasks:** a prompt Pi runs in a folder on a schedule. Each run is an ordinary session: read what it did and carry on the conversation in the tasks view, or review its changes in the code view.
 - **Terminals, settings, worktrees:** terminal tabs anywhere, a commented settings file, and sessions that work in their own git worktree.
 - **One quick picker, extended by Pi:** files, commands and colour themes in one VS Code-style picker. Pi's own slash commands are in it too, including the ones your Pi extensions, prompt templates and skills add.
 - **A pet per session:** the front session's Glitch roams the window, says the gist of each reply, and brings its questions to answer on the spot. Throw it out onto the desktop, see-through on Windows, and it bounces off the screen's edges and keeps you posted from there. `/kill` gets it shot.
@@ -67,6 +68,18 @@ Install Pi (`npm install -g @earendil-works/pi-coding-agent`) and sign in to a p
 - **Header:** session name, status, tokens, cost, context use, and the model picker.
 
 To pass extra arguments to Pi, set `PI_WORKBENCH_PI_ARGS`, for example `--provider <name> --model <id>`. `PI_WORKBENCH_PI` selects a different `pi` executable.
+
+## Scheduled tasks
+
+**Code | Tasks** in the title bar switches the window between the code and its tasks, with a count of runs that finished since you last looked. The tasks view lists every task, whatever folder it works in, with its runs beneath it.
+
+- **A task** is a name, a folder, a schedule and what Pi should do. **+ New** writes one; picking a task changes it, runs it now, pauses it or deletes it.
+- **When it runs** is set with controls: by hand only, every so many minutes or hours, or at a time on the days you tick (with Every day, Weekdays and Weekends to start from), in local time. The form says in words when it runs and when it would run next.
+- **Describe it instead:** type something like "every weekday morning at 9" and **Fill in**; Pi sets the controls, and says what it set, for you to check and change before saving. Pi only ever fills in the controls, so what is saved is what they show.
+- **A run** starts a new Pi session in the task's folder, named after the task and the time, without taking the front from the session you are in. It shows in the sessions rail like any other.
+- **Continue one conversation** instead, for something like reading your email each morning: every run adds that day's prompt to the same session, so you can ask about earlier days too ("has John replied since Monday?"). Picking a run opens the conversation where that run starts. If Pi is busy in it when a run comes due, the run's prompt waits as a follow-up; Pi compacts the conversation as it grows long. Email and other services come from your own Pi setup, such as an MCP server added with `pi mcp`.
+- **Picking a run** shows its conversation: read what Pi did, answer its questions, and carry on talking to it. **Review in code view** goes to that session in its folder, with the changes lens reading from the start of the run.
+- **When they run:** while the workbench is open. A task that came due while it was closed runs once when it opens, not once for each time it missed. Tasks are kept in `tasks.json` beside the window's saved state; deleting a task leaves its sessions in Pi's store.
 
 ## The changes lens
 

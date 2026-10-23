@@ -239,6 +239,32 @@ impl Sessions {
         session
     }
 
+    /// Starts a new session without bringing it to the front, as a
+    /// scheduled task does.
+    pub fn create_behind(&self) -> Rc<Session> {
+        let front = self.active.get_untracked();
+        let session = self.add(None);
+        self.active.set(front);
+        self.start(&session);
+        session
+    }
+
+    /// A stored session, open and with Pi started on it, without bringing
+    /// it to the front: one already open is used as it is.
+    pub fn open_behind(&self, summary: &SessionSummary) -> Rc<Session> {
+        self.keep(summary);
+        let session = self
+            .open
+            .with_untracked(|open| {
+                open.iter()
+                    .find(|s| s.file().get_untracked().as_ref() == Some(&summary.path))
+                    .cloned()
+            })
+            .expect("kept just now");
+        self.wake(&session);
+        session
+    }
+
     /// Brings a stored session to the front, starting Pi on it if needed.
     pub fn resume(&self, summary: &SessionSummary) -> Rc<Session> {
         let open = self.open.with_untracked(|open| {

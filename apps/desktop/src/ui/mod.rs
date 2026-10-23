@@ -10,12 +10,14 @@ mod pet;
 mod pet_window;
 mod rail;
 mod session;
+mod tasks;
 mod terminal;
 
 use crate::{
     commands::{self, Command},
     lens::Since,
     panes::{Node, Tab},
+    tasks::Mode,
     window::Window,
     workspace::Workbench,
 };
@@ -118,7 +120,7 @@ fn sidebar_icon() -> impl IntoView {
 
 /// The window's top row: what is open, and one search box for files,
 /// commands, Pi's commands and themes.
-fn title_bar(state: Rc<Workbench>) -> impl IntoView {
+fn title_bar(state: Rc<Workbench>, app: Rc<Window>) -> impl IntoView {
     let root = state
         .root()
         .file_name()
@@ -175,6 +177,7 @@ fn title_bar(state: Rc<Workbench>) -> impl IntoView {
                     .font_family(CODE_FONT.to_string())
             }),
             Label::new(root).style(|s| s.color(color::text()).font_bold().text_ellipsis()),
+            tasks::mode_switch(app.tasks.clone()),
         ))
         .style(|s| {
             s.gap(8)
@@ -739,6 +742,12 @@ fn workspace(state: Rc<Workbench>, window: WindowId, app: Rc<Window>) -> impl In
         })
     };
     let (footer_zoom, footer_state) = (state.zoom_window(), state.clone());
+    let code_mode = app.tasks.mode;
+    let (tasks_app, tasks_root, tasks_window) =
+        (app.clone(), state.root().to_path_buf(), app.clone());
+    let tasks_shown = floem::reactive::Memo::new(move |_| {
+        code_mode.get() == Mode::Tasks && tasks_window.active().with(|shown| *shown == tasks_root)
+    });
     let footer = Stack::horizontal((
         window_zoom,
         lens_summary,
@@ -801,9 +810,33 @@ fn workspace(state: Rc<Workbench>, window: WindowId, app: Rc<Window>) -> impl In
     });
     Stack::new((
         Stack::vertical((
-            title_bar(state.clone()),
-            Stack::horizontal((rail::rail(state.clone(), app.clone()), body))
-                .style(|s| s.size_full().min_width(0).min_height(0)),
+            title_bar(state.clone(), app.clone()),
+            Stack::new((
+                Stack::horizontal((rail::rail(state.clone(), app.clone()), body)).style(move |s| {
+                    s.size_full()
+                        .min_width(0)
+                        .min_height(0)
+                        .apply_if(code_mode.get() != Mode::Code, |s| s.hide())
+                }),
+                // Made only for the folder in front, while it is shown.
+                dyn_container(
+                    move || tasks_shown.get(),
+                    move |shown| {
+                        if shown {
+                            tasks::tasks_view(tasks_app.clone()).into_any()
+                        } else {
+                            Empty::new().into_any()
+                        }
+                    },
+                )
+                .style(move |s| {
+                    s.size_full()
+                        .min_width(0)
+                        .min_height(0)
+                        .apply_if(!tasks_shown.get(), |s| s.hide())
+                }),
+            ))
+            .style(|s| s.size_full().min_width(0).min_height(0)),
             footer,
         ))
         .style(|s| s.size_full()),

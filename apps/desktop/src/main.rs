@@ -17,6 +17,7 @@ mod session;
 mod sessions;
 mod settings;
 mod syntax;
+mod tasks;
 mod terminal;
 mod ui;
 mod watcher;

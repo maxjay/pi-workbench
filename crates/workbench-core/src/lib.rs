@@ -8,5 +8,6 @@ pub mod layout;
 pub mod merge;
 pub mod settings;
 pub mod structure;
+pub mod tasks;
 
 pub const MAX_OPEN_DOCUMENTS: usize = 64;

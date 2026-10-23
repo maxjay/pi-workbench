@@ -6,7 +6,10 @@
 //!
 //! Only what was opened is listed: the folders opened in the window and the
 //! sessions opened in each, which come back as they were left.
-use crate::workspace::{Integrations, WindowLink, Workbench};
+use crate::{
+    tasks::Tasks,
+    workspace::{Integrations, WindowLink, Workbench},
+};
 use floem::{
     ext_event::create_ext_action,
     prelude::*,
@@ -27,6 +30,8 @@ use workbench_core::layout;
 
 pub struct Window {
     pub id: WindowId,
+    /// Scheduled tasks, and whether the window shows them or the code.
+    pub tasks: Rc<Tasks>,
     scope: Scope,
     me: Weak<Window>,
     launch: Launch,
@@ -56,6 +61,7 @@ impl Window {
     pub fn new(id: WindowId, launch: Launch) -> Rc<Self> {
         Rc::new_cyclic(|me| Self {
             id,
+            tasks: Tasks::new(Scope::current(), me.clone()),
             scope: Scope::current(),
             me: me.clone(),
             launch,
@@ -111,7 +117,13 @@ impl Window {
                 let _ = layout::save_window(&path, &state);
             }
         });
+        self.tasks.start();
         shown
+    }
+
+    /// How Pi is started.
+    pub fn launch(&self) -> &Launch {
+        &self.launch
     }
 
     pub fn workspaces(&self) -> ReadSignal<Vec<Rc<Workbench>>> {
