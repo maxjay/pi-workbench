@@ -3,7 +3,7 @@ members = ["crates/workbench-core", "crates/workbench-text", "crates/pi-client",
 resolver = "3"
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 rust-version = "1.91"
 
@@ -16,6 +16,10 @@ workbench-core = { path = "crates/workbench-core" }
 workbench-text = { path = "crates/workbench-text" }
 pi-client = { path = "crates/pi-client" }
 floem = { git = "https://github.com/lapce/floem", rev = "1351ffb162faeb8be983f1301d718a0d5fb59c27", default-features = false, features = ["editor", "vger"] }
+
+# WSLg's mouse taken for a pen under X11: see patches/README.md.
+[patch."https://github.com/lapce/winit"]
+floem-winit-x11 = { path = "patches/winit-x11" }
 
 [profile.dev]
 debug = 0
