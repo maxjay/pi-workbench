@@ -478,9 +478,12 @@ fn entry_view(
                         .font_size(10.0 * zoom)
                         .apply_if(queued.is_empty(), |s| s.hide())
                 }),
+                // Wrapped within the timeline: right-aligned, it would
+                // otherwise take its text's whole width and run off the left.
                 Label::derived(move || title.get()).style(|s| {
                     s.text_wrap()
                         .min_width(0)
+                        .max_width_pct(100.0)
                         .padding_horiz(12)
                         .padding_vert(8)
                         .border_radius(12)
