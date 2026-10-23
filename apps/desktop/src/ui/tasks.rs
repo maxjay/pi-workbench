@@ -19,7 +19,7 @@ use floem::{
     },
 };
 use std::rc::Rc;
-use workbench_core::tasks::{self, Outcome, Run, Schedule, Task, Timestamp};
+use workbench_core::tasks::{self, Day, Outcome, Run, Schedule, Task, Timestamp};
 
 /// The Code | Tasks switch in the title bar, with how many runs finished
 /// unseen.
@@ -82,16 +82,16 @@ fn run_color(state: RunState) -> Color {
 /// Under a task's name: its schedule, when it runs next, and where.
 fn task_summary(tasks: &Tasks, task: &Task) -> String {
     let now = tasks.now();
-    let when = match (task.schedule(), task.next_run(tasks.time_zone())) {
-        (_, _) if task.paused => "paused".to_string(),
-        (Some(Schedule::Manual), _) | (None, _) => "by hand".to_string(),
-        (Some(_), Some(next)) if next <= now => "due now".to_string(),
-        (Some(schedule), Some(next)) => format!(
+    let when = match (&task.schedule, task.next_run(tasks.time_zone())) {
+        _ if task.paused => "paused".to_string(),
+        (Schedule::Manual, _) => "by hand".to_string(),
+        (_, Some(next)) if next <= now => "due now".to_string(),
+        (schedule, Some(next)) => format!(
             "{}  \u{b7}  next {}",
             schedule.describe(),
             tasks::describe(next, now, tasks.time_zone())
         ),
-        (Some(schedule), None) => schedule.describe(),
+        (schedule, None) => schedule.describe(),
     };
     format!("{when}  \u{b7}  {}", folder_name(&task.folder))
 }
@@ -345,7 +345,8 @@ struct Controls {
     amount: RwSignal<String>,
     hours: RwSignal<bool>,
     days: RwSignal<[bool; 7]>,
-    time: RwSignal<String>,
+    hour: RwSignal<String>,
+    minute: RwSignal<String>,
 }
 
 impl Controls {
@@ -355,7 +356,8 @@ impl Controls {
             amount: RwSignal::new("30".into()),
             hours: RwSignal::new(false),
             days: RwSignal::new([true; 7]),
-            time: RwSignal::new("09:00".into()),
+            hour: RwSignal::new("09".into()),
+            minute: RwSignal::new("00".into()),
         };
         controls.set(schedule);
         controls
@@ -363,9 +365,9 @@ impl Controls {
 
     /// Shows a schedule, as Pi filled it in or as it was saved.
     fn set(&self, schedule: &Schedule) {
-        match *schedule {
+        match schedule {
             Schedule::Manual => self.kind.set(Kind::Manual),
-            Schedule::Every { minutes } => {
+            &Schedule::Every { minutes } => {
                 self.kind.set(Kind::Every);
                 let hours = minutes % 60 == 0;
                 self.hours.set(hours);
@@ -374,20 +376,44 @@ impl Controls {
             }
             Schedule::At { days, hour, minute } => {
                 self.kind.set(Kind::At);
-                self.days.set(days);
-                self.time.set(format!("{hour:02}:{minute:02}"));
+                self.days.set(Day::ALL.map(|day| days.contains(&day)));
+                self.hour.set(format!("{hour:02}"));
+                self.minute.set(format!("{minute:02}"));
             }
         }
     }
 
     /// Tracked: the schedule they make, or what is wrong.
     fn schedule(&self) -> Result<Schedule, String> {
-        match self.kind.get() {
-            Kind::Manual => Ok(Schedule::Manual),
-            Kind::Every => Schedule::every(&self.amount.get(), self.hours.get()),
-            Kind::At => Schedule::at(self.days.get(), &self.time.get()),
-        }
-        .map_err(|err| format!("{err:#}"))
+        let number = |field: RwSignal<String>, what: &str| {
+            field
+                .with(|text| text.trim().parse::<u32>())
+                .map_err(|_| format!("The {what} is a whole number"))
+        };
+        let schedule = match self.kind.get() {
+            Kind::Manual => Schedule::Manual,
+            Kind::Every => {
+                let amount = number(self.amount, "gap")?;
+                Schedule::Every {
+                    minutes: if self.hours.get() {
+                        amount.saturating_mul(60)
+                    } else {
+                        amount
+                    },
+                }
+            }
+            Kind::At => Schedule::At {
+                days: Day::ALL
+                    .into_iter()
+                    .zip(self.days.get())
+                    .filter(|(_, on)| *on)
+                    .map(|(day, _)| day)
+                    .collect(),
+                hour: u8::try_from(number(self.hour, "hour")?).unwrap_or(u8::MAX),
+                minute: u8::try_from(number(self.minute, "minute")?).unwrap_or(u8::MAX),
+            },
+        };
+        schedule.checked().map_err(|err| format!("{err:#}"))
     }
 }
 
@@ -551,7 +577,7 @@ fn schedule_editor(
             .items_center()
             .apply_if(kind.get() != Kind::Every, |s| s.hide())
     });
-    let (days, time) = (controls.days, controls.time);
+    let (days, hour, minute) = (controls.days, controls.hour, controls.minute);
     let preset = |label: &'static str, set: [bool; 7]| {
         chip(
             move || label.to_string(),
@@ -570,7 +596,9 @@ fn schedule_editor(
             }))
             .style(|s| s.gap(4)),
             Label::new("at").style(|s| s.color(color::muted()).margin_left(6)),
-            small_field(time, 80.0),
+            small_field(hour, 44.0),
+            Label::new(":").style(|s| s.color(color::muted())),
+            small_field(minute, 44.0),
         ))
         .style(|s| s.gap(6).items_center()),
         Stack::horizontal((
@@ -590,7 +618,11 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
     let draft = task.as_ref().map_or_else(
         || Draft {
             folder: tasks.default_folder(),
-            schedule: "daily 09:00".into(),
+            schedule: Schedule::At {
+                days: Day::ALL.to_vec(),
+                hour: 9,
+                minute: 0,
+            },
             ..Draft::default()
         },
         |task| Draft {
@@ -602,7 +634,7 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
     );
     let name = RwSignal::new(draft.name);
     let folder = RwSignal::new(draft.folder);
-    let controls = Controls::new(&Schedule::parse(&draft.schedule).unwrap_or(Schedule::Manual));
+    let controls = Controls::new(&draft.schedule);
     let error = RwSignal::new(None::<String>);
     let prompt = text_editor(draft.prompt)
         .styling(SimpleStyling::builder().font_size(13).build())
@@ -629,7 +661,7 @@ fn task_form(tasks: Rc<Tasks>, id: Option<u64>) -> impl IntoView {
             name: name.get_untracked(),
             folder: folder.get_untracked(),
             prompt: prompt_doc.text().to_string(),
-            schedule: schedule.to_string(),
+            schedule,
         })
     });
     // In words, with when it would run next; or what is wrong.

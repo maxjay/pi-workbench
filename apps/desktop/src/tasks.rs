@@ -20,7 +20,7 @@ use std::{
     rc::{Rc, Weak},
     time::Duration,
 };
-use workbench_core::tasks::{self, Outcome, Run, Task, TaskFile, TimeZone, Timestamp};
+use workbench_core::tasks::{self, Outcome, Run, Schedule, Task, TaskFile, TimeZone, Timestamp};
 
 /// How often due tasks are looked for.
 const TICK: Duration = Duration::from_secs(30);
@@ -59,7 +59,7 @@ pub struct Draft {
     pub name: String,
     pub folder: String,
     pub prompt: String,
-    pub schedule: String,
+    pub schedule: Schedule,
 }
 
 pub struct Tasks {
@@ -254,10 +254,14 @@ impl Tasks {
         }
     }
 
-    /// Checks a draft; the folder comes back whole and the schedule as it
-    /// is printed.
-    pub fn check(draft: &Draft) -> Result<(PathBuf, String), String> {
-        let schedule = tasks::Schedule::parse(&draft.schedule).map_err(|err| format!("{err:#}"))?;
+    /// Checks a draft; the folder comes back whole and the schedule's days
+    /// in order.
+    pub fn check(draft: &Draft) -> Result<(PathBuf, Schedule), String> {
+        let schedule = draft
+            .schedule
+            .clone()
+            .checked()
+            .map_err(|err| format!("{err:#}"))?;
         if draft.prompt.trim().is_empty() {
             return Err("Say what Pi should do".into());
         }
@@ -267,7 +271,7 @@ impl Tasks {
             .ok()
             .filter(|folder| folder.is_dir())
             .ok_or_else(|| format!("\u{201c}{}\u{201d} is not a folder", draft.folder.trim()))?;
-        Ok((folder, schedule.to_string()))
+        Ok((folder, schedule))
     }
 
     /// Saves a draft as a new task, or over an existing one. A changed
@@ -547,7 +551,7 @@ impl Tasks {
         &self,
         description: &str,
         folder: &str,
-        done: impl FnOnce(Result<tasks::Schedule, String>) + 'static,
+        done: impl FnOnce(Result<Schedule, String>) + 'static,
     ) {
         let Some(window) = self.window.upgrade() else {
             return;
@@ -564,12 +568,7 @@ impl Tasks {
             let answer =
                 pi_client::ask_aside(&launch, &folder, None, &question, Duration::from_secs(90));
             finish(match answer {
-                Ok(answer) => tasks::Schedule::from_answer(&answer).ok_or_else(|| {
-                    format!(
-                        "Pi answered \u{201c}{}\u{201d}, which is not a schedule",
-                        answer.trim()
-                    )
-                }),
+                Ok(answer) => Schedule::from_answer(&answer).map_err(|err| format!("{err:#}")),
                 Err(err) => Err(format!("{err:#}")),
             })
         });
@@ -608,6 +607,7 @@ pub fn folder_name(folder: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use workbench_core::tasks::Day;
 
     #[test]
     fn a_draft_needs_a_prompt_a_folder_and_a_schedule() {
@@ -616,11 +616,23 @@ mod tests {
             name: String::new(),
             folder: dir.path().display().to_string(),
             prompt: "Check the dependencies".into(),
-            schedule: "weekdays 9:00".into(),
+            schedule: Schedule::At {
+                days: vec![Day::Fri, Day::Mon],
+                hour: 9,
+                minute: 0,
+            },
         };
         let (folder, schedule) = Tasks::check(&good).unwrap();
         assert_eq!(folder, dir.path().canonicalize().unwrap());
-        assert_eq!(schedule, "weekdays 09:00", "kept as printed");
+        assert_eq!(
+            schedule,
+            Schedule::At {
+                days: vec![Day::Mon, Day::Fri],
+                hour: 9,
+                minute: 0
+            },
+            "days in order"
+        );
         let without = |change: fn(&mut Draft)| {
             let mut draft = good.clone();
             change(&mut draft);
@@ -628,6 +640,9 @@ mod tests {
         };
         assert_eq!(without(|d| d.prompt = "  ".into()), "Say what Pi should do");
         assert!(without(|d| d.folder = "/no/such/folder".into()).contains("is not a folder"));
-        assert!(without(|d| d.schedule = "daily 25:00".into()).contains("not a time"));
+        assert_eq!(
+            without(|d| d.schedule = Schedule::Every { minutes: 0 }),
+            "Say how often, as a whole number"
+        );
     }
 }
