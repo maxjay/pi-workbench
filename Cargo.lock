@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "pi-workbench"
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.2"
 dependencies = [
  "tauri",
  "tauri-build",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "protocol"
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -3857,7 +3857,7 @@ dependencies = [
 
 [[package]]
 name = "wb-agent"
-version = "1.0.0-alpha.1"
+version = "1.0.0-alpha.2"
 dependencies = [
  "protocol",
  "serde",

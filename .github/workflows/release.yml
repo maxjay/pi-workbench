@@ -4,6 +4,8 @@ name: Release
 # releases that commit; a version bump in Cargo.toml reaching main releases
 # the new version; a run by hand releases the version on the branch it runs
 # on. A version with a pre-release part (1.0.0-alpha.1) is a pre-release.
+# A run by hand can also delete every other release once this one is up;
+# their tags stay.
 
 on:
   push:
@@ -12,6 +14,11 @@ on:
     branches: [main]
     paths: [Cargo.toml]
   workflow_dispatch:
+    inputs:
+      delete_others:
+        description: Delete every other release once this one is published (tags are kept)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -95,3 +102,12 @@ jobs:
           NOTES
           )"
           fi
+      - name: Delete the other releases
+        if: inputs.delete_others
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' |
+            grep -vxF "$TAG" |
+            while read -r tag; do
+              echo "Deleting the release for $tag"
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+            done
