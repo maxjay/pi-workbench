@@ -1,0 +1,65 @@
+name: Build
+
+# The Windows app and the wb-agent it carries, built the same way for CI and
+# for releases. The callers get two artifacts: wb-agent-linux and
+# pi-workbench-windows.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    name: wb-agent for WSL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain in rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      # Static, so it runs in any WSL distro.
+      - run: cargo build -p wb-agent --release --locked --target x86_64-unknown-linux-musl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wb-agent-linux
+          path: target/x86_64-unknown-linux-musl/release/wb-agent
+          if-no-files-found: error
+
+  windows:
+    name: Windows app
+    needs: agent
+    runs-on: windows-latest
+    env:
+      WB_AGENT_BUNDLE: ${{ github.workspace }}\artifacts\wb-agent
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain in rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/ui/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: wb-agent-linux
+          path: artifacts
+      - run: npm ci
+        working-directory: app/ui
+      - run: npm run build
+        working-directory: app/ui
+      - run: cargo clippy -p pi-workbench --all-targets --locked -- -D warnings
+      - run: npm run tauri -- build
+        working-directory: app/ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-workbench-windows
+          path: |
+            target/release/pi-workbench.exe
+            target/release/bundle/nsis/*.exe
+          if-no-files-found: error

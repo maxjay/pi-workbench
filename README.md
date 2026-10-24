@@ -17,13 +17,16 @@ a small Rust process inside WSL, does the work: it reads and writes Pi's files
 and will run Pi's sessions, git and terminals. They talk in JSON lines over
 `wsl.exe`. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Try it
+## Install
 
-Download the Windows build from the latest
-[CI run](https://github.com/maxjay/pi-workbench/actions/workflows/ci.yml):
-`pi-workbench-windows` holds the app and its installer. You need WSL with a
-default distro and Pi installed there. The first start installs wb-agent into
-`~/.local/bin` in that distro.
+Download the latest build from
+[Releases](https://github.com/maxjay/pi-workbench/releases): the installer
+(`…-windows-x64-setup.exe`, installs for your user, no admin rights) or the
+portable `…-windows-x64-portable.exe`. You need WSL with a default distro and
+Pi installed there. The first start installs wb-agent into `~/.local/bin` in
+that distro.
+
+Every CI run also uploads a build, as `pi-workbench-windows`.
 
 ## Develop
 
@@ -35,6 +38,14 @@ npm run dev                                  # the UI in a browser, at localhost
 npm run tauri dev                            # the app
 npm run check                                # Biome and TypeScript
 ```
+
+## Release
+
+Bump `version` in the root `Cargo.toml`. When that reaches `main`, the
+release workflow builds and publishes it. To release from another branch,
+push a tag that matches the version (`git tag v1.2.3 && git push origin v1.2.3`)
+or run the workflow by hand. A version like `1.0.0-alpha.1` is published as a
+pre-release.
 
 ## Licence
 

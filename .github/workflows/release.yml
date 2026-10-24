@@ -1,0 +1,97 @@
+name: Release
+
+# Publishes the Windows app as a GitHub release. A pushed tag (vX.Y.Z)
+# releases that commit; a version bump in Cargo.toml reaching main releases
+# the new version; a run by hand releases the version on the branch it runs
+# on. A version with a pre-release part (1.0.0-alpha.1) is a pre-release.
+
+on:
+  push:
+    tags: ['v*']
+    # Path filters don't apply to tags.
+    branches: [main]
+    paths: [Cargo.toml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [[ -z "$version" ]]; then
+            echo "::error::No workspace version in Cargo.toml"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml ($version)"
+              exit 1
+            fi
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "v$version is released already; nothing to do"
+            exit 0
+          fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: version
+    if: needs.version.outputs.tag != ''
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Publish
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: built
+      - name: Name the files
+        run: |
+          version="${TAG#v}"
+          mkdir assets
+          cp "$(find built/pi-workbench-windows -name '*-setup.exe')" "assets/pi-workbench-$version-windows-x64-setup.exe"
+          cp built/pi-workbench-windows/pi-workbench.exe "assets/pi-workbench-$version-windows-x64-portable.exe"
+          cp built/wb-agent-linux/wb-agent "assets/wb-agent-$version-linux-x64"
+          (cd assets && sha256sum * > SHA256SUMS)
+          cat assets/SHA256SUMS
+      - name: Publish
+        # A release made by hand for the tag gets the files too. A new one
+        # makes its tag on the commit built, when it has none yet.
+        run: |
+          prerelease=()
+          [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" assets/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Pi Workbench $TAG" "${prerelease[@]}" --generate-notes --notes "$(cat <<'NOTES'
+          ## Install
+
+          You need Windows 10 or 11 with WSL, a default distro, and Pi installed in it.
+
+          - **Installer:** `pi-workbench-…-windows-x64-setup.exe` installs for your user only, no admin rights needed.
+          - **Portable:** `pi-workbench-…-windows-x64-portable.exe` runs from anywhere without installing.
+
+          On first start the app installs wb-agent into `~/.local/bin` in your default WSL distro.
+          `wb-agent-…-linux-x64` is the same binary, for installing it by hand.
+
+          The builds aren't signed yet, so Windows SmartScreen may warn: choose **More info › Run anyway**.
+          NOTES
+          )"
+          fi
