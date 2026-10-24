@@ -26,7 +26,7 @@ A native workbench for the [Pi](https://pi.dev) coding agent, built with Rust an
 
 ## Install on WSL or Linux
 
-Release builds come from [the Release workflow](.github/workflows/release.yml) for every `v*` tag. Inside WSL (Windows 11 or Windows 10 with WSLg):
+Release builds come from [the Release workflow](.github/workflows/release.yml): a version bump in `Cargo.toml` reaching `main` is built and released with its `v*` tag, as is a `v*` tag pushed by hand. Inside WSL (Windows 11 or Windows 10 with WSLg):
 
 ```sh
 curl -fsSL -o pw.tar.gz https://github.com/maxjay/pi-workbench/releases/latest/download/pi-workbench-x86_64-linux.tar.gz
