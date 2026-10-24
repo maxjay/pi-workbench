@@ -49,6 +49,6 @@ pre-release.
 
 ## Licence
 
-Copyright 2026 Max Jay. Licensed under the [Apache License 2.0](LICENSE):
-you can use, change and redistribute it, including commercially, as long as
-you keep the copyright and [NOTICE](NOTICE) and say what you changed.
+Copyright 2026 Max Jay. All rights reserved. This is not open source: no
+licence to use, copy, change or distribute it is granted without a written
+agreement. See [LICENSE](LICENSE).

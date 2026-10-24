@@ -6,7 +6,7 @@ resolver = "3"
 version = "1.0.0-alpha.1"
 edition = "2024"
 rust-version = "1.91"
-license = "Apache-2.0"
+license = "LicenseRef-Proprietary"
 
 [workspace.dependencies]
 protocol = { path = "crates/protocol" }
