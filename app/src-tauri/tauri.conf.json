@@ -46,6 +46,8 @@
       "nsis": {
         "installMode": "currentUser"
       }
-    }
+    },
+    "publisher": "Max Jay",
+    "copyright": "Copyright 2026 Max Jay"
   }
 }
