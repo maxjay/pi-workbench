@@ -8,6 +8,12 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod config;
+mod session;
+
+pub use config::*;
+pub use session::*;
+
 /// A call from the workbench, with the id its reply will carry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -47,6 +53,53 @@ pub enum Call {
     /// The thinking level new sessions start with.
     #[serde(rename = "models.setThinking")]
     ModelsSetThinking { level: String },
+    /// Scratchpads: the live ones, and the ones in Pi's store.
+    #[serde(rename = "sessions.list")]
+    SessionsList,
+    /// Start Pi in `cwd`, or in a new scratchpad folder, and send `text`.
+    #[serde(rename = "session.start")]
+    SessionStart {
+        cwd: Option<String>,
+        text: Option<String>,
+    },
+    /// Resume a session from Pi's store, or find it if it's live.
+    #[serde(rename = "session.open")]
+    SessionOpen { file: String },
+    /// A live session as it stands.
+    #[serde(rename = "session.get")]
+    SessionGet { id: String },
+    /// Send a message. While Pi works it steers the run, or with `later`
+    /// waits for the run to finish.
+    #[serde(rename = "session.send")]
+    SessionSend {
+        id: String,
+        text: String,
+        later: bool,
+    },
+    /// Stop the run.
+    #[serde(rename = "session.abort")]
+    SessionAbort { id: String },
+    /// Answer an extension's question.
+    #[serde(rename = "session.answer")]
+    SessionAnswer {
+        id: String,
+        ask: String,
+        reply: AskReply,
+    },
+    #[serde(rename = "session.setModel")]
+    SessionSetModel {
+        id: String,
+        provider: String,
+        model: String,
+    },
+    #[serde(rename = "session.setThinking")]
+    SessionSetThinking { id: String, level: String },
+    /// Stop Pi for this session once it's idle. Its file stays.
+    #[serde(rename = "session.close")]
+    SessionClose { id: String },
+    /// A file, for viewing; a relative path is taken from the session's folder.
+    #[serde(rename = "file.read")]
+    FileRead { session: String, path: String },
 }
 
 /// Everything wb-agent writes: replies to requests, and events.
@@ -85,6 +138,9 @@ pub enum Answer {
     Config(ConfigText),
     Mcp { servers: Vec<McpServer> },
     Models(Models),
+    Sessions { sessions: Vec<SessionSummary> },
+    Session(Box<Session>),
+    File(FileView),
     Done,
 }
 
@@ -108,6 +164,8 @@ pub enum FailureCode {
     Invalid,
     /// The thing asked about doesn't exist.
     NotFound,
+    /// Pi couldn't be started, or has stopped.
+    Pi,
 }
 
 /// What wb-agent says without being asked.
@@ -117,6 +175,8 @@ pub enum FailureCode {
 pub enum Event {
     /// wb-agent has started and reads requests.
     Ready { version: String },
+    /// Something changed in a live session.
+    Session { id: String, change: Change },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -130,101 +190,6 @@ pub struct Health {
     pub distro: Option<String>,
     /// `pi --version`, when Pi is installed.
     pub pi: Option<String>,
-}
-
-/// Pi's own files in its agent directory, shared with `pi` in a terminal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub enum ConfigFile {
-    Agents,
-    Mcp,
-    Models,
-    Settings,
-}
-
-impl ConfigFile {
-    pub fn file_name(self) -> &'static str {
-        match self {
-            ConfigFile::Agents => "AGENTS.md",
-            ConfigFile::Mcp => "mcp.json",
-            ConfigFile::Models => "models.json",
-            ConfigFile::Settings => "settings.json",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct ConfigText {
-    pub file: ConfigFile,
-    pub path: String,
-    /// False for a file that isn't there yet; `text` is then empty.
-    pub exists: bool,
-    pub text: String,
-}
-
-/// An entry in `mcp.json`'s `mcpServers`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct McpServer {
-    pub name: String,
-    pub kind: McpKind,
-    /// The command and its arguments, or the URL.
-    pub runs: String,
-    pub enabled: bool,
-    pub description: Option<String>,
-    /// A local server's `env`, as written: `NAME=value`.
-    pub env: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub enum McpKind {
-    /// A command Pi starts and talks to over stdio.
-    Local,
-    /// A URL, over streamable HTTP.
-    Remote,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct Models {
-    pub providers: Vec<Provider>,
-    pub defaults: Defaults,
-    /// `settings.json`'s `enabledModels`: the patterns Pi cycles through.
-    pub enabled: Vec<String>,
-}
-
-/// A provider in `models.json`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct Provider {
-    pub id: String,
-    pub name: Option<String>,
-    pub base_url: Option<String>,
-    pub models: Vec<Model>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct Model {
-    pub id: String,
-    pub name: Option<String>,
-    pub reasoning: bool,
-    pub context_window: Option<u32>,
-}
-
-/// What new sessions start with, from `settings.json`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct Defaults {
-    pub provider: Option<String>,
-    pub model: Option<String>,
-    pub thinking: Option<String>,
 }
 
 #[cfg(test)]
@@ -291,5 +256,60 @@ mod tests {
             r#"{"type":"event","event":"ready","version":"1.0.0"}"#
         );
         assert_eq!(serde_json::from_str::<FromAgent>(&line).unwrap(), ready);
+    }
+
+    #[test]
+    fn session_calls() {
+        let line =
+            r#"{"id":2,"method":"session.send","params":{"id":"s1","text":"go on","later":true}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap().call,
+            Call::SessionSend {
+                id: "s1".into(),
+                text: "go on".into(),
+                later: true
+            }
+        );
+        let line = r#"{"id":3,"method":"session.answer","params":{"id":"s1","ask":"u1","reply":{"type":"value","value":"Allow"}}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap().call,
+            Call::SessionAnswer {
+                id: "s1".into(),
+                ask: "u1".into(),
+                reply: AskReply::Value {
+                    value: "Allow".into()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn session_changes() {
+        let change = FromAgent::Event(Event::Session {
+            id: "s1".into(),
+            change: Change::Entry {
+                index: 3,
+                entry: Box::new(Entry::Tool(Tool {
+                    id: "c1".into(),
+                    name: "bash".into(),
+                    args: serde_json::json!({ "command": "ls" }),
+                    status: ToolStatus::Running,
+                    output: String::new(),
+                    images: Vec::new(),
+                })),
+            },
+        });
+        assert_eq!(
+            serde_json::to_string(&change).unwrap(),
+            r#"{"type":"event","event":"session","id":"s1","change":{"change":"entry","index":3,"entry":{"kind":"tool","id":"c1","name":"bash","args":{"command":"ls"},"status":"running","output":"","images":[]}}}"#
+        );
+        let image = FileContent::Image {
+            mime_type: "image/png".into(),
+            data: "AA==".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&image).unwrap(),
+            r#"{"type":"image","mimeType":"image/png","data":"AA=="}"#
+        );
     }
 }

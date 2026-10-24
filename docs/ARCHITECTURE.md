@@ -61,19 +61,42 @@ and says things on its own as events:
 {"type": "event", "event": "ready", "version": "1.0.0-alpha.1"}
 ```
 
-- Methods are named `area.action`: `health`, `config.read`, `config.write`,
-  `mcp.list`, `mcp.setEnabled`, `models.list`, `models.setDefault`,
-  `models.setThinking`.
+- Methods are named `area.action`: `health`; `config.read`, `config.write`;
+  `mcp.list`, `mcp.setEnabled`; `models.list`, `models.setDefault`,
+  `models.setThinking`; `sessions.list`; `session.start`, `session.open`,
+  `session.get`, `session.send`, `session.abort`, `session.answer`,
+  `session.setModel`, `session.setThinking`, `session.close`; `file.read`.
 - Each answer has a `kind`, and `ask(call, kind)` in `app/ui/src/agent.ts`
   checks the answer is the kind it expected.
 - Error codes are `badRequest`, `io`, `invalid` and `notFound`. A line
   wb-agent can't read still gets an error, with its `id` if it had one.
+- A live session sends `{"type":"event","event":"session","id":…,"change":…}`
+  whenever it changes: one entry (new, or replacing the one at its index),
+  the session's state, the whole conversation after loading it, or that it
+  closed. Fast output is gathered up and sent every 40 ms, so a reply
+  streaming word by word is about 25 messages a second, not hundreds.
 - `cargo test -p protocol` writes the TypeScript types. CI fails if they
   differ from what's committed.
 
 To add a method: add a variant to `Call` (and to `Answer` if it returns
 something new) in `crates/protocol`, handle it in `crates/agent/src/router.rs`,
 run `cargo test`, and call it from a store in `app/ui/src/state`.
+
+## Sessions
+
+wb-agent runs each session as `pi --mode rpc` in its folder, so Pi uses its
+own settings, MCP servers, extensions and session store, exactly as `pi` in
+a terminal does. Scratchpads each get a folder under
+`~/.local/share/pi-workbench/scratchpads`.
+
+- `pi.rs` reads Pi's lines into events and writes its commands
+  (Pi's docs/rpc.md).
+- `transcript.rs` applies those events to the session's state and entries,
+  and remembers what changed. It's pure, so it's tested line by line.
+- `session.rs` owns the process: a task reads Pi's output into the
+  transcript and sends the changes.
+- `store.rs` lists saved sessions from Pi's own store. wb-agent keeps no
+  copy of any conversation: reopening one runs `pi --session <file>`.
 
 ## Layout
 
@@ -86,7 +109,14 @@ crates/
     src/config.rs    where Pi's files are; read and write them safely
     src/mcp.rs       what mcp.json means, as text in and text out
     src/models.rs    what models.json and settings.json mean
-    tests/stdio.rs   the real binary, spoken to in lines
+    src/pi.rs        Pi's RPC lines, in and out
+    src/messages.rs  Pi's messages as conversation entries
+    src/transcript.rs  a session's state and entries, from Pi's events
+    src/session.rs   one live session: Pi's process and its transcript
+    src/sessions.rs  the live sessions; starting, resuming, listing
+    src/store.rs     Pi's saved sessions
+    src/files.rs     files opened for viewing
+    tests/stdio.rs   the real binary, spoken to in lines, with a fake pi
 app/
   src-tauri/         the app: start wb-agent, carry lines
     src/agent.rs     the child process
@@ -97,7 +127,7 @@ app/
     src/protocol/    generated, do not edit
     src/state/       stores: what the page knows, and the calls that change it
     src/components/  pieces used across pages
-    src/views/       one file per page
+    src/views/       one file per page; scratch/ for the scratchpad's parts
     dev/             the dev server's bridge to wb-agent
 ```
 
@@ -148,10 +178,12 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
 
 ## Stages
 
-1. **Browser shell** (this): tabs, Home, Ctrl K, Settings for Pi's
-   instructions, MCP servers and models.
-2. **Scratchpad and tasks:** Pi sessions without a codespace, and prompts
-   on a schedule.
+1. **Browser shell:** tabs, Home, Ctrl K, Settings for Pi's instructions,
+   MCP servers and models.
+2. **Scratchpad** (done) **and tasks:** Pi sessions in folders of their
+   own; then prompts Pi runs on a schedule, which keep running with the
+   window closed: the app stays in the tray, holding wb-agent, and starts
+   when you sign in.
 3. **Codespaces:** a folder in WSL with its files, editor and terminals.
 4. **Sessions** inside codespaces.
 5. **Subagents.**

@@ -7,15 +7,30 @@ use protocol::{ConfigFile, ConfigText};
 
 use crate::error::Error;
 
+pub fn home() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
 /// Where Pi keeps its files: `PI_CODING_AGENT_DIR`, or `~/.pi/agent`.
 pub fn agent_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR") {
+    match std::env::var_os("PI_CODING_AGENT_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => home().join(".pi").join("agent"),
+    }
+}
+
+/// Where scratchpads get their folders: `WB_SCRATCH_DIR`, or
+/// `~/.local/share/pi-workbench/scratchpads`.
+pub fn scratch_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("WB_SCRATCH_DIR") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var_os("HOME")
+    let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join(".pi").join("agent")
+        .unwrap_or_else(|| home().join(".local").join("share"));
+    data.join("pi-workbench").join("scratchpads")
 }
 
 pub fn read(dir: &Path, file: ConfigFile) -> Result<ConfigText, Error> {

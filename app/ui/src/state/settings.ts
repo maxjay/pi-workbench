@@ -13,6 +13,9 @@ export const sections: { id: Section; title: string; file: string }[] = [
   { id: 'models', title: 'Models', file: 'models.json, settings.json' },
 ];
 
+/** The thinking levels Pi knows (`pi --help`). */
+export const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
 const [section, setSection] = createSignal<Section>('instructions');
 
 export { section, setSection };

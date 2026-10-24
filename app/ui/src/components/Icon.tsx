@@ -6,6 +6,10 @@ const paths = {
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5',
   close: 'M6 6l12 12M18 6L6 18',
   plus: 'M12 5v14M5 12h14',
+  pencil: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
+  send: 'M12 19V5M5 12l7-7 7 7',
+  stop: 'M7 7h10v10H7z',
 } as const;
 
 export type IconName = keyof typeof paths;

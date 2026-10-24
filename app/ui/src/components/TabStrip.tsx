@@ -2,7 +2,7 @@ import { For, Show } from 'solid-js';
 import { active, close, focus, open, type TabKind, tabs } from '../state/tabs';
 import { Icon, type IconName } from './Icon';
 
-const icons: Record<TabKind, IconName> = { home: 'home', settings: 'settings' };
+const icons: Record<TabKind, IconName> = { home: 'home', scratch: 'pencil', settings: 'settings' };
 
 export function TabStrip() {
   return (

@@ -6,9 +6,11 @@ A Windows workbench for the [Pi](https://pi.dev) coding agent, with Pi, your
 code and your terminals in WSL. It works like a browser: Home, codespaces,
 scratchpads and tasks are tabs, and Ctrl K goes anywhere.
 
-**Status:** v1, stage 1 of 5: the shell. Tabs, Home, Ctrl K, and Settings
-for Pi's instructions (AGENTS.md), MCP servers and models. The scratchpad,
-tasks, codespaces, sessions and subagents come next.
+**Status:** v1, stage 2 of 5. Tabs, Home, Ctrl K, Settings for Pi's
+instructions (AGENTS.md), MCP servers and models, and the scratchpad: Pi
+sessions in folders of their own, with the files Pi writes beside the
+conversation. Tasks, codespaces, sessions in codespaces and subagents come
+next.
 
 ## How it's built
 

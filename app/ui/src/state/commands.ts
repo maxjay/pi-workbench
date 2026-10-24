@@ -2,11 +2,12 @@
 // The palette only filters and runs these; they're defined here.
 
 import { reconnect } from '../agent';
+import { scratchpads, showScratchpad } from './sessions';
 import { reload, sections, setSection } from './settings';
 import { open, tabs } from './tabs';
 
 export interface Command {
-  group: 'Tabs' | 'Settings' | 'Actions';
+  group: 'Tabs' | 'Scratchpads' | 'Settings' | 'Actions';
   title: string;
   detail?: string;
   run: () => void;
@@ -16,6 +17,17 @@ export function commands(): Command[] {
   return [
     ...tabs().map(
       (tab): Command => ({ group: 'Tabs', title: tab.title, detail: 'open tab', run: () => open(tab.kind) }),
+    ),
+    ...scratchpads().map(
+      (pad): Command => ({
+        group: 'Scratchpads',
+        title: pad.title,
+        detail: pad.busy ? 'Pi is working' : undefined,
+        run: () => {
+          open('scratch');
+          void showScratchpad(pad);
+        },
+      }),
     ),
     ...sections.map(
       (section): Command => ({
@@ -28,6 +40,7 @@ export function commands(): Command[] {
         },
       }),
     ),
+    { group: 'Actions', title: 'New scratchpad', detail: 'Ctrl N', run: () => open('scratch') },
     { group: 'Actions', title: 'Reload Pi’s files', detail: 'after editing them in a terminal', run: reload },
     { group: 'Actions', title: 'Restart wb-agent', run: () => void reconnect() },
   ];

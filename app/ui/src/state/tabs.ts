@@ -1,16 +1,17 @@
 // The open tabs, as in a browser: Home is always first and can't close;
-// the rest open, focus and close. Each kind of page has one tab for now.
+// the rest open, focus and close. Each kind of page has one tab for now;
+// the Scratchpad tab lists every scratchpad and shows one.
 
 import { createSignal } from 'solid-js';
 
-export type TabKind = 'home' | 'settings';
+export type TabKind = 'home' | 'scratch' | 'settings';
 
 export interface Tab {
   kind: TabKind;
   title: string;
 }
 
-const titles: Record<TabKind, string> = { home: 'Home', settings: 'Settings' };
+const titles: Record<TabKind, string> = { home: 'Home', scratch: 'Scratchpad', settings: 'Settings' };
 
 const [tabs, setTabs] = createSignal<Tab[]>([{ kind: 'home', title: titles.home }]);
 const [active, setActive] = createSignal<TabKind>('home');

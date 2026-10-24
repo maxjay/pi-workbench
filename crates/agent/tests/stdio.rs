@@ -1,5 +1,8 @@
 //! wb-agent as the app runs it: a process spoken to in lines. These start
 //! the real binary with a fake `pi` and a scratch agent directory.
+//!
+//! The fake `pi` answers `--version`, and in RPC mode plays one scripted
+//! run for any prompt, the way Pi reports one.
 
 #![cfg(unix)]
 
@@ -8,6 +11,25 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::{Value, json};
+
+const FAKE_PI: &str = r#"#!/bin/sh
+[ "$1" = "--version" ] && { echo 9.9.9; exit 0; }
+while IFS= read -r line; do
+  case "$line" in
+    *'"type":"get_state"'*)
+      echo '{"type":"response","command":"get_state","success":true,"data":{"sessionFile":"/s.jsonl","model":{"provider":"local","id":"one"}}}' ;;
+    *'"type":"prompt"'*)
+      echo '{"type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}'
+      echo '{"type":"agent_start"}'
+      echo '{"type":"message_start","message":{"role":"user","content":"hello"}}'
+      echo '{"type":"message_start","message":{"role":"assistant","content":[]}}'
+      echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hi "}}'
+      echo '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"there"}}'
+      echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Hi there"}]}}'
+      echo '{"type":"agent_settled","aborted":false}' ;;
+  esac
+done
+"#;
 
 struct Agent {
     child: Child,
@@ -22,12 +44,13 @@ impl Agent {
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let pi = bin.join("pi");
-        std::fs::write(&pi, "#!/bin/sh\necho 9.9.9\n").unwrap();
+        std::fs::write(&pi, FAKE_PI).unwrap();
         std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_wb-agent"))
             .env("PI_CODING_AGENT_DIR", dir.path().join("agent"))
             .env("PATH", &bin)
+            .env("WB_SCRATCH_DIR", dir.path().join("scratch"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -45,6 +68,16 @@ impl Agent {
     fn send(&mut self, line: &str) -> Value {
         writeln!(self.stdin, "{line}").unwrap();
         self.receive()
+    }
+
+    /// Reads lines until one matches, returning it.
+    fn until(&mut self, wanted: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let line = self.receive();
+            if wanted(&line) {
+                return line;
+            }
+        }
     }
 
     fn receive(&mut self) -> Value {
@@ -106,5 +139,59 @@ fn a_bad_line_gets_an_error_with_its_id() {
 
     let reply =
         agent.send(r#"{"id":6,"method":"mcp.setEnabled","params":{"name":"x","enabled":true}}"#);
+    assert_eq!(reply["error"]["code"], "notFound");
+}
+
+#[test]
+fn runs_a_scratchpad() {
+    let mut agent = Agent::start();
+    agent.receive();
+
+    // Events for the new session can come before the reply.
+    let start = r#"{"id":1,"method":"session.start","params":{"cwd":null,"text":"hello"}}"#;
+    writeln!(agent.stdin, "{start}").unwrap();
+    let reply = agent.until(|line| line["type"] == "reply" && line["id"] == 1);
+    let id = reply["ok"]["id"].as_str().unwrap().to_string();
+    assert!(
+        reply["ok"]["state"]["cwd"]
+            .as_str()
+            .unwrap()
+            .contains("scratch")
+    );
+
+    // The reply streams in, and the run settles.
+    let reply = agent.until(|line| {
+        line["change"]["change"] == "entry" && line["change"]["entry"]["text"] == "Hi there"
+    });
+    assert_eq!(reply["id"], id.as_str());
+    let settled = agent.until(|line| {
+        line["change"]["change"] == "state"
+            && line["change"]["state"]["busy"] == false
+            && line["change"]["state"]["title"] == "hello"
+    });
+    assert_eq!(settled["change"]["state"]["model"], "local/one");
+
+    let get = format!(r#"{{"id":2,"method":"session.get","params":{{"id":"{id}"}}}}"#);
+    writeln!(agent.stdin, "{get}").unwrap();
+    let session = agent.until(|line| line["type"] == "reply" && line["id"] == 2);
+    let kinds: Vec<_> = session["ok"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("user"), json!("text")]);
+
+    let close = format!(r#"{{"id":3,"method":"session.close","params":{{"id":"{id}"}}}}"#);
+    writeln!(agent.stdin, "{close}").unwrap();
+    agent.until(|line| line["change"]["change"] == "closed");
+}
+
+#[test]
+fn a_session_that_isnt_live_is_not_found() {
+    let mut agent = Agent::start();
+    agent.receive();
+    let reply = agent
+        .send(r#"{"id":1,"method":"session.send","params":{"id":"s9","text":"hi","later":false}}"#);
     assert_eq!(reply["error"]["code"], "notFound");
 }

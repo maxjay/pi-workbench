@@ -5,9 +5,7 @@ import { For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import { Empty, ErrorNote } from '../../components/Note';
 import type { Model } from '../../protocol/Model';
-import { models, setDefaultModel, setThinking } from '../../state/settings';
-
-const levels = ['off', 'low', 'medium', 'high', 'max'];
+import { thinkingLevels as levels, models, setDefaultModel, setThinking } from '../../state/settings';
 
 function contextSize(tokens: number | null) {
   if (!tokens) return undefined;

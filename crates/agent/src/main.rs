@@ -4,11 +4,18 @@
 
 mod config;
 mod error;
+mod files;
 mod health;
 mod json;
 mod mcp;
+mod messages;
 mod models;
+mod pi;
 mod router;
+mod session;
+mod sessions;
+mod store;
+mod transcript;
 
 use protocol::{Event, FailureCode, FromAgent, Outcome, Reply, Request};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -33,7 +40,7 @@ async fn main() {
         }
     });
 
-    let ctx = router::Ctx::from_env();
+    let ctx = router::Ctx::from_env(out.clone());
     let _ = out.send(FromAgent::Event(Event::Ready {
         version: env!("CARGO_PKG_VERSION").into(),
     }));
@@ -59,8 +66,12 @@ async fn main() {
         let _ = out.send(FromAgent::Reply(reply));
     }
 
+    // The workbench has gone: let each Pi finish writing its session, and
+    // what's left to say go out, without waiting on either for long.
+    ctx.sessions.shutdown().await;
+    drop(ctx);
     drop(out);
-    let _ = writer.await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), writer).await;
 }
 
 /// The id of a line that isn't a request we understand, if it has one, so

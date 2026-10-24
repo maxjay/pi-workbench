@@ -1,5 +1,6 @@
 import { status, stopReason } from '../agent';
 import { health } from '../state/health';
+import { live, selected } from '../state/sessions';
 import { section, sections } from '../state/settings';
 import { active, open } from '../state/tabs';
 import { Icon } from './Icon';
@@ -7,8 +8,13 @@ import { openPalette } from './Palette';
 
 export function Toolbar() {
   const where = () => {
-    if (active() !== 'settings') return ['Home', ''];
-    return ['Settings', `› ${sections.find((s) => s.id === section())?.title}`];
+    if (active() === 'settings') return ['Settings', `› ${sections.find((s) => s.id === section())?.title}`];
+    if (active() === 'scratch') {
+      const id = selected();
+      const title = id ? live[id]?.state.title : undefined;
+      return ['Scratchpad', title ? `› ${title}` : ''];
+    }
+    return ['Home', ''];
   };
   const agent = () => {
     if (status() === 'connecting') return 'Starting wb-agent…';

@@ -3,7 +3,7 @@ members = ["crates/protocol", "crates/agent", "app/src-tauri"]
 resolver = "3"
 
 [workspace.package]
-version = "1.0.0-alpha.2"
+version = "1.0.0-alpha.3"
 edition = "2024"
 rust-version = "1.91"
 license = "LicenseRef-Proprietary"
@@ -16,6 +16,7 @@ thiserror = "2"
 ts-rs = "12"
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "process", "sync", "time"] }
 tempfile = "3"
+base64 = "0.22"
 
 [profile.release]
 lto = "thin"

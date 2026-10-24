@@ -1,7 +1,7 @@
 {
   "name": "workbench-ui",
   "private": true,
-  "version": "1.0.0-alpha.2",
+  "version": "1.0.0-alpha.3",
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
+    "dompurify": "3.4.17",
+    "marked": "18.1.0",
     "solid-js": "1.9.17"
   },
   "devDependencies": {

@@ -7,6 +7,7 @@ import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
 import { active, close, open } from './state/tabs';
 import { Home } from './views/Home';
+import { Scratchpad } from './views/Scratchpad';
 import { Settings } from './views/Settings';
 
 function onKey(e: KeyboardEvent) {
@@ -15,6 +16,7 @@ function onKey(e: KeyboardEvent) {
   else if (ctrl && e.key === 'w') close(active());
   else if (ctrl && e.key === 't') open('home');
   else if (ctrl && e.key === ',') open('settings');
+  else if (ctrl && e.key === 'n') open('scratch');
   else if (e.key === 'Escape') closePalette();
   else return;
   e.preventDefault();
@@ -31,6 +33,9 @@ export function App() {
         <Switch>
           <Match when={active() === 'home'}>
             <Home />
+          </Match>
+          <Match when={active() === 'scratch'}>
+            <Scratchpad />
           </Match>
           <Match when={active() === 'settings'}>
             <Settings />

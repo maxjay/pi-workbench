@@ -1,13 +1,25 @@
-// The first tab: ask Pi something, and see codespaces, tasks and pull
-// requests at a glance. Only the shell is here yet; each list fills in as
-// its stage lands.
+// The first tab: ask Pi something, and see scratchpads, codespaces, tasks
+// and pull requests at a glance. Each list fills in as its stage lands.
 
-import { Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import { status, stopReason } from '../agent';
+import { createAction } from '../components/action';
 import { Empty, ErrorNote } from '../components/Note';
 import { health } from '../state/health';
+import { scratchpads, showScratchpad, startScratchpad } from '../state/sessions';
+import { open } from '../state/tabs';
 
 export function Home() {
+  const [text, setText] = createSignal('');
+  const start = createAction(async () => {
+    await startScratchpad(text().trim());
+    setText('');
+    open('scratch');
+  });
+  const show = createAction(async (pad: Parameters<typeof showScratchpad>[0]) => {
+    await showScratchpad(pad);
+    open('scratch');
+  });
   return (
     <div class="page home">
       <section class="ask">
@@ -15,9 +27,37 @@ export function Home() {
         <textarea
           class="ask-box"
           rows={3}
-          disabled
-          placeholder="Ask Pi anything. The scratchpad arrives in the next build."
+          placeholder="Ask Pi anything. It starts a scratchpad."
+          value={text()}
+          disabled={start.busy() || status() !== 'ready'}
+          onInput={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && text().trim()) {
+              e.preventDefault();
+              void start.run();
+            }
+          }}
         />
+        <ErrorNote error={start.error()} />
+      </section>
+
+      <section class="list">
+        <h2>Scratchpads</h2>
+        <ErrorNote error={show.error()} />
+        <Show when={scratchpads().length > 0} fallback={<Empty>Nothing yet. Ask Pi something above.</Empty>}>
+          <ul class="rows">
+            <For each={scratchpads().slice(0, 5)}>
+              {(pad) => (
+                <li>
+                  <button type="button" class="row row-button" onClick={() => void show.run(pad)}>
+                    <span class="pad-dot" data-state={pad.busy ? 'busy' : pad.id ? 'live' : 'saved'} />
+                    <span class="row-title">{pad.title}</span>
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
       </section>
 
       <section class="list">
@@ -27,7 +67,7 @@ export function Home() {
 
       <section class="list">
         <h2>Tasks</h2>
-        <Empty>No tasks yet. Tasks come with the scratchpad.</Empty>
+        <Empty>No tasks yet. Prompts Pi runs on a schedule come next.</Empty>
       </section>
 
       <section class="list">

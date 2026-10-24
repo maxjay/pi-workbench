@@ -13,6 +13,8 @@ pub enum Error {
     Invalid { file: &'static str, reason: String },
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    Pi(String),
 }
 
 impl Error {
@@ -37,6 +39,7 @@ impl From<Error> for Failure {
             Error::Io { .. } => FailureCode::Io,
             Error::Invalid { .. } => FailureCode::Invalid,
             Error::NotFound(_) => FailureCode::NotFound,
+            Error::Pi(_) => FailureCode::Pi,
         };
         Failure {
             code,
