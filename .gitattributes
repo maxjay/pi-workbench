@@ -1,5 +1,0 @@
-*.sh text eol=lf
-*.mjs text eol=lf
-# A dependency's copy, not ours (patches/README.md): GitHub leaves it out of
-# the language stats and folds it in diffs.
-patches/winit-x11/** linguist-vendored linguist-generated

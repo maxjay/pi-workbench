@@ -1,0 +1,14 @@
+[package]
+name = "protocol"
+description = "The messages between the workbench and wb-agent: the only contract between them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

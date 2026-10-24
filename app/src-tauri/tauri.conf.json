@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pi Workbench",
+  "identifier": "dev.maxjay.pi-workbench",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../ui" },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../ui" }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pi Workbench",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "backgroundColor": "#17191C"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"]
+  }
+}

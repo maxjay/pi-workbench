@@ -1,0 +1,28 @@
+/* The design's tokens. Everything else refers to these by name. */
+
+:root {
+  --window: #17191c;
+  --toolbar: #1e2124;
+  --panel: #2e3236;
+  --panel-2: #2a2e32;
+  --raised: #363b40;
+  --line: #3a3f45;
+
+  --text: #e8e6e1;
+  --muted: #b3b7bc;
+  --dim: #a0a6ac;
+  --faint: #80868c;
+
+  --accent: #7cc4a8;
+  --amber: #e0b15c;
+  --red: #e9968b;
+  --blue: #6fa8dc;
+
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+
+  --radius: 8px;
+  --radius-small: 5px;
+
+  color-scheme: dark;
+}
