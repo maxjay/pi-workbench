@@ -2,7 +2,7 @@ import { status, stopReason } from '../agent';
 import { health } from '../state/health';
 import { current } from '../state/sessions';
 import { section, sections } from '../state/settings';
-import { active, open } from '../state/tabs';
+import { active, kindOf, open, title } from '../state/tabs';
 import { Icon } from './Icon';
 import { openPalette } from './Palette';
 
@@ -10,9 +10,10 @@ export function Toolbar() {
   const where = () => {
     if (active() === 'settings') return ['Settings', `› ${sections.find((s) => s.id === section())?.title}`];
     if (active() === 'scratch') {
-      const title = current()?.state.title;
-      return ['Scratchpad', title ? `› ${title}` : ''];
+      const pad = current()?.state.title;
+      return ['Scratchpad', pad ? `› ${pad}` : ''];
     }
+    if (kindOf(active()) === 'task') return ['Tasks', `› ${title(active())}`];
     return ['Home', ''];
   };
   const agent = () => {

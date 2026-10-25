@@ -4,11 +4,15 @@
 import { createSignal, For, Show } from 'solid-js';
 import { status, stopReason } from '../agent';
 import { createAction } from '../components/action';
+import { Icon } from '../components/Icon';
 import { Empty, ErrorNote } from '../components/Note';
+import type { TaskView } from '../protocol/TaskView';
 import { health } from '../state/health';
 import { scratchpads, showScratchpad, startScratchpad } from '../state/sessions';
 import { open } from '../state/tabs';
+import { allPaused, pauseAll, standing as taskStanding, tasks } from '../state/tasks';
 import { standing } from './scratch/Nav';
+import { scheduleWords, timeWords } from './task/words';
 
 export function Home() {
   const [text, setText] = createSignal('');
@@ -66,10 +70,7 @@ export function Home() {
         <Empty>No codespaces yet. Opening a folder in WSL as a codespace comes in stage 3.</Empty>
       </section>
 
-      <section class="list">
-        <h2>Tasks</h2>
-        <Empty>No tasks yet. Prompts Pi runs on a schedule come next.</Empty>
-      </section>
+      <Tasks />
 
       <section class="list">
         <h2>Pull requests</h2>
@@ -78,6 +79,75 @@ export function Home() {
 
       <AgentCard />
     </div>
+  );
+}
+
+/** What a task's row says on the right, and how loudly. */
+function last(view: TaskView) {
+  const now = taskStanding(view);
+  if (now === 'asking') return { text: 'Needs you', tone: 'asking' };
+  if (now === 'running') return { text: 'Running…', tone: 'running' };
+  if (view.task.paused) return { text: 'Paused', tone: 'paused' };
+  const run = view.runs[0];
+  if (!run) return { text: 'Not run yet', tone: '' };
+  if (now === 'failed') return { text: `Failed ${timeWords(run.started)}`, tone: 'failed' };
+  if (now === 'new') return { text: 'New run', tone: 'new' };
+  return { text: `${run.state === 'failed' ? 'Failed' : 'Done'} ${timeWords(run.started)}`, tone: '' };
+}
+
+function Tasks() {
+  const resume = createAction(() => pauseAll(false));
+  return (
+    <section class="list" aria-labelledby="tasks">
+      <div class="list-head">
+        <h2 id="tasks">Tasks</h2>
+        <span class="count">Scheduled prompts</span>
+        <span class="list-head-gap" />
+        <button type="button" class="button button-text button-small" onClick={() => open('newtask')}>
+          New task
+        </button>
+      </div>
+      <Show when={allPaused()}>
+        <div class="paused-all" role="status">
+          <span>All tasks paused. Runs they miss meanwhile happen when you resume.</span>
+          <button
+            type="button"
+            class="button button-small"
+            disabled={resume.busy()}
+            onClick={() => void resume.run()}
+          >
+            Resume
+          </button>
+        </div>
+        <ErrorNote error={resume.error()} />
+      </Show>
+      <Show
+        when={tasks().length > 0}
+        fallback={<Empty>No tasks yet. Make one to have Pi run a prompt on a schedule.</Empty>}
+      >
+        <ul class="rows">
+          <For each={tasks()}>
+            {(view) => (
+              <li>
+                <button
+                  type="button"
+                  class="row row-button task-row"
+                  data-tone={last(view).tone}
+                  onClick={() => open(`task:${view.task.id}`)}
+                >
+                  <Icon name="clock" size={15} />
+                  <span class="row-main">
+                    <span class="row-title">{view.task.name}</span>
+                    <span class="row-detail">{scheduleWords(view.task.schedule)}</span>
+                  </span>
+                  <span class="task-last">{last(view).text}</span>
+                </button>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </section>
   );
 }
 

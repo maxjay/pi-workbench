@@ -79,6 +79,32 @@ createRoot(() =>
   }),
 );
 
+// Tasks' sessions are followed here too, for their conversations, but they
+// aren't scratchpads: they stay out of the list and never take the
+// Scratchpad tab's view.
+const taskFiles = new Set<string>();
+const [background, setBackground] = createSignal<ReadonlySet<string>>(new Set());
+
+function inBackground(session: Session) {
+  setLive(session.id, reconcile(session));
+  setBackground(new Set([...background(), session.id]));
+  if (session.state.file) taskFiles.add(session.state.file);
+  return session;
+}
+
+/** A task's live session, followed from now on. */
+export async function follow(id: string) {
+  if (live[id]) return live[id];
+  return inBackground(await ask({ method: 'session.get', params: { id } }, 'session'));
+}
+
+/** A task's saved session, read from its file without starting Pi. */
+export async function readTaskSession(file: string) {
+  taskFiles.add(file);
+  const found = Object.values(live).find((session) => session.state.file === file);
+  return found ?? ask({ method: 'session.read', params: { file } }, 'session');
+}
+
 /** A scratchpad in the list: live, or saved in Pi's store. */
 export interface Scratchpad {
   key: string;
@@ -96,6 +122,7 @@ export interface Scratchpad {
 export function scratchpads(): Scratchpad[] {
   const list = saved.error ? [] : (saved.latest ?? []);
   const rows: Scratchpad[] = Object.values(live)
+    .filter((session) => !background().has(session.id))
     .map((session) => ({
       key: session.id,
       id: session.id,
@@ -167,7 +194,9 @@ export async function reopen(file: string) {
 async function wake(session: Session) {
   if (session.id && live[session.id]) return session.id;
   const file = session.state.file;
-  if (!file) throw new Error('This scratchpad has no file to open');
+  if (!file) throw new Error('This conversation has no file to open');
+  if (taskFiles.has(file))
+    return inBackground(await ask({ method: 'session.open', params: { file } }, 'session')).id;
   return reopen(file);
 }
 

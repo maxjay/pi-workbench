@@ -5,10 +5,11 @@ import { Match, onCleanup, onMount, Switch } from 'solid-js';
 import { closePalette, openPalette, Palette } from './components/Palette';
 import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
-import { active, close, open } from './state/tabs';
+import { active, close, open, taskOf } from './state/tabs';
 import { Home } from './views/Home';
 import { Scratchpad } from './views/Scratchpad';
 import { Settings } from './views/Settings';
+import { NewTask, TaskPage } from './views/Task';
 
 function onKey(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
@@ -39,6 +40,12 @@ export function App() {
           </Match>
           <Match when={active() === 'settings'}>
             <Settings />
+          </Match>
+          <Match when={active() === 'newtask'}>
+            <NewTask />
+          </Match>
+          <Match when={taskOf(active())} keyed>
+            {(id) => <TaskPage id={id} />}
           </Match>
         </Switch>
       </main>

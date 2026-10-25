@@ -4,10 +4,11 @@
 import { reconnect } from '../agent';
 import { scratchpads, showScratchpad } from './sessions';
 import { reload, sections, setSection } from './settings';
-import { open, tabs } from './tabs';
+import { open, tabs, title } from './tabs';
+import { tasks } from './tasks';
 
 export interface Command {
-  group: 'Tabs' | 'Scratchpads' | 'Settings' | 'Actions';
+  group: 'Tabs' | 'Scratchpads' | 'Tasks' | 'Settings' | 'Actions';
   title: string;
   detail?: string;
   run: () => void;
@@ -16,7 +17,7 @@ export interface Command {
 export function commands(): Command[] {
   return [
     ...tabs().map(
-      (tab): Command => ({ group: 'Tabs', title: tab.title, detail: 'open tab', run: () => open(tab.kind) }),
+      (tab): Command => ({ group: 'Tabs', title: title(tab), detail: 'open tab', run: () => open(tab) }),
     ),
     ...scratchpads().map(
       (pad): Command => ({
@@ -27,6 +28,14 @@ export function commands(): Command[] {
           open('scratch');
           void showScratchpad(pad);
         },
+      }),
+    ),
+    ...tasks().map(
+      (view): Command => ({
+        group: 'Tasks',
+        title: view.task.name,
+        detail: 'task',
+        run: () => open(`task:${view.task.id}`),
       }),
     ),
     ...sections.map(
@@ -41,6 +50,12 @@ export function commands(): Command[] {
       }),
     ),
     { group: 'Actions', title: 'New scratchpad', detail: 'Ctrl N', run: () => open('scratch') },
+    {
+      group: 'Actions',
+      title: 'New task',
+      detail: 'a prompt Pi runs on a schedule',
+      run: () => open('newtask'),
+    },
     { group: 'Actions', title: 'Reload Pi’s files', detail: 'after editing them in a terminal', run: reload },
     { group: 'Actions', title: 'Restart wb-agent', run: () => void reconnect() },
   ];

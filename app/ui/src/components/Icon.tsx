@@ -12,6 +12,9 @@ const paths = {
   stop: 'M7 7h10v10H7z',
   chevron: 'M6 9l6 6 6-6',
   check: 'M5 12l5 5 9-10',
+  clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2',
+  play: 'M8 5l11 7-11 7z',
+  back: 'M15 6l-6 6 6 6',
 } as const;
 
 export type IconName = keyof typeof paths;

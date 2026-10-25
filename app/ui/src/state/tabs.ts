@@ -1,38 +1,62 @@
 // The open tabs, as in a browser: Home is always first and can't close;
-// the rest open, focus and close. Each kind of page has one tab for now;
-// the Scratchpad tab lists every scratchpad and shows one.
+// the rest open, focus and close. Home, the Scratchpad and Settings have a
+// tab each; every task has one of its own, and a new task one while it's
+// being made.
 
 import { createSignal } from 'solid-js';
+import { taskById } from './tasks';
 
-export type TabKind = 'home' | 'scratch' | 'settings';
+export type TabId = 'home' | 'scratch' | 'settings' | 'newtask' | `task:${string}`;
+export type TabKind = 'home' | 'scratch' | 'settings' | 'task';
 
-export interface Tab {
-  kind: TabKind;
-  title: string;
+export const kindOf = (id: TabId): TabKind =>
+  id === 'newtask' || id.startsWith('task:') ? 'task' : (id as TabKind);
+
+/** The task a tab shows, if it shows one. */
+export const taskOf = (id: TabId) => (id.startsWith('task:') ? id.slice(5) : undefined);
+
+const fixed: Record<string, string> = {
+  home: 'Home',
+  scratch: 'Scratchpad',
+  settings: 'Settings',
+  newtask: 'New task',
+};
+
+export function title(id: TabId) {
+  const task = taskOf(id);
+  return task ? (taskById(task)?.task.name ?? 'Task') : fixed[id];
 }
 
-const titles: Record<TabKind, string> = { home: 'Home', scratch: 'Scratchpad', settings: 'Settings' };
-
-const [tabs, setTabs] = createSignal<Tab[]>([{ kind: 'home', title: titles.home }]);
-const [active, setActive] = createSignal<TabKind>('home');
+const [tabs, setTabs] = createSignal<TabId[]>(['home']);
+const [active, setActive] = createSignal<TabId>('home');
 
 export { active, tabs };
 
-export function open(kind: TabKind) {
-  if (!tabs().some((tab) => tab.kind === kind)) setTabs([...tabs(), { kind, title: titles[kind] }]);
-  setActive(kind);
+export function open(id: TabId) {
+  if (!tabs().includes(id)) setTabs([...tabs(), id]);
+  setActive(id);
 }
 
-export function close(kind: TabKind) {
-  if (kind === 'home') return;
+export function close(id: TabId) {
+  if (id === 'home') return;
   const list = tabs();
-  const at = list.findIndex((tab) => tab.kind === kind);
+  const at = list.indexOf(id);
   if (at < 0) return;
-  const rest = list.filter((tab) => tab.kind !== kind);
+  const rest = list.filter((tab) => tab !== id);
   setTabs(rest);
-  if (active() === kind) setActive(rest[Math.max(0, at - 1)].kind);
+  if (active() === id) setActive(rest[Math.max(0, at - 1)]);
 }
 
-export function focus(kind: TabKind) {
-  setActive(kind);
+/** Puts one tab in another's place: a new task's, once it's made. */
+export function replace(from: TabId, to: TabId) {
+  setTabs(
+    tabs().includes(to)
+      ? tabs().filter((tab) => tab !== from)
+      : tabs().map((tab) => (tab === from ? to : tab)),
+  );
+  setActive(to);
+}
+
+export function focus(id: TabId) {
+  setActive(id);
 }
