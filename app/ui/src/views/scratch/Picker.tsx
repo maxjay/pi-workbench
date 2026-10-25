@@ -6,7 +6,7 @@ import { createEffect, createResource, createSignal, For, on, Show } from 'solid
 import type { PiCommand } from '../../protocol/PiCommand';
 import type { Session } from '../../protocol/Session';
 import { commandsFor, listFiles, reopen } from '../../state/sessions';
-import { type Choice, deleteMention, picker, segments } from './picker';
+import { type Choice, deleteMention, picker, segments } from './choices';
 
 /** The last commands Pi listed, while a saved conversation's Pi starts. */
 const [knownCommands, setKnownCommands] = createSignal<PiCommand[]>([]);
