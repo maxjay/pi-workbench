@@ -5,10 +5,10 @@
 import { createEffect, createResource, createSignal, For, on, Show } from 'solid-js';
 import type { PiCommand } from '../../protocol/PiCommand';
 import type { Session } from '../../protocol/Session';
-import { commandsFor, listFiles } from '../../state/sessions';
-import { type Choice, picker } from './picker';
+import { commandsFor, listFiles, reopen } from '../../state/sessions';
+import { type Choice, deleteMention, picker, segments } from './picker';
 
-/** The last commands Pi listed, for a saved conversation, whose Pi isn't running. */
+/** The last commands Pi listed, while a saved conversation's Pi starts. */
 const [knownCommands, setKnownCommands] = createSignal<PiCommand[]>([]);
 
 export function createPicker(props: {
@@ -20,6 +20,8 @@ export function createPicker(props: {
   const [caret, setCaret] = createSignal(0);
   const [closed, setClosed] = createSignal<string>();
   const [index, setIndex] = createSignal(0);
+  /** What was picked into the text, shown highlighted and deleted whole. */
+  const [mentions, setMentions] = createSignal<string[]>([]);
   const before = () => props.text().slice(0, caret());
   const wants = () => {
     if (/^\/\S*$/.test(before())) return 'commands';
@@ -35,10 +37,16 @@ export function createPicker(props: {
     async ({ dir }) => (await listFiles(dir)).paths,
   );
   const [commands] = createResource(
-    () => (wants() === 'commands' ? { id: props.session().id, opened: opened() } : undefined),
-    async ({ id }) => {
-      if (!id) return knownCommands();
-      const list = await commandsFor(id);
+    () =>
+      wants() === 'commands'
+        ? { id: props.session().id, file: props.session().state.file, opened: opened() }
+        : undefined,
+    async ({ id, file }) => {
+      // Only Pi knows its commands. Asking for one means you're about to
+      // send, which starts Pi anyway, so a saved scratchpad starts it now.
+      const live = id || (file ? await reopen(file) : undefined);
+      if (!live) return knownCommands();
+      const list = await commandsFor(live);
       setKnownCommands(list);
       return list;
     },
@@ -57,6 +65,8 @@ export function createPicker(props: {
     const start = shown.start;
     const next = before().slice(0, start) + choice.insert + props.text().slice(caret());
     const end = start + choice.insert.length;
+    const mention = choice.insert.trimEnd();
+    if (!mentions().includes(mention)) setMentions([...mentions(), mention]);
     props.setText(next);
     setCaret(end);
     setIndex(0);
@@ -72,8 +82,22 @@ export function createPicker(props: {
     setCaret(box.selectionStart);
   };
 
-  /** Handles a key for the list, if it's open. True when it was the list's. */
+  /** Backspace or Delete against a picked mention takes all of it. */
+  const deleteWhole = (e: KeyboardEvent) => {
+    const box = props.box();
+    if (!box || (e.key !== 'Backspace' && e.key !== 'Delete') || box.selectionStart !== box.selectionEnd)
+      return false;
+    const after = deleteMention(props.text(), box.selectionStart, e.key === 'Backspace', mentions());
+    if (!after) return false;
+    props.setText(after.text);
+    setCaret(after.caret);
+    queueMicrotask(() => box.setSelectionRange(after.caret, after.caret));
+    return true;
+  };
+
+  /** Handles a key for the list or a mention. True when it was theirs. */
   const onKey = (e: KeyboardEvent) => {
+    if (deleteWhole(e)) return true;
     const shown = current();
     if (!shown) return false;
     if (e.key === 'Escape') {
@@ -142,5 +166,12 @@ export function createPicker(props: {
     </Show>
   );
 
-  return { view, onKey, follow, reset: () => setIndex(0) };
+  /** The text as drawn behind the box: picked mentions highlighted. */
+  const mirror = () => (
+    <For each={segments(props.text(), mentions())}>
+      {(piece) => (piece.mention ? <mark class="mention">{piece.text}</mark> : piece.text)}
+    </For>
+  );
+
+  return { view, mirror, onKey, follow, reset: () => setIndex(0) };
 }

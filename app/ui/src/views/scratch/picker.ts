@@ -70,3 +70,58 @@ export function picker(before: string, files: string[], commands: PiCommand[]): 
   }
   return undefined;
 }
+
+export interface Segment {
+  text: string;
+  mention: boolean;
+}
+
+/** Whether `mention` stands as a word of its own at `at` in `text`. */
+const standsAlone = (text: string, at: number, mention: string) =>
+  (at === 0 || /\s/.test(text[at - 1])) &&
+  (at + mention.length === text.length || /\s/.test(text[at + mention.length]));
+
+/** The text in pieces, with what was picked from a list marked, for drawing it highlighted. */
+export function segments(text: string, mentions: string[]): Segment[] {
+  const found: { at: number; length: number }[] = [];
+  for (const mention of mentions) {
+    for (let at = text.indexOf(mention); at >= 0; at = text.indexOf(mention, at + 1)) {
+      if (mention.startsWith('/') && at !== 0) continue;
+      if (
+        standsAlone(text, at, mention) &&
+        !found.some((f) => at < f.at + f.length && f.at < at + mention.length)
+      )
+        found.push({ at, length: mention.length });
+    }
+  }
+  found.sort((a, b) => a.at - b.at);
+  const pieces: Segment[] = [];
+  let from = 0;
+  for (const f of found) {
+    if (f.at > from) pieces.push({ text: text.slice(from, f.at), mention: false });
+    pieces.push({ text: text.slice(f.at, f.at + f.length), mention: true });
+    from = f.at + f.length;
+  }
+  if (from < text.length) pieces.push({ text: text.slice(from), mention: false });
+  return pieces;
+}
+
+/**
+ * What deleting at the caret takes when it's up against a picked mention:
+ * the whole of it, so a path never has to be backspaced letter by letter.
+ * Undefined when it isn't.
+ */
+export function deleteMention(
+  text: string,
+  caret: number,
+  backwards: boolean,
+  mentions: string[],
+): { text: string; caret: number } | undefined {
+  for (const mention of mentions) {
+    const at = backwards ? caret - mention.length : caret;
+    if (at < 0 || text.slice(at, at + mention.length) !== mention || !standsAlone(text, at, mention))
+      continue;
+    return { text: text.slice(0, at) + text.slice(at + mention.length), caret: at };
+  }
+  return undefined;
+}

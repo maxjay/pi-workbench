@@ -19,6 +19,7 @@ export function Composer(props: { session: Session }) {
   const setText = (value: string) => setDrafts(key(), value);
   const [menu, setMenu] = createSignal(false);
   let box: HTMLTextAreaElement | undefined;
+  let mirror!: HTMLDivElement;
   const pick = createPicker({ session: () => props.session, text, setText, box: () => box });
   createEffect(() => {
     if (props.session.id) learnModels(props.session.id).catch(() => {});
@@ -67,23 +68,33 @@ export function Composer(props: { session: Session }) {
           <ModelMenu session={props.session} onClose={() => setMenu(false)} />
         </Show>
         {pick.view()}
-        <textarea
-          ref={box}
-          class="composer-input"
-          rows={2}
-          aria-label="Message Pi"
-          placeholder={placeholder()}
-          value={text()}
-          disabled={stopped()}
-          onInput={(e) => {
-            setText(e.currentTarget.value);
-            pick.follow(e.currentTarget);
-            pick.reset();
-          }}
-          onKeyUp={(e) => pick.follow(e.currentTarget)}
-          onClick={(e) => pick.follow(e.currentTarget)}
-          onKeyDown={onKey}
-        />
+        {/* The box's text is drawn again behind it, so picked mentions can be highlighted. */}
+        <div class="composer-field">
+          <div class="composer-mirror" aria-hidden="true" ref={mirror}>
+            {pick.mirror()}
+            {'\u200b'}
+          </div>
+          <textarea
+            ref={box}
+            class="composer-input"
+            rows={2}
+            aria-label="Message Pi"
+            placeholder={placeholder()}
+            value={text()}
+            disabled={stopped()}
+            onInput={(e) => {
+              setText(e.currentTarget.value);
+              pick.follow(e.currentTarget);
+              pick.reset();
+            }}
+            onKeyUp={(e) => pick.follow(e.currentTarget)}
+            onClick={(e) => pick.follow(e.currentTarget)}
+            onKeyDown={onKey}
+            onScroll={(e) => {
+              mirror.scrollTop = e.currentTarget.scrollTop;
+            }}
+          />
+        </div>
         <div class="composer-bar">
           <button
             type="button"

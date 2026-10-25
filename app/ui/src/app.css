@@ -1494,14 +1494,52 @@ p {
   background: var(--raised);
 }
 
-.composer-input {
+/* The box and the copy of its text behind it share one cell, one font and
+   one way of wrapping, so the copy lines up under the caret. */
+.composer-field {
+  display: grid;
+}
+
+.composer-input,
+.composer-mirror {
+  grid-area: 1 / 1;
   max-height: 240px;
+  min-height: 2lh;
+  /* Room for a highlight at the start of a line, without moving the text. */
+  margin: 0 -4px;
+  padding: 0 4px;
   border: 0;
+  font: inherit;
+  line-height: 1.5;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.composer-input {
   outline: none;
   resize: none;
   background: transparent;
   field-sizing: content;
-  min-height: 2lh;
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.composer-input::placeholder {
+  color: var(--faint);
+}
+
+.composer-mirror {
+  overflow: hidden;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.mention {
+  border-radius: 4px;
+  background: rgba(124, 196, 168, 0.18);
+  box-shadow: 0 0 0 2px rgba(124, 196, 168, 0.18);
+  color: #a3dcc5;
 }
 
 .composer-bar {
