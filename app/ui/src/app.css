@@ -1836,37 +1836,59 @@ p {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 8px 0 10px;
+  padding: 8px 10px 0 8px;
   overflow-x: auto;
+}
+
+.viewer-close {
+  margin-right: 2px;
 }
 
 .viewer-tab {
   height: 32px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 0 10px;
   border-radius: 8px 8px 0 0;
-  font-family: var(--mono);
   font-size: 12.5px;
-  color: var(--muted);
+  white-space: nowrap;
+  color: var(--dim);
 }
 
 .viewer-tab[aria-selected="true"] {
   background: #33383d;
-  color: var(--text);
+  color: #f4f2ed;
 }
 
-.viewer-close {
-  margin-left: auto;
+.viewer-badge {
+  font-size: 11px;
+  color: var(--amber);
+}
+
+.viewer-badge[data-new="true"] {
+  color: var(--accent);
 }
 
 .viewer-path {
   flex-shrink: 0;
-  padding: 10px 16px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 0 16px;
   background: #33383d;
+  font-size: 12.5px;
   color: var(--dim);
+  white-space: nowrap;
+}
+
+.viewer-path .mono {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   user-select: text;
 }
 
@@ -1891,26 +1913,43 @@ p {
 }
 
 .code {
-  display: flex;
+  min-width: max-content;
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 21px;
 }
 
-.code pre {
-  margin: 0;
+.code-line {
+  display: flex;
+  border-left: 3px solid transparent;
 }
 
-.code-numbers {
-  width: 52px;
+.code-line[data-kind="add"] {
+  border-left-color: var(--accent);
+  background: rgba(124, 196, 168, 0.1);
+}
+
+.code-line[data-kind="del"] {
+  border-left-color: #e07a6e;
+  background: rgba(224, 122, 110, 0.08);
+}
+
+.code-number {
+  width: 40px;
   flex-shrink: 0;
   padding-right: 14px;
   text-align: right;
   color: var(--faint);
+  user-select: none;
 }
 
 .code-text {
-  flex: 1;
-  min-width: 0;
+  white-space: pre;
+  color: #d6d4cf;
   user-select: text;
+}
+
+.code-line[data-kind="del"] .code-text {
+  color: #8c6f6b;
+  text-decoration: line-through;
 }
