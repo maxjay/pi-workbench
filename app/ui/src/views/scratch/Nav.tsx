@@ -1,21 +1,13 @@
-// The scratchpads down the left: a box to start one, then the ones Pi is
-// working in, today's, and earlier ones, newest first.
+// The scratchpads down the left: a box to start one, then the active ones
+// and the done ones, newest first. Each says where it stands.
 
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, For } from 'solid-js';
 import { createAction } from '../../components/action';
 import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
-import {
-  type Scratchpad,
-  scratchpads,
-  selected,
-  showScratchpad,
-  startScratchpad,
-} from '../../state/sessions';
+import { isShown, type Scratchpad, scratchpads, showScratchpad, startScratchpad } from '../../state/sessions';
 
-const day = 24 * 60 * 60 * 1000;
-
-function when(updated: number) {
+export function when(updated: number) {
   const minutes = Math.round((Date.now() - updated) / 60_000);
   if (minutes < 1) return 'just now';
   if (minutes < 60) return `${minutes} min ago`;
@@ -23,33 +15,42 @@ function when(updated: number) {
   return new Date(updated).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-function groups(pads: Scratchpad[]) {
-  const today = new Date().setHours(0, 0, 0, 0);
-  const list = [
-    { title: 'Working', pads: pads.filter((pad) => pad.busy) },
-    { title: 'Today', pads: pads.filter((pad) => !pad.busy && pad.updated >= today) },
-    {
-      title: 'Yesterday',
-      pads: pads.filter((pad) => !pad.busy && pad.updated < today && pad.updated >= today - day),
-    },
-    { title: 'Earlier', pads: pads.filter((pad) => !pad.busy && pad.updated < today - day) },
-  ];
-  return list.filter((group) => group.pads.length > 0);
+/** Where a scratchpad stands, as its dot shows it. */
+export function standing(pad: Pick<Scratchpad, 'busy' | 'asking' | 'stopped' | 'done'>) {
+  if (pad.asking) return 'asking';
+  if (pad.busy) return 'busy';
+  if (pad.stopped) return 'stopped';
+  if (pad.done) return 'done';
+  return 'idle';
+}
+
+function subtitle(pad: Scratchpad) {
+  if (pad.asking) return 'Waiting for your answer';
+  if (pad.busy) return 'Pi is working';
+  if (pad.stopped) return 'Pi stopped';
+  return when(pad.updated);
 }
 
 export function Nav() {
   const [text, setText] = createSignal('');
   const start = createAction(async () => {
-    await startScratchpad(text().trim() || undefined);
+    const ask = text().trim();
+    if (!ask) return;
+    await startScratchpad(ask);
     setText('');
   });
   const show = createAction(showScratchpad);
+  const groups = () =>
+    [
+      { title: 'Active', pads: scratchpads().filter((pad) => !pad.done) },
+      { title: 'Done', pads: scratchpads().filter((pad) => pad.done) },
+    ].filter((group) => group.pads.length > 0);
 
   return (
     <nav class="scratch-nav" aria-label="Scratchpads">
       <label class="new-pad">
         <Icon name="plus" size={14} />
-        <span class="visually-hidden">New scratchpad</span>
+        <span class="visually-hidden">New ask or goal</span>
         <input
           placeholder="New ask or goal…"
           value={text()}
@@ -64,7 +65,7 @@ export function Nav() {
         />
       </label>
       <ErrorNote error={start.error() ?? show.error()} />
-      <For each={groups(scratchpads())}>
+      <For each={groups()}>
         {(group) => (
           <div class="pad-group">
             <p class="pad-group-title">{group.title}</p>
@@ -73,13 +74,13 @@ export function Nav() {
                 <button
                   type="button"
                   class="pad"
-                  aria-current={pad.id !== undefined && pad.id === selected() ? 'true' : undefined}
+                  aria-current={isShown(pad) ? 'true' : undefined}
                   onClick={() => void show.run(pad)}
                 >
-                  <span class="pad-dot" data-state={pad.busy ? 'busy' : pad.id ? 'live' : 'saved'} />
+                  <span class="pad-dot" data-state={standing(pad)} />
                   <span class="pad-text">
                     <span class="pad-title">{pad.title}</span>
-                    <span class="pad-when">{pad.busy ? 'Pi is working' : when(pad.updated)}</span>
+                    <span class="pad-when">{subtitle(pad)}</span>
                   </span>
                 </button>
               )}
@@ -87,9 +88,6 @@ export function Nav() {
           </div>
         )}
       </For>
-      <Show when={scratchpads().length === 0}>
-        <p class="pad-empty">Each ask or goal is a Pi session in a folder of its own.</p>
-      </Show>
     </nav>
   );
 }

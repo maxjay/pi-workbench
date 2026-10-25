@@ -1,27 +1,38 @@
 // Where you talk to Pi, as in a terminal: Enter sends, and while Pi works
 // it steers the run; Alt+Enter waits for the run to finish instead; Escape
-// stops it. The model and thinking level for this conversation sit below.
+// stops it. `/` runs Pi's commands and `!` the shell. The model and
+// thinking level for this conversation open from the chip below.
 
-import { createSignal, For, Show } from 'solid-js';
+import { createEffect, createSignal, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
-import { abort, send, setModel, setThinking } from '../../state/sessions';
-import { models, thinkingLevels } from '../../state/settings';
+import { abort, draftKey, drafts, send, setDrafts } from '../../state/sessions';
+import { learnModels, ModelMenu, modelLabel } from './ModelMenu';
 
 export function Composer(props: { session: Session }) {
-  const [text, setText] = createSignal('');
+  const key = () => draftKey(props.session);
+  const text = () => drafts[key()] ?? '';
+  const setText = (value: string) => setDrafts(key(), value);
+  const [menu, setMenu] = createSignal(false);
+  createEffect(() => {
+    if (props.session.id) learnModels(props.session.id).catch(() => {});
+  });
   const busy = () => props.session.state.busy;
   const stopped = () => props.session.state.stopped !== null;
   const sending = createAction(async (later: boolean) => {
     const message = text().trim();
     if (!message) return;
-    await send(props.session.id, message, later);
-    setText('');
+    const was = key();
+    await send(props.session, message, later);
+    setDrafts(was, '');
   });
-  const stopping = createAction(() => abort(props.session.id));
-  const change = createAction(async (pick: () => Promise<unknown>) => pick());
+  // What was waiting comes back into the box, to send again or not.
+  const stopping = createAction(async () => {
+    const unsent = await abort(props.session.id);
+    if (unsent.length > 0) setText([text(), ...unsent].filter((t) => t.trim()).join('\n'));
+  });
 
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -34,101 +45,80 @@ export function Composer(props: { session: Session }) {
     }
   };
 
+  const placeholder = () => {
+    if (busy()) return 'Steer it, or ask something new…';
+    if (props.session.state.done) return 'Ask a follow-up…';
+    return 'Message Pi…';
+  };
+
   return (
     <div class="composer">
-      <Show when={props.session.state.queued.length > 0}>
-        <ul class="queued" aria-label="Waiting to be sent">
-          <For each={props.session.state.queued}>
-            {(item) => (
-              <li>
-                <span class="queued-when">{item.later ? 'after this run' : 'next'}</span>
-                {item.text}
-              </li>
-            )}
-          </For>
-        </ul>
-      </Show>
       <div class="composer-box">
+        <Show when={menu()}>
+          <ModelMenu session={props.session} onClose={() => setMenu(false)} />
+        </Show>
         <textarea
           class="composer-input"
           rows={2}
           aria-label="Message Pi"
-          placeholder={busy() ? 'Steer Pi, or Alt+Enter to queue for after this run…' : 'Message Pi…'}
+          placeholder={placeholder()}
           value={text()}
           disabled={stopped()}
           onInput={(e) => setText(e.currentTarget.value)}
           onKeyDown={onKey}
         />
         <div class="composer-bar">
-          <select
+          <button
+            type="button"
             class="chip"
-            aria-label="Model for this conversation"
-            value={props.session.state.model ?? ''}
-            disabled={stopped() || change.busy()}
-            onChange={(e) => {
-              const [provider, ...rest] = e.currentTarget.value.split('/');
-              void change.run(() => setModel(props.session.id, provider, rest.join('/')));
-            }}
+            aria-haspopup="dialog"
+            aria-expanded={menu()}
+            title="Change the model"
+            onClick={() => setMenu(!menu())}
           >
-            <Show when={!props.session.state.model}>
-              <option value="">No model</option>
+            <span class="chip-dot" aria-hidden="true" />
+            <span class="chip-name">{modelLabel(props.session.state.model)}</span>
+            <Show when={props.session.state.thinking && props.session.state.levels.length > 1}>
+              <span class="chip-detail">· {props.session.state.thinking}</span>
             </Show>
-            <For each={models.error ? [] : (models.latest?.providers ?? [])}>
-              {(provider) => (
-                <optgroup label={provider.name ?? provider.id}>
-                  <For each={provider.models}>
-                    {(model) => (
-                      <option value={`${provider.id}/${model.id}`}>{model.name ?? model.id}</option>
-                    )}
-                  </For>
-                </optgroup>
-              )}
-            </For>
-          </select>
-          <select
-            class="chip"
-            aria-label="Thinking"
-            value={props.session.state.thinking ?? 'medium'}
-            disabled={stopped() || change.busy()}
-            onChange={(e) => {
-              const level = e.currentTarget.value;
-              void change.run(() => setThinking(props.session.id, level));
-            }}
-          >
-            <For each={thinkingLevels}>{(level) => <option value={level}>thinking: {level}</option>}</For>
-          </select>
-          <span class="composer-hint">
-            {busy()
-              ? 'Enter steers · Alt+Enter queues · Esc stops'
-              : 'Enter sends · Shift+Enter for a new line'}
-          </span>
+            <span class="chevron" data-open={menu()}>
+              <Icon name="chevron" size={10} />
+            </span>
+          </button>
           <Show
             when={busy()}
             fallback={
-              <button
-                type="button"
-                class="send"
-                aria-label="Send"
-                disabled={stopped() || sending.busy() || !text().trim()}
-                onClick={() => void sending.run(false)}
-              >
-                <Icon name="send" size={16} />
-              </button>
+              <>
+                <span class="composer-hint">
+                  <span class="mono">/</span> commands · <span class="mono">!</span> shell
+                </span>
+                <button
+                  type="button"
+                  class="send"
+                  aria-label="Send"
+                  disabled={stopped() || sending.busy() || !text().trim()}
+                  onClick={() => void sending.run(false)}
+                >
+                  <Icon name="send" size={16} />
+                </button>
+              </>
             }
           >
+            <span class="composer-hint">Enter steers · Alt+Enter waits for the run · Esc stops</span>
             <button
               type="button"
               class="send send-stop"
-              aria-label="Stop"
+              aria-label="Stop Pi (Esc)"
+              title="Stop Pi (Esc)"
               disabled={stopping.busy()}
               onClick={() => void stopping.run()}
             >
-              <Icon name="stop" size={14} />
+              <Icon name="stop" size={13} />
             </button>
           </Show>
         </div>
       </div>
-      <ErrorNote error={sending.error() ?? stopping.error() ?? change.error()} />
+      <ErrorNote error={sending.error() ?? stopping.error()} />
     </div>
   );
 }

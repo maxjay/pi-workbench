@@ -51,6 +51,7 @@ impl Agent {
             .env("PI_CODING_AGENT_DIR", dir.path().join("agent"))
             .env("PATH", &bin)
             .env("WB_SCRATCH_DIR", dir.path().join("scratch"))
+            .env("WB_DATA_DIR", dir.path().join("data"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -194,4 +195,45 @@ fn a_session_that_isnt_live_is_not_found() {
     let reply = agent
         .send(r#"{"id":1,"method":"session.send","params":{"id":"s9","text":"hi","later":false}}"#);
     assert_eq!(reply["error"]["code"], "notFound");
+}
+
+#[test]
+fn asks_the_question_tools_questions() {
+    use std::os::unix::net::UnixStream;
+
+    let mut agent = Agent::start();
+    agent.receive();
+    let start = r#"{"id":1,"method":"session.start","params":{"cwd":null,"text":null}}"#;
+    writeln!(agent.stdin, "{start}").unwrap();
+    let reply = agent.until(|line| line["type"] == "reply" && line["id"] == 1);
+    let id = reply["ok"]["id"].as_str().unwrap().to_string();
+
+    // What the `ask_user` extension does inside Pi, here by hand.
+    let socket = std::env::temp_dir()
+        .join(format!("wb-agent-{}", agent.child.id()))
+        .join(format!("{id}.sock"));
+    let mut tool = UnixStream::connect(&socket).unwrap();
+    let asked = json!({ "questions": [
+        { "label": "When", "question": "When can it happen?", "choices": [{ "label": "Tonight" }], "other": true },
+    ]});
+    writeln!(tool, "{asked}").unwrap();
+
+    let state = agent.until(|line| {
+        line["change"]["change"] == "state" && line["change"]["state"]["ask"].is_object()
+    });
+    let ask = &state["change"]["state"]["ask"];
+    assert_eq!(ask["kind"]["type"], "questions");
+    assert_eq!(
+        ask["kind"]["questions"][0]["choices"][0]["label"],
+        "Tonight"
+    );
+
+    let answer = json!({ "id": 2, "method": "session.answer", "params": {
+        "id": id, "ask": ask["id"], "reply": { "type": "answers", "answers": ["Tonight"] },
+    }});
+    writeln!(agent.stdin, "{answer}").unwrap();
+    agent.until(|line| line["type"] == "reply" && line["id"] == 2);
+    let mut back = String::new();
+    BufReader::new(&tool).read_line(&mut back).unwrap();
+    assert_eq!(back.trim(), r#"{"answers":["Tonight"]}"#);
 }

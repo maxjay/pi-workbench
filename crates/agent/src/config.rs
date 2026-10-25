@@ -1,5 +1,7 @@
 //! Pi's own files, in its agent directory. The workbench edits the same
-//! files `pi` reads in a terminal; nothing is kept anywhere else.
+//! files `pi` reads in a terminal. wb-agent keeps only what Pi has no
+//! place for (scratchpad folders, which are done, its question tool) in a
+//! folder of its own.
 
 use std::path::{Path, PathBuf};
 
@@ -21,16 +23,25 @@ pub fn agent_dir() -> PathBuf {
     }
 }
 
-/// Where scratchpads get their folders: `WB_SCRATCH_DIR`, or
-/// `~/.local/share/pi-workbench/scratchpads`.
-pub fn scratch_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("WB_SCRATCH_DIR") {
+/// wb-agent's own files, which Pi doesn't read: `WB_DATA_DIR`, or
+/// `~/.local/share/pi-workbench`.
+pub fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("WB_DATA_DIR") {
         return PathBuf::from(dir);
     }
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".local").join("share"));
-    data.join("pi-workbench").join("scratchpads")
+    data.join("pi-workbench")
+}
+
+/// Where scratchpads get their folders: `WB_SCRATCH_DIR`, or `scratchpads`
+/// in [`data_dir`].
+pub fn scratch_dir() -> PathBuf {
+    match std::env::var_os("WB_SCRATCH_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => data_dir().join("scratchpads"),
+    }
 }
 
 pub fn read(dir: &Path, file: ConfigFile) -> Result<ConfigText, Error> {

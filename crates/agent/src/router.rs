@@ -21,7 +21,12 @@ impl Ctx {
     pub fn from_env(out: Out) -> Self {
         let agent_dir = config::agent_dir();
         Ctx {
-            sessions: Sessions::new(out, agent_dir.clone(), config::scratch_dir()),
+            sessions: Sessions::new(
+                out,
+                agent_dir.clone(),
+                config::scratch_dir(),
+                config::data_dir(),
+            ),
             agent_dir,
         }
     }
@@ -87,10 +92,30 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::SessionStart { cwd, text } => {
             Answer::Session(Box::new(ctx.sessions.start(cwd, text).await?))
         }
+        Call::SessionsSetDone { file, done } => {
+            ctx.sessions.set_done(&file, done).await?;
+            Answer::Done
+        }
         Call::SessionOpen { file } => Answer::Session(Box::new(ctx.sessions.open(&file).await?)),
+        Call::SessionRead { file } => Answer::Session(Box::new(ctx.sessions.read(&file)?)),
         Call::SessionGet { id } => Answer::Session(Box::new(ctx.sessions.get(&id)?.snapshot())),
         Call::SessionSend { id, text, later } => {
             let live = ctx.sessions.get(&id)?;
+            ctx.sessions.wake(&live).await?;
+            // As in Pi's terminal: `!` runs a shell command, `!!` keeps its
+            // output out of what the model sees.
+            if let Some(command) = text.strip_prefix('!') {
+                let (excluded, command) = match command.strip_prefix('!') {
+                    Some(command) => (true, command.trim()),
+                    None => (false, command.trim()),
+                };
+                if !command.is_empty() {
+                    let shell = live.next_id();
+                    live.edit(|t| t.shell(&shell, command));
+                    live.send(pi::bash(&shell, command, excluded)).await?;
+                    return Ok(Answer::Done);
+                }
+            }
             let command = match (live.is_busy(), later) {
                 (false, _) => {
                     live.edit(|t| t.sent(&text));
@@ -102,14 +127,49 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             live.send(command).await?;
             Answer::Done
         }
-        Call::SessionAbort { id } => {
-            ctx.sessions.get(&id)?.send(pi::command("abort")).await?;
+        Call::SessionUnqueue { id, index } => {
+            let live = ctx.sessions.get(&id)?;
+            // Pi takes back the whole queue; the rest goes back in, in order.
+            let taken = live.request(pi::command("clear_queue")).await?;
+            let mut rest = queued(&taken);
+            if (index as usize) < rest.len() {
+                rest.remove(index as usize);
+            }
+            for (text, later) in rest {
+                let command = if later {
+                    pi::follow_up(&text)
+                } else {
+                    pi::steer(&text)
+                };
+                live.send(command).await?;
+            }
             Answer::Done
         }
-        Call::SessionAnswer { id, ask, reply } => {
+        Call::SessionModels { id } => {
+            let data = ctx
+                .sessions
+                .get(&id)?
+                .request(pi::command("get_available_models"))
+                .await?;
+            Answer::Available {
+                models: models::available(&data),
+            }
+        }
+        Call::SessionAbort { id } => {
             let live = ctx.sessions.get(&id)?;
-            live.send(pi::answer(&ask, &reply)).await?;
-            live.edit(|t| t.answered());
+            // As Pi's terminal does: take back what's queued first, or the
+            // stopped run would carry on with it. Stopping comes first, though.
+            let taken = live
+                .request(pi::command("clear_queue"))
+                .await
+                .unwrap_or_default();
+            live.send(pi::command("abort")).await?;
+            Answer::Unsent {
+                texts: queued(&taken).into_iter().map(|(text, _)| text).collect(),
+            }
+        }
+        Call::SessionAnswer { id, ask, reply } => {
+            ctx.sessions.get(&id)?.answer(&ask, reply).await?;
             Answer::Done
         }
         Call::SessionSetModel {
@@ -118,14 +178,14 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             model,
         } => {
             let live = ctx.sessions.get(&id)?;
-            live.send(pi::set_model(&provider, &model)).await?;
-            live.send(pi::command("get_state")).await?;
+            live.request(pi::set_model(&provider, &model)).await?;
+            live.refresh().await?;
             Answer::Done
         }
         Call::SessionSetThinking { id, level } => {
             let live = ctx.sessions.get(&id)?;
-            live.send(pi::set_thinking(&level)).await?;
-            live.send(pi::command("get_state")).await?;
+            live.request(pi::set_thinking(&level)).await?;
+            live.refresh().await?;
             Answer::Done
         }
         Call::SessionClose { id } => {
@@ -133,8 +193,29 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::FileRead { session, path } => {
-            let path = ctx.sessions.get(&session)?.cwd().join(path);
+            let path = match PathBuf::from(&path) {
+                path if path.is_absolute() => path,
+                path => ctx.sessions.get(&session)?.cwd().join(path),
+            };
             Answer::File(files::read(&path).map_err(|err| Error::io(&path, err))?)
         }
     })
+}
+
+/// What `clear_queue` took back: each message, and whether it was waiting
+/// for the run to finish rather than steering it, in the order they'd go.
+fn queued(taken: &serde_json::Value) -> Vec<(String, bool)> {
+    let texts = |key: &str| -> Vec<String> {
+        taken[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|text| text.as_str().map(str::to_string))
+            .collect()
+    };
+    texts("steering")
+        .into_iter()
+        .map(|text| (text, false))
+        .chain(texts("followUp").into_iter().map(|text| (text, true)))
+        .collect()
 }

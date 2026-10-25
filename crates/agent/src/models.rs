@@ -2,11 +2,31 @@
 //! are, and which one new sessions start with. Plain functions from text
 //! to text; the caller reads and writes the files.
 
-use protocol::{Defaults, Model, Models, Provider};
+use protocol::{Available, Defaults, Model, Models, Provider};
 use serde_json::Value;
 
 use crate::error::Error;
 use crate::json;
+
+/// The models a live session can switch to, from Pi's
+/// `get_available_models`: every model it has a key or login for.
+pub fn available(data: &Value) -> Vec<Available> {
+    data["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model["id"].as_str()?.to_string();
+            Some(Available {
+                provider: model["provider"].as_str()?.to_string(),
+                name: model["name"].as_str().unwrap_or(&id).to_string(),
+                id,
+                reasoning: model["reasoning"].as_bool().unwrap_or(false),
+                context_window: model["contextWindow"].as_u64(),
+            })
+        })
+        .collect()
+}
 
 pub fn list(models_text: &str, settings_text: &str) -> Result<Models, Error> {
     let models = json::object(models_text, "models.json")?;
@@ -103,6 +123,19 @@ pub fn set_thinking(settings_text: &str, level: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_available_models() {
+        let data = serde_json::json!({ "models": [
+            { "id": "sonnet", "name": "Claude Sonnet", "provider": "anthropic", "reasoning": true, "contextWindow": 200000 },
+            { "id": "qwen", "provider": "local" },
+            { "name": "no id" },
+        ]});
+        let models = available(&data);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[1].name, "qwen");
+        assert_eq!(models[0].context_window, Some(200_000));
+    }
 
     const MODELS: &str = r#"{
   "providers": {

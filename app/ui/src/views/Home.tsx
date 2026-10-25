@@ -8,6 +8,7 @@ import { Empty, ErrorNote } from '../components/Note';
 import { health } from '../state/health';
 import { scratchpads, showScratchpad, startScratchpad } from '../state/sessions';
 import { open } from '../state/tabs';
+import { standing } from './scratch/Nav';
 
 export function Home() {
   const [text, setText] = createSignal('');
@@ -50,7 +51,7 @@ export function Home() {
               {(pad) => (
                 <li>
                   <button type="button" class="row row-button" onClick={() => void show.run(pad)}>
-                    <span class="pad-dot" data-state={pad.busy ? 'busy' : pad.id ? 'live' : 'saved'} />
+                    <span class="pad-dot" data-state={standing(pad)} />
                     <span class="row-title">{pad.title}</span>
                   </button>
                 </li>

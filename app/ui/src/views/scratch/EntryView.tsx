@@ -1,5 +1,5 @@
 // One entry in a conversation: what you asked, what Pi said and thought,
-// what it ran, and notices.
+// what it ran, and notices. A file Pi wrote or edited opens in the viewer.
 
 import { createSignal, For, Match, Show, Switch } from 'solid-js';
 import { Markdown } from '../../components/Markdown';
@@ -13,7 +13,13 @@ function of<K extends Entry['kind']>(entry: Entry, kind: K) {
   return entry.kind === kind ? (entry as Extract<Entry, { kind: K }>) : undefined;
 }
 
-export function EntryView(props: { entry: Entry }) {
+export function EntryView(props: {
+  entry: Entry;
+  cwd: string;
+  /** The newest entry of a run still going. */
+  last: boolean;
+  onOpenFile: (path: string) => void;
+}) {
   return (
     <Switch>
       <Match when={of(props.entry, 'user')}>
@@ -30,11 +36,15 @@ export function EntryView(props: { entry: Entry }) {
         )}
       </Match>
       <Match when={of(props.entry, 'text')}>{(entry) => <Markdown text={entry().text} />}</Match>
-      <Match when={of(props.entry, 'thinking')}>{(entry) => <Thinking text={entry().text} />}</Match>
-      <Match when={of(props.entry, 'tool')}>{(entry) => <ToolCall tool={entry()} />}</Match>
+      <Match when={of(props.entry, 'thinking')}>
+        {(entry) => <Thinking text={entry().text} going={props.last} />}
+      </Match>
+      <Match when={of(props.entry, 'tool')}>
+        {(entry) => <ToolCall tool={entry()} cwd={props.cwd} onOpenFile={props.onOpenFile} />}
+      </Match>
       <Match when={of(props.entry, 'notice')}>
         {(entry) => (
-          <p class="notice" data-tone={entry().tone} role={entry().tone === 'error' ? 'alert' : undefined}>
+          <p class="notice" data-tone={entry().tone} role={entry().tone === 'error' ? 'alert' : 'status'}>
             {entry().text}
           </p>
         )}
@@ -43,11 +53,11 @@ export function EntryView(props: { entry: Entry }) {
   );
 }
 
-function Thinking(props: { text: string }) {
+function Thinking(props: { text: string; going: boolean }) {
   const [open, setOpen] = createSignal(false);
   return (
     <button type="button" class="thinking" aria-expanded={open()} onClick={() => setOpen(!open())}>
-      <span>Thinking</span>
+      <span>{props.going ? 'Thinking…' : 'Thought'}</span>
       <Show when={open()}>
         <span class="thinking-text">{props.text}</span>
       </Show>
@@ -57,21 +67,35 @@ function Thinking(props: { text: string }) {
 
 const marks = { writing: '…', running: '›', done: '✓', failed: '✗' } as const;
 
-function ToolCall(props: { tool: Tool }) {
+/** The file a finished write or edit changed, as an absolute path. */
+function changed(tool: Tool, cwd: string) {
+  if (tool.status !== 'done' || (tool.name !== 'write' && tool.name !== 'edit')) return undefined;
+  const path = (tool.args as { path?: unknown } | null)?.path;
+  if (typeof path !== 'string') return undefined;
+  return path.startsWith('/') ? path : `${cwd}/${path}`;
+}
+
+function ToolCall(props: { tool: Tool; cwd: string; onOpenFile: (path: string) => void }) {
   const [open, setOpen] = createSignal(false);
   const summary = () => summarize(props.tool);
+  const file = () => changed(props.tool, props.cwd);
   const hasBody = () => props.tool.output !== '' || props.tool.name === 'edit';
   return (
-    <div class="tool" data-status={props.tool.status}>
+    <div class="tool" data-status={props.tool.status} data-file={file() !== undefined}>
       <button
         type="button"
         class="tool-head"
-        aria-expanded={open()}
-        disabled={!hasBody()}
-        onClick={() => setOpen(!open())}
+        aria-expanded={file() ? undefined : open()}
+        title={file() ? `Open ${file()?.split('/').pop()} in the viewer` : undefined}
+        disabled={!file() && !hasBody()}
+        onClick={() => {
+          const path = file();
+          if (path) props.onOpenFile(path);
+          else setOpen(!open());
+        }}
       >
         <span class="tool-mark" aria-hidden="true">
-          {marks[props.tool.status]}
+          {file() ? '✎' : marks[props.tool.status]}
         </span>
         <span class="tool-verb">{summary().verb}</span>
         <span class="tool-target">{summary().target}</span>
@@ -81,8 +105,11 @@ function ToolCall(props: { tool: Tool }) {
         <Show when={summary().removed}>
           <span class="tool-removed">−{summary().removed}</span>
         </Show>
+        <Show when={props.tool.status === 'running'}>
+          <span class="tool-meta">running</span>
+        </Show>
       </button>
-      <Show when={open()}>
+      <Show when={open() && !file()}>
         <div class="tool-body">
           <Show when={props.tool.name === 'edit'}>
             <For each={edits((props.tool.args ?? {}) as Record<string, unknown>)}>

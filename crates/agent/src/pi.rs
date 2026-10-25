@@ -39,11 +39,17 @@ pub enum PiEvent {
     },
     Named(Option<String>),
     ThinkingLevel(String),
-    /// The reply to a command wb-agent sent.
+    /// The reply to a command wb-agent sent, with the command's id if it had one.
     Response {
+        id: Option<String>,
         command: String,
         error: Option<String>,
         data: Value,
+    },
+    /// Output from a shell command run with [`bash`].
+    BashOutput {
+        id: String,
+        delta: String,
     },
     Ask(Ask),
     Status {
@@ -123,6 +129,7 @@ pub fn decode(line: &str) -> Option<PiEvent> {
         "session_info_changed" => PiEvent::Named(value["name"].as_str().map(str::to_string)),
         "thinking_level_changed" => PiEvent::ThinkingLevel(text(&value, "level")),
         "response" => PiEvent::Response {
+            id: value["id"].as_str().map(str::to_string),
             command: text(&value, "command"),
             error: (value["success"] == false).then(|| {
                 value["error"]
@@ -131,6 +138,10 @@ pub fn decode(line: &str) -> Option<PiEvent> {
                     .to_string()
             }),
             data: value["data"].clone(),
+        },
+        "bash_execution_update" => PiEvent::BashOutput {
+            id: text(&value, "id"),
+            delta: text(&value, "delta"),
         },
         "extension_ui_request" => ui_request(&value),
         "compaction_start" => notice("Compacting the conversation…", Tone::Info),
@@ -243,6 +254,18 @@ pub fn follow_up(text: &str) -> Value {
     json!({ "type": "follow_up", "message": text })
 }
 
+/// A shell command, as `!` runs it in Pi's terminal. Its output goes into
+/// the context unless `excluded`.
+pub fn bash(id: &str, command: &str, excluded: bool) -> Value {
+    json!({ "type": "bash", "id": id, "command": command, "excludeFromContext": excluded })
+}
+
+/// A command whose reply wb-agent waits for, matched by `id`.
+pub fn with_id(mut command: Value, id: &str) -> Value {
+    command["id"] = json!(id);
+    command
+}
+
 pub fn set_model(provider: &str, model: &str) -> Value {
     json!({ "type": "set_model", "provider": provider, "modelId": model })
 }
@@ -256,6 +279,9 @@ pub fn answer(ask: &str, reply: &AskReply) -> Value {
     match reply {
         AskReply::Value { value } => answer["value"] = json!(value),
         AskReply::Confirmed { confirmed } => answer["confirmed"] = json!(confirmed),
+        // Only wb-agent's own question tool asks several; an extension's
+        // dialog takes one value.
+        AskReply::Answers { answers } => answer["value"] = json!(answers.join("\n")),
         AskReply::Cancelled => answer["cancelled"] = json!(true),
     }
     answer
@@ -284,6 +310,7 @@ mod tests {
         assert_eq!(
             decode(refused),
             Some(PiEvent::Response {
+                id: None,
                 command: "prompt".into(),
                 error: Some("busy".into()),
                 data: Value::Null

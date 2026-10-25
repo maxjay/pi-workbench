@@ -10,6 +10,8 @@ const paths = {
   file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
   send: 'M12 19V5M5 12l7-7 7 7',
   stop: 'M7 7h10v10H7z',
+  chevron: 'M6 9l6 6 6-6',
+  check: 'M5 12l5 5 9-10',
 } as const;
 
 export type IconName = keyof typeof paths;

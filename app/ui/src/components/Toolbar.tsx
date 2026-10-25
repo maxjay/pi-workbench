@@ -1,6 +1,6 @@
 import { status, stopReason } from '../agent';
 import { health } from '../state/health';
-import { live, selected } from '../state/sessions';
+import { current } from '../state/sessions';
 import { section, sections } from '../state/settings';
 import { active, open } from '../state/tabs';
 import { Icon } from './Icon';
@@ -10,8 +10,7 @@ export function Toolbar() {
   const where = () => {
     if (active() === 'settings') return ['Settings', `› ${sections.find((s) => s.id === section())?.title}`];
     if (active() === 'scratch') {
-      const id = selected();
-      const title = id ? live[id]?.state.title : undefined;
+      const title = current()?.state.title;
       return ['Scratchpad', title ? `› ${title}` : ''];
     }
     return ['Home', ''];

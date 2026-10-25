@@ -27,19 +27,22 @@ function touches(session: Session, path: string) {
 const asText = (content: FileContent) => (content.type === 'text' ? content : undefined);
 const asImage = (content: FileContent) => (content.type === 'image' ? content : undefined);
 
-export function Viewer(props: { session: Session; onClose: () => void }) {
+export function Viewer(props: { session: Session; path?: string; onClose: () => void }) {
   const files = () => [...props.session.state.files].reverse();
   const [picked, setPicked] = createSignal<string>();
   const current = () => (picked() && files().includes(picked() as string) ? picked() : files()[0]);
-  // A file Pi just touched comes to the front.
+  // A file Pi just touched comes to the front, as does one you opened from the conversation.
   createEffect(() => setPicked(props.session.state.files.at(-1)));
+  createEffect(() => {
+    if (props.path) setPicked(props.path);
+  });
 
   const [file] = createResource(
     () => {
       const path = current();
       return path ? { path, version: touches(props.session, path) } : undefined;
     },
-    ({ path }) => readFile(props.session.id, path),
+    ({ path }) => readFile(props.session, path),
   );
 
   return (

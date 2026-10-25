@@ -8,11 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use protocol::{Change, Event, FromAgent, Session, SessionSummary};
+use serde_json::json;
 
+use crate::done::Done;
 use crate::error::Error;
-use crate::pi;
+use crate::pi::{self, PiEvent};
 use crate::session::{Launch, Live, Out};
-use crate::store;
+use crate::transcript::Transcript;
+use crate::{question, store};
 
 #[derive(Clone)]
 pub struct Sessions {
@@ -23,10 +26,20 @@ pub struct Sessions {
     pi: PathBuf,
     agent_dir: PathBuf,
     scratch_dir: PathBuf,
+    done: Arc<Done>,
+    /// The `ask_user` extension, if it could be written out.
+    extension: Option<PathBuf>,
 }
 
 impl Sessions {
-    pub fn new(out: Out, agent_dir: PathBuf, scratch_dir: PathBuf) -> Self {
+    pub fn new(out: Out, agent_dir: PathBuf, scratch_dir: PathBuf, data_dir: PathBuf) -> Self {
+        let extension = match question::install(&data_dir.join("extensions")) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!("wb-agent: no question tool: {err}");
+                None
+            }
+        };
         Sessions {
             live: Arc::default(),
             next: Arc::new(AtomicU64::new(1)),
@@ -34,6 +47,8 @@ impl Sessions {
             pi: std::env::var_os("WB_PI").map_or_else(|| "pi".into(), PathBuf::from),
             agent_dir,
             scratch_dir,
+            done: Arc::new(Done::new(data_dir.join("done.json"))),
+            extension,
         }
     }
 
@@ -54,7 +69,7 @@ impl Sessions {
         };
         let id = format!("s{}", self.next.fetch_add(1, Ordering::SeqCst));
         let live = self.spawn(id, cwd, None)?;
-        live.send(pi::command("get_state")).await?;
+        live.refresh().await?;
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
             live.edit(|t| t.sent(&text));
             live.send(pi::prompt(&text)).await?;
@@ -64,14 +79,7 @@ impl Sessions {
 
     /// Resumes a saved session, or finds it if it's already live.
     pub async fn open(&self, file: &str) -> Result<Session, Error> {
-        let found = self
-            .live
-            .lock()
-            .expect("not poisoned")
-            .values()
-            .find(|live| live.file().as_deref() == Some(file))
-            .cloned();
-        let id = match found {
+        let id = match self.find(file) {
             Some(live) if !live.is_stopped() => return Ok(live.snapshot()),
             // Pi stopped under it: start it again, as the same session.
             Some(live) => live.id.clone(),
@@ -80,16 +88,91 @@ impl Sessions {
         let cwd = store::header_cwd(Path::new(file))
             .ok_or_else(|| Error::NotFound(format!("{file} isn't a Pi session")))?;
         let live = self.spawn(id, cwd, Some(PathBuf::from(file)))?;
-        live.send(pi::command("get_state")).await?;
+        live.refresh().await?;
         live.send(pi::command("get_messages")).await?;
         Ok(live.snapshot())
     }
 
+    /// A saved session, from its file, as it would open: for looking at
+    /// without starting Pi.
+    pub fn read(&self, file: &str) -> Result<Session, Error> {
+        if let Some(live) = self.find(file) {
+            return Ok(live.snapshot());
+        }
+        let saved = store::read(Path::new(file))
+            .ok_or_else(|| Error::NotFound(format!("{file} isn't a Pi session")))?;
+        let mut t = Transcript::new(&saved.cwd);
+        let respond = |command: &str, data| PiEvent::Response {
+            id: None,
+            command: command.into(),
+            error: None,
+            data,
+        };
+        let (provider, model) = match saved.model.as_deref().and_then(|m| m.split_once('/')) {
+            Some((provider, model)) => (Some(provider), Some(model)),
+            None => (None, None),
+        };
+        t.apply(respond(
+            "get_state",
+            json!({
+                "sessionFile": file,
+                "sessionName": saved.name,
+                "thinkingLevel": saved.thinking,
+                "model": { "provider": provider, "id": model },
+            }),
+        ));
+        t.apply(respond(
+            "get_messages",
+            json!({ "messages": saved.messages }),
+        ));
+        t.state.usage = Some(saved.usage);
+        t.state.done = self.done.contains(file);
+        Ok(t.session(""))
+    }
+
+    /// Marks a session done, or not. A live one marked done stops: there's
+    /// nothing more for Pi to do in it until you write there again.
+    pub async fn set_done(&self, file: &str, done: bool) -> Result<(), Error> {
+        self.done.set(file, done)?;
+        if let Some(live) = self.find(file) {
+            live.edit(|t| {
+                t.state.done = done;
+                t.touch();
+            });
+            if done {
+                self.close(&live.id).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Writing in a session marked done brings it back.
+    pub async fn wake(&self, live: &Live) -> Result<(), Error> {
+        match live.file() {
+            Some(file) if live.is_done() => self.set_done(&file, false).await,
+            _ => Ok(()),
+        }
+    }
+
+    fn find(&self, file: &str) -> Option<Arc<Live>> {
+        self.live
+            .lock()
+            .expect("not poisoned")
+            .values()
+            .find(|live| live.file().as_deref() == Some(file))
+            .cloned()
+    }
+
     fn spawn(&self, id: String, cwd: PathBuf, file: Option<PathBuf>) -> Result<Arc<Live>, Error> {
+        let done = file
+            .as_ref()
+            .is_some_and(|file| self.done.contains(&file.display().to_string()));
         let launch = Launch {
             pi: self.pi.clone(),
             cwd,
             file,
+            extension: self.extension.clone(),
+            done,
         };
         let on_close = {
             let (live, out, id) = (self.live.clone(), self.out.clone(), id.clone());
@@ -154,9 +237,14 @@ impl Sessions {
             .filter(|live| live.cwd().starts_with(&self.scratch_dir))
             .map(|live| live.summary(now))
             .collect();
+        let done = self.done.all();
         let saved = store::under(&self.agent_dir, &self.scratch_dir)
             .into_iter()
-            .filter(|saved| !live.iter().any(|live| live.file == saved.file));
+            .filter(|saved| !live.iter().any(|live| live.file == saved.file))
+            .map(|saved| SessionSummary {
+                done: saved.file.as_ref().is_some_and(|file| done.contains(file)),
+                ..saved
+            });
         live.iter().cloned().chain(saved).collect()
     }
 }

@@ -62,21 +62,32 @@ pub enum Call {
         cwd: Option<String>,
         text: Option<String>,
     },
+    /// Mark a saved session done, or not. Marking a live one done stops Pi.
+    #[serde(rename = "sessions.setDone")]
+    SessionsSetDone { file: String, done: bool },
     /// Resume a session from Pi's store, or find it if it's live.
     #[serde(rename = "session.open")]
     SessionOpen { file: String },
+    /// A saved session, read from its file without starting Pi. Its id is empty.
+    #[serde(rename = "session.read")]
+    SessionRead { file: String },
     /// A live session as it stands.
     #[serde(rename = "session.get")]
     SessionGet { id: String },
     /// Send a message. While Pi works it steers the run, or with `later`
-    /// waits for the run to finish.
+    /// waits for the run to finish. `!command` runs it in the shell, as in
+    /// Pi's terminal; `!!command` keeps its output out of the context.
     #[serde(rename = "session.send")]
     SessionSend {
         id: String,
         text: String,
         later: bool,
     },
-    /// Stop the run.
+    /// Take back a message still waiting to be sent: the one at `index` in
+    /// the state's `queued`.
+    #[serde(rename = "session.unqueue")]
+    SessionUnqueue { id: String, index: u32 },
+    /// Stop the run. Messages still waiting to be sent come back, unsent.
     #[serde(rename = "session.abort")]
     SessionAbort { id: String },
     /// Answer an extension's question.
@@ -86,6 +97,9 @@ pub enum Call {
         ask: String,
         reply: AskReply,
     },
+    /// The models this session can switch to.
+    #[serde(rename = "session.models")]
+    SessionModels { id: String },
     #[serde(rename = "session.setModel")]
     SessionSetModel {
         id: String,
@@ -97,7 +111,8 @@ pub enum Call {
     /// Stop Pi for this session once it's idle. Its file stays.
     #[serde(rename = "session.close")]
     SessionClose { id: String },
-    /// A file, for viewing; a relative path is taken from the session's folder.
+    /// A file, for viewing. A relative path is taken from the live session's
+    /// folder; an absolute one needs no session.
     #[serde(rename = "file.read")]
     FileRead { session: String, path: String },
 }
@@ -136,10 +151,21 @@ pub enum Outcome {
 pub enum Answer {
     Health(Health),
     Config(ConfigText),
-    Mcp { servers: Vec<McpServer> },
+    Mcp {
+        servers: Vec<McpServer>,
+    },
     Models(Models),
-    Sessions { sessions: Vec<SessionSummary> },
+    Sessions {
+        sessions: Vec<SessionSummary>,
+    },
     Session(Box<Session>),
+    Available {
+        models: Vec<Available>,
+    },
+    /// Messages taken back before Pi saw them, oldest first.
+    Unsent {
+        texts: Vec<String>,
+    },
     File(FileView),
     Done,
 }
@@ -281,6 +307,41 @@ mod tests {
                 }
             }
         );
+        let answers = AskReply::Answers {
+            answers: vec!["A week".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&answers).unwrap(),
+            r#"{"type":"answers","answers":["A week"]}"#
+        );
+        let line =
+            r#"{"id":4,"method":"sessions.setDone","params":{"file":"/s.jsonl","done":true}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap().call,
+            Call::SessionsSetDone {
+                file: "/s.jsonl".into(),
+                done: true
+            }
+        );
+    }
+
+    #[test]
+    fn questions() {
+        let kind = AskKind::Questions {
+            questions: vec![Question {
+                label: "Downtime".into(),
+                question: "How much downtime?".into(),
+                choices: vec![Choice {
+                    label: "None".into(),
+                    description: Some("Dual-write".into()),
+                }],
+                other: true,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&kind).unwrap(),
+            r#"{"type":"questions","questions":[{"label":"Downtime","question":"How much downtime?","choices":[{"label":"None","description":"Dual-write"}],"other":true}]}"#
+        );
     }
 
     #[test]
@@ -296,12 +357,13 @@ mod tests {
                     status: ToolStatus::Running,
                     output: String::new(),
                     images: Vec::new(),
+                    details: serde_json::Value::Null,
                 })),
             },
         });
         assert_eq!(
             serde_json::to_string(&change).unwrap(),
-            r#"{"type":"event","event":"session","id":"s1","change":{"change":"entry","index":3,"entry":{"kind":"tool","id":"c1","name":"bash","args":{"command":"ls"},"status":"running","output":"","images":[]}}}"#
+            r#"{"type":"event","event":"session","id":"s1","change":{"change":"entry","index":3,"entry":{"kind":"tool","id":"c1","name":"bash","args":{"command":"ls"},"status":"running","output":"","images":[],"details":null}}}"#
         );
         let image = FileContent::Image {
             mime_type: "image/png".into(),

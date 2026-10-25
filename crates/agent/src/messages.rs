@@ -61,6 +61,7 @@ pub fn block(block: &Value) -> Option<Entry> {
             status: ToolStatus::Running,
             output: String::new(),
             images: Vec::new(),
+            details: Value::Null,
         })),
         _ => None,
     }
@@ -78,7 +79,7 @@ pub fn ending(message: &Value) -> Option<Entry> {
         }),
         "aborted" => Some(Entry::Notice {
             text: "Stopped".into(),
-            tone: Tone::Warning,
+            tone: Tone::Info,
         }),
         "length" => Some(Entry::Notice {
             text: "The reply hit the model's length limit".into(),
@@ -92,6 +93,7 @@ pub fn ending(message: &Value) -> Option<Entry> {
 pub fn finish(tool: &mut Tool, result: &Value, failed: bool) {
     tool.output = text(&result["content"]);
     tool.images = images(&result["content"]);
+    tool.details = result["details"].clone();
     tool.status = if failed {
         ToolStatus::Failed
     } else {
@@ -114,6 +116,7 @@ pub fn other(message: &Value) -> Option<Entry> {
             },
             output: message["output"].as_str().unwrap_or_default().to_string(),
             images: Vec::new(),
+            details: Value::Null,
         })),
         "custom" if message["display"] == true => Some(Entry::Notice {
             text: text(&message["content"]),

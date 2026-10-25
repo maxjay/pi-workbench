@@ -2,6 +2,7 @@
 import type { Ask } from "./Ask";
 import type { Queued } from "./Queued";
 import type { StatusLine } from "./StatusLine";
+import type { Usage } from "./Usage";
 
 export type SessionState = { 
 /**
@@ -39,4 +40,16 @@ files: Array<string>,
 /**
  * Why Pi stopped, once it has.
  */
-stopped: string | null, };
+stopped: string | null, 
+/**
+ * Marked done: it lists under Done until you write in it again.
+ */
+done: boolean, 
+/**
+ * Tokens and cost so far, and how full the context is.
+ */
+usage: Usage | null, 
+/**
+ * The thinking levels the model takes; just `off` for one that doesn't think.
+ */
+levels: Array<string>, };

@@ -37,6 +37,28 @@ pub struct SessionState {
     pub files: Vec<String>,
     /// Why Pi stopped, once it has.
     pub stopped: Option<String>,
+    /// Marked done: it lists under Done until you write in it again.
+    pub done: bool,
+    /// Tokens and cost so far, and how full the context is.
+    pub usage: Option<Usage>,
+    /// The thinking levels the model takes; just `off` for one that doesn't think.
+    pub levels: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Usage {
+    #[ts(type = "number")]
+    pub input: u64,
+    #[ts(type = "number")]
+    pub output: u64,
+    /// Dollars.
+    pub cost: f64,
+    /// Tokens in the context now, when Pi knows.
+    #[ts(type = "number | null")]
+    pub context: Option<u64>,
+    #[ts(type = "number | null")]
+    pub window: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -68,18 +90,55 @@ pub struct Ask {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
 pub enum AskKind {
-    Select { options: Vec<String> },
+    Select {
+        options: Vec<String>,
+    },
     Confirm,
-    Input { placeholder: Option<String> },
-    Editor { prefill: String },
+    Input {
+        placeholder: Option<String>,
+    },
+    Editor {
+        prefill: String,
+    },
+    /// Pi's `ask_user` tool: one question or several, each answered by
+    /// picking a choice or writing one.
+    Questions {
+        questions: Vec<Question>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Question {
+    /// A word or two for its tab.
+    pub label: String,
+    pub question: String,
+    pub choices: Vec<Choice>,
+    /// You can write an answer of your own.
+    pub other: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Choice {
+    pub label: String,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
 pub enum AskReply {
-    Value { value: String },
-    Confirmed { confirmed: bool },
+    Value {
+        value: String,
+    },
+    Confirmed {
+        confirmed: bool,
+    },
+    /// One for each question, in order.
+    Answers {
+        answers: Vec<String>,
+    },
     Cancelled,
 }
 
@@ -108,6 +167,9 @@ pub struct Tool {
     /// The result's text: partial while it runs.
     pub output: String,
     pub images: Vec<Image>,
+    /// What the tool kept for itself, such as a todo tool's list.
+    #[ts(type = "unknown")]
+    pub details: serde_json::Value,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -173,6 +235,24 @@ pub struct SessionSummary {
     #[ts(type = "number")]
     pub updated: u64,
     pub busy: bool,
+    /// Waiting on an answer.
+    pub asking: bool,
+    /// Pi stopped under it.
+    pub stopped: bool,
+    pub done: bool,
+}
+
+/// A model a live session can switch to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Available {
+    pub provider: String,
+    pub id: String,
+    pub name: String,
+    pub reasoning: bool,
+    #[ts(type = "number | null")]
+    pub context_window: Option<u64>,
 }
 
 /// A file opened for viewing.

@@ -3,6 +3,7 @@
 //! Everything it says goes through one writer, so lines never interleave.
 
 mod config;
+mod done;
 mod error;
 mod files;
 mod health;
@@ -11,6 +12,7 @@ mod mcp;
 mod messages;
 mod models;
 mod pi;
+mod question;
 mod router;
 mod session;
 mod sessions;

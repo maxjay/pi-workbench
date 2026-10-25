@@ -2,64 +2,62 @@
 // of its own. The list on the left, the conversation in the middle, and
 // the files Pi wrote beside it when you want them.
 
-import { createSignal, Show } from 'solid-js';
+import { createEffect, createSignal, Show } from 'solid-js';
 import { createAction } from '../components/action';
 import { ErrorNote } from '../components/Note';
-import { live, selected, startScratchpad } from '../state/sessions';
+import { current, saved, scratchpads, showScratchpad, view } from '../state/sessions';
 import { Conversation } from './scratch/Conversation';
 import { Nav } from './scratch/Nav';
 import { Viewer } from './scratch/Viewer';
 
-const [filesOpen, setFilesOpen] = createSignal(false);
+/** The file the viewer shows, once it's open. */
+const [viewing, setViewing] = createSignal<{ path?: string }>();
 
 export function Scratchpad() {
-  const session = () => {
-    const id = selected();
-    return id ? live[id] : undefined;
-  };
+  // Something is always shown once there's something to show: the newest
+  // active scratchpad, read from its file.
+  const first = createAction(showScratchpad);
+  createEffect(() => {
+    if (view() || first.busy() || first.error() || saved.loading) return;
+    const pad = scratchpads().find((p) => !p.done) ?? scratchpads()[0];
+    if (pad) void first.run(pad);
+  });
+
   return (
     <div class="page scratchpad">
       <Nav />
-      <Show when={session()} fallback={<Start />}>
+      <Show
+        when={current()}
+        fallback={
+          <main class="conversation conversation-empty">
+            <div>
+              <Show when={!first.busy() && scratchpads().length === 0}>
+                <h1>Nothing in the scratchpad yet</h1>
+                <p>
+                  Write an ask or a goal in the box on the left, or on Home. Each one is a Pi session of its
+                  own, with your instructions, MCP servers and models, and it stays here until you mark it
+                  done.
+                </p>
+              </Show>
+              <ErrorNote error={first.error()} />
+            </div>
+          </main>
+        }
+      >
         {(session) => (
           <>
             <Conversation
               session={session()}
-              filesOpen={filesOpen()}
-              onFiles={() => setFilesOpen(!filesOpen())}
+              filesOpen={viewing() !== undefined}
+              onFiles={() => setViewing(viewing() ? undefined : {})}
+              onOpenFile={(path) => setViewing({ path })}
             />
-            <Show when={filesOpen()}>
-              <Viewer session={session()} onClose={() => setFilesOpen(false)} />
+            <Show when={viewing()}>
+              {(shown) => <Viewer session={session()} path={shown().path} onClose={() => setViewing()} />}
             </Show>
           </>
         )}
       </Show>
     </div>
-  );
-}
-
-/** Nothing picked yet: ask something to start. */
-function Start() {
-  const [text, setText] = createSignal('');
-  const start = createAction(() => startScratchpad(text().trim()));
-  return (
-    <main class="conversation conversation-start">
-      <h1>What should Pi do?</h1>
-      <textarea
-        class="ask-box"
-        rows={3}
-        placeholder="An ask or a goal. Pi gets a folder of its own for it."
-        value={text()}
-        disabled={start.busy()}
-        onInput={(e) => setText(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && text().trim()) {
-            e.preventDefault();
-            void start.run();
-          }
-        }}
-      />
-      <ErrorNote error={start.error()} />
-    </main>
   );
 }

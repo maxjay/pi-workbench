@@ -5,7 +5,10 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 
-use protocol::{Change, Entry, Queued, Session, SessionState, StatusLine, Tone, Tool, ToolStatus};
+use protocol::{
+    AskKind, AskReply, Change, Entry, Queued, Session, SessionState, StatusLine, Tone, Tool,
+    ToolStatus, Usage,
+};
 use serde_json::Value;
 
 use crate::messages;
@@ -55,8 +58,14 @@ impl Transcript {
     }
 
     pub fn apply(&mut self, event: PiEvent) {
-        // A question blocks the run, so a run moving on means it was
-        // answered, or Pi stopped waiting.
+        // An extension's dialog blocks the run, so a run moving on means it
+        // was answered, or Pi stopped waiting. A question from `ask_user`
+        // ends with its call, which wb-agent sees for itself.
+        let dialog = self
+            .state
+            .ask
+            .as_ref()
+            .is_some_and(|ask| !matches!(ask.kind, AskKind::Questions { .. }));
         let moving = matches!(
             event,
             PiEvent::Block { .. }
@@ -65,7 +74,7 @@ impl Transcript {
                 | PiEvent::ToolEnd { .. }
                 | PiEvent::AgentSettled
         );
-        if moving && self.state.ask.is_some() {
+        if moving && dialog {
             self.answered();
         }
         match event {
@@ -102,6 +111,7 @@ impl Transcript {
                         status: ToolStatus::Running,
                         output: String::new(),
                         images: Vec::new(),
+                        details: Value::Null,
                     }))
                 });
                 self.edit_tool(index, |tool| {
@@ -148,6 +158,7 @@ impl Transcript {
                 self.state_changed = true;
             }
             PiEvent::Response {
+                id,
                 command,
                 error,
                 data,
@@ -156,10 +167,20 @@ impl Transcript {
                     if command == "prompt" {
                         self.prompts.pop_front();
                     }
+                    if command == "bash"
+                        && let Some(index) = id.as_deref().and_then(|id| self.tool_index(id))
+                    {
+                        self.edit_tool(index, |tool| tool.status = ToolStatus::Failed);
+                    }
                     self.notice(error, Tone::Error);
                 }
-                None => self.response(&command, &data),
+                None => self.response(id.as_deref(), &command, &data),
             },
+            PiEvent::BashOutput { id, delta } => {
+                if let Some(index) = self.tool_index(&id) {
+                    self.edit_tool(index, |tool| tool.output.push_str(&delta));
+                }
+            }
             PiEvent::Ask(ask) => {
                 self.state.ask = Some(ask);
                 self.state_changed = true;
@@ -184,10 +205,52 @@ impl Transcript {
             .push_back((text.to_string(), self.entries.len()));
     }
 
+    /// A shell command was sent to Pi with this id: it shows as a call,
+    /// filled in as its output comes.
+    pub fn shell(&mut self, id: &str, command: &str) {
+        self.push(Entry::Tool(Tool {
+            id: id.to_string(),
+            name: "bash".into(),
+            args: serde_json::json!({ "command": command }),
+            status: ToolStatus::Running,
+            output: String::new(),
+            images: Vec::new(),
+            details: Value::Null,
+        }));
+    }
+
+    /// The state changed from outside: send it.
+    pub fn touch(&mut self) {
+        self.state_changed = true;
+    }
+
     /// The question was answered, or Pi gave up waiting.
     pub fn answered(&mut self) {
         self.state.ask = None;
         self.state_changed = true;
+    }
+
+    /// You answered the question: say so in the conversation, as the
+    /// question itself goes.
+    pub fn answered_with(&mut self, reply: &AskReply) {
+        let said = match reply {
+            AskReply::Value { value } if value.contains('\n') => "You answered.".to_string(),
+            AskReply::Value { value } => format!("You answered: {value}"),
+            AskReply::Confirmed { confirmed: true } => "You answered: Yes".into(),
+            AskReply::Confirmed { confirmed: false } => "You answered: No".into(),
+            AskReply::Answers { answers } => format!("You answered: {}", answers.join(" · ")),
+            AskReply::Cancelled => "You dismissed it.".into(),
+        };
+        // The tool's own call shows what you answered it.
+        let tool = self
+            .state
+            .ask
+            .as_ref()
+            .is_some_and(|ask| matches!(ask.kind, AskKind::Questions { .. }));
+        self.answered();
+        if !tool {
+            self.notice(said, Tone::Info);
+        }
     }
 
     pub fn exited(&mut self, reason: String) {
@@ -279,6 +342,7 @@ impl Transcript {
                         status: ToolStatus::Writing,
                         output: String::new(),
                         images: Vec::new(),
+                        details: Value::Null,
                     }),
                 );
             }
@@ -335,8 +399,48 @@ impl Transcript {
         self.blocks.clear();
     }
 
-    fn response(&mut self, command: &str, data: &Value) {
+    fn response(&mut self, id: Option<&str>, command: &str, data: &Value) {
         match command {
+            "bash" => {
+                let Some(index) = id.and_then(|id| self.tool_index(id)) else {
+                    return;
+                };
+                let failed =
+                    data["cancelled"] == true || data["exitCode"].as_i64().unwrap_or(0) != 0;
+                self.edit_tool(index, |tool| {
+                    if let Some(output) = data["output"].as_str()
+                        && tool.output.is_empty()
+                    {
+                        tool.output = output.to_string();
+                    }
+                    tool.status = if failed {
+                        ToolStatus::Failed
+                    } else {
+                        ToolStatus::Done
+                    };
+                });
+            }
+            "get_session_stats" => {
+                let tokens = &data["tokens"];
+                let count = |key: &str| tokens[key].as_u64().unwrap_or(0);
+                self.state.usage = Some(Usage {
+                    input: count("input") + count("cacheRead") + count("cacheWrite"),
+                    output: count("output"),
+                    cost: data["cost"].as_f64().unwrap_or(0.0),
+                    context: data["contextUsage"]["tokens"].as_u64(),
+                    window: data["contextUsage"]["contextWindow"].as_u64(),
+                });
+                self.state_changed = true;
+            }
+            "get_available_thinking_levels" => {
+                self.state.levels = data["levels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|level| level.as_str().map(str::to_string))
+                    .collect();
+                self.state_changed = true;
+            }
             "prompt" => {
                 let Some((text, at)) = self.prompts.pop_front() else {
                     return;
@@ -601,6 +705,56 @@ mod tests {
         );
         assert!(matches!(&t.entries[0], Entry::User { text, .. } if text == "/rpc-input"));
         assert_eq!(t.state.title, "/rpc-input");
+    }
+
+    #[test]
+    fn a_shell_command_shows_as_a_call() {
+        let mut t = Transcript::new(Path::new("/s"));
+        t.shell("wb3", "ls");
+        run(
+            &mut t,
+            &[
+                r#"{"type":"bash_execution_update","id":"wb3","delta":"a.txt\n"}"#,
+                r#"{"type":"response","id":"wb3","command":"bash","success":true,"data":{"output":"a.txt\n","exitCode":0,"cancelled":false}}"#,
+            ],
+        );
+        let Entry::Tool(tool) = &t.entries[0] else {
+            panic!("expected the call")
+        };
+        assert_eq!(
+            (tool.output.as_str(), tool.status),
+            ("a.txt\n", ToolStatus::Done)
+        );
+    }
+
+    #[test]
+    fn keeps_usage_and_levels() {
+        let mut t = Transcript::new(Path::new("/s"));
+        run(
+            &mut t,
+            &[
+                r#"{"type":"response","command":"get_session_stats","success":true,"data":{"tokens":{"input":10,"output":4,"cacheRead":30,"cacheWrite":2},"cost":0.12,"contextUsage":{"tokens":900,"contextWindow":200000,"percent":0}}}"#,
+                r#"{"type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","low","high"]}}"#,
+            ],
+        );
+        let usage = t.state.usage.clone().unwrap();
+        assert_eq!((usage.input, usage.output), (42, 4));
+        assert_eq!((usage.context, usage.window), (Some(900), Some(200_000)));
+        assert_eq!(t.state.levels, ["off", "low", "high"]);
+    }
+
+    #[test]
+    fn says_what_you_answered_a_dialog() {
+        let mut t = Transcript::new(Path::new("/s"));
+        run(
+            &mut t,
+            &[
+                r#"{"type":"extension_ui_request","id":"u1","method":"select","title":"Allow?","options":["Yes","No"]}"#,
+            ],
+        );
+        t.answered_with(&AskReply::Cancelled);
+        assert!(t.state.ask.is_none());
+        assert!(matches!(&t.entries[0], Entry::Notice { text, .. } if text == "You dismissed it."));
     }
 
     #[test]

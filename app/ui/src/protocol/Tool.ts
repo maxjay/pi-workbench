@@ -10,4 +10,8 @@ args: unknown, status: ToolStatus,
 /**
  * The result's text: partial while it runs.
  */
-output: string, images: Array<Image>, };
+output: string, images: Array<Image>, 
+/**
+ * What the tool kept for itself, such as a todo tool's list.
+ */
+details: unknown, };

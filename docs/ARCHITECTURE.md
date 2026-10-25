@@ -63,9 +63,11 @@ and says things on its own as events:
 
 - Methods are named `area.action`: `health`; `config.read`, `config.write`;
   `mcp.list`, `mcp.setEnabled`; `models.list`, `models.setDefault`,
-  `models.setThinking`; `sessions.list`; `session.start`, `session.open`,
-  `session.get`, `session.send`, `session.abort`, `session.answer`,
-  `session.setModel`, `session.setThinking`, `session.close`; `file.read`.
+  `models.setThinking`; `sessions.list`, `sessions.setDone`;
+  `session.start`, `session.open`, `session.read`, `session.get`,
+  `session.send`, `session.unqueue`, `session.abort`, `session.answer`,
+  `session.models`, `session.setModel`, `session.setThinking`,
+  `session.close`; `file.read`.
 - Each answer has a `kind`, and `ask(call, kind)` in `app/ui/src/agent.ts`
   checks the answer is the kind it expected.
 - Error codes are `badRequest`, `io`, `invalid` and `notFound`. A line
@@ -90,13 +92,31 @@ a terminal does. Scratchpads each get a folder under
 `~/.local/share/pi-workbench/scratchpads`.
 
 - `pi.rs` reads Pi's lines into events and writes its commands
-  (Pi's docs/rpc.md).
+  (Pi's docs/rpc.md). A command wb-agent needs the answer to goes with an
+  id, and `Live::request` waits for Pi's reply to that id.
 - `transcript.rs` applies those events to the session's state and entries,
   and remembers what changed. It's pure, so it's tested line by line.
 - `session.rs` owns the process: a task reads Pi's output into the
   transcript and sends the changes.
-- `store.rs` lists saved sessions from Pi's own store. wb-agent keeps no
-  copy of any conversation: reopening one runs `pi --session <file>`.
+- `store.rs` lists saved sessions from Pi's own store, and reads one's
+  current branch so a saved scratchpad shows without starting Pi. wb-agent
+  keeps no copy of any conversation: writing in a saved one runs
+  `pi --session <file>`.
+- `done.rs` keeps which scratchpads are marked done, as Pi has no such
+  idea: a list of session files in `done.json`. Marking one done stops its
+  Pi; writing in it again brings it back.
+- `question.rs` and `ask_user.ts` are the workbench's own question tool.
+  Pi's question tools draw in its terminal, which RPC mode doesn't have, so
+  wb-agent loads this extension into every Pi it starts (`--extension`).
+  The tool writes its questions as one line to the session's Unix socket,
+  named in `WB_ASK`, and waits for the answers on one line back; wb-agent
+  shows them as the session's `ask` meanwhile. Extensions' own dialogs
+  (`select`, `confirm`, `input`, `editor`, as Pi's permission gate uses)
+  come through RPC as usual.
+
+wb-agent's own files (`done.json`, the extension) live in
+`~/.local/share/pi-workbench`, or `WB_DATA_DIR`; scratchpad folders in
+`scratchpads` there, or `WB_SCRATCH_DIR`.
 
 ## Layout
 
@@ -115,6 +135,8 @@ crates/
     src/session.rs   one live session: Pi's process and its transcript
     src/sessions.rs  the live sessions; starting, resuming, listing
     src/store.rs     Pi's saved sessions
+    src/done.rs      which scratchpads are done
+    src/question.rs  the question tool's socket; ask_user.ts is the tool
     src/files.rs     files opened for viewing
     tests/stdio.rs   the real binary, spoken to in lines, with a fake pi
 app/

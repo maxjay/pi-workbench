@@ -11,4 +11,12 @@ id: string | null, file: string | null, title: string, cwd: string,
 /**
  * Milliseconds since the epoch.
  */
-updated: number, busy: boolean, };
+updated: number, busy: boolean, 
+/**
+ * Waiting on an answer.
+ */
+asking: boolean, 
+/**
+ * Pi stopped under it.
+ */
+stopped: boolean, done: boolean, };
