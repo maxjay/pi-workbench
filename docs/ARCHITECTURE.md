@@ -21,7 +21,8 @@ does one job.
 ```
 
 - **The page** (`app/ui`) draws everything and keeps a copy of what wb-agent
-  last told it. It never touches the disk.
+  last told it. It never touches the disk; the only thing it keeps itself
+  is what you've written and not sent, in the window's own storage.
 - **The app** (`app/src-tauri`) opens the window, starts wb-agent through
   `wsl.exe`, and carries lines both ways. It doesn't read them.
 - **wb-agent** (`crates/agent`) runs inside WSL, next to Pi and the code.

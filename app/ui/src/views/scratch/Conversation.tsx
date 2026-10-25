@@ -8,7 +8,8 @@ import { createAction } from '../../components/action';
 import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
-import { draftKey, reopen, setDone, setDrafts, unqueue } from '../../state/sessions';
+import { draftKey, setDraft } from '../../state/drafts';
+import { reopen, setDone, unqueue } from '../../state/sessions';
 import { AskCard } from './AskCard';
 import { Composer } from './Composer';
 import { EntryView } from './EntryView';
@@ -45,7 +46,7 @@ export function Conversation(props: {
   const takeBack = createAction(async (index: number, edit: boolean) => {
     const item = state().queued[index];
     await unqueue(props.session.id, index);
-    if (edit && item) setDrafts(draftKey(props.session), item.text);
+    if (edit && item) setDraft(draftKey(props.session), item.text);
   });
 
   let log!: HTMLDivElement;

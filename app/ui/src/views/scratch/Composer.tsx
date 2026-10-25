@@ -9,14 +9,15 @@ import { createAction } from '../../components/action';
 import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
-import { abort, draftKey, drafts, send, setDrafts } from '../../state/sessions';
+import { draftKey, drafts, setDraft } from '../../state/drafts';
+import { abort, send } from '../../state/sessions';
 import { learnModels, ModelMenu, modelLabel } from './ModelMenu';
 import { createPicker } from './Picker';
 
 export function Composer(props: { session: Session }) {
   const key = () => draftKey(props.session);
   const text = () => drafts[key()] ?? '';
-  const setText = (value: string) => setDrafts(key(), value);
+  const setText = (value: string) => setDraft(key(), value);
   const [menu, setMenu] = createSignal(false);
   let box: HTMLTextAreaElement | undefined;
   let mirror!: HTMLDivElement;
@@ -31,7 +32,7 @@ export function Composer(props: { session: Session }) {
     if (!message) return;
     const was = key();
     await send(props.session, message, later);
-    setDrafts(was, '');
+    setDraft(was, '');
   });
   // What was waiting comes back into the box, to send again or not.
   const stopping = createAction(async () => {

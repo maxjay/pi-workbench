@@ -17,10 +17,7 @@ const [kept, setKept] = createStore<Record<string, Session>>({});
 export type View = { id: string } | { file: string };
 const [view, setView] = createSignal<View>();
 
-/** What you were writing in each scratchpad, by its file or live id. */
-const [drafts, setDrafts] = createStore<Record<string, string>>({});
-
-export { drafts, kept, live, setDrafts, view };
+export { kept, live, view };
 
 /** The session the Scratchpad tab shows. */
 export function current(): Session | undefined {
@@ -28,9 +25,6 @@ export function current(): Session | undefined {
   if (!shown) return undefined;
   return 'id' in shown ? live[shown.id] : kept[shown.file];
 }
-
-/** Where a session's draft is kept: its file once Pi has one, so it survives Pi restarting. */
-export const draftKey = (session: Session) => session.state.file ?? session.id;
 
 const [saved, { refetch: reloadList }] = createResource(
   () => status() === 'ready',
