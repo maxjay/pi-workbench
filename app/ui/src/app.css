@@ -1849,17 +1849,50 @@ p {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
   border-radius: 8px 8px 0 0;
+}
+
+.viewer-tab [role="tab"] {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 10px;
   font-size: 12.5px;
   white-space: nowrap;
   color: var(--dim);
 }
 
-.viewer-tab[aria-selected="true"] {
+.viewer-tab[data-current="true"] {
   background: #33383d;
+}
+
+.viewer-tab[data-current="true"] [role="tab"] {
   color: #f4f2ed;
+}
+
+/* Shown on the tab you're on, and on any you point at. */
+.viewer-tab-close {
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--dim);
+  opacity: 0;
+}
+
+.viewer-tab[data-current="true"] .viewer-tab-close,
+.viewer-tab:hover .viewer-tab-close,
+.viewer-tab:focus-within .viewer-tab-close {
+  opacity: 1;
+}
+
+.viewer-tab-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
 }
 
 .viewer-badge {

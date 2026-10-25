@@ -71,6 +71,8 @@ export function Viewer(props: {
   tabs: string[];
   current: string;
   onPick: (path: string) => void;
+  /** Closes one file's tab; the last one closes the viewer. */
+  onCloseTab: (path: string) => void;
   onClose: () => void;
 }) {
   const [file] = createResource(
@@ -97,19 +99,28 @@ export function Viewer(props: {
         </button>
         <For each={props.tabs}>
           {(path) => (
-            <button
-              type="button"
-              role="tab"
-              class="viewer-tab"
-              aria-selected={path === props.current}
-              title={path}
-              onClick={() => props.onPick(path)}
-            >
-              <span class="mono">{name(path)}</span>
-              <span class="viewer-badge" data-new={isNew(props.session, path)}>
-                {isNew(props.session, path) ? 'New' : 'Edited'}
-              </span>
-            </button>
+            <div class="viewer-tab" data-current={path === props.current}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={path === props.current}
+                title={path}
+                onClick={() => props.onPick(path)}
+              >
+                <span class="mono">{name(path)}</span>
+                <span class="viewer-badge" data-new={isNew(props.session, path)}>
+                  {isNew(props.session, path) ? 'New' : 'Edited'}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="viewer-tab-close"
+                aria-label={`Close ${name(path)}`}
+                onClick={() => props.onCloseTab(path)}
+              >
+                <Icon name="close" size={9} />
+              </button>
+            </div>
           )}
         </For>
       </div>

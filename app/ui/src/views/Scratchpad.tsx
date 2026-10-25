@@ -72,6 +72,13 @@ export function Scratchpad() {
                   tabs={shown().tabs}
                   current={shown().current}
                   onPick={(path) => setViewing({ ...shown(), current: path })}
+                  onCloseTab={(path) => {
+                    const { tabs, current } = shown();
+                    const rest = tabs.filter((tab) => tab !== path);
+                    const next =
+                      path === current ? rest[Math.min(tabs.indexOf(path), rest.length - 1)] : current;
+                    setViewing(next ? { tabs: rest, current: next } : undefined);
+                  }}
                   onClose={() => setViewing()}
                 />
               )}
