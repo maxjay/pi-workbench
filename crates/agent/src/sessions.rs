@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use protocol::{Change, Event, FromAgent, Session, SessionSummary};
 use serde_json::json;
@@ -206,6 +206,31 @@ impl Sessions {
         }
         live.close().await;
         Ok(())
+    }
+
+    /// Stops Pi in sessions that have been idle for `after`, checking now
+    /// and then. Nothing is lost: the session stays in Pi's file, and
+    /// writing in it starts Pi again.
+    pub fn stop_idle(&self, after: Duration) {
+        let sessions = self.clone();
+        let every = (after / 2).clamp(Duration::from_millis(200), Duration::from_secs(60));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(every);
+            loop {
+                tick.tick().await;
+                let idle: Vec<Arc<Live>> = sessions
+                    .live
+                    .lock()
+                    .expect("not poisoned")
+                    .values()
+                    .filter(|live| live.idle_for().is_some_and(|idle| idle >= after))
+                    .cloned()
+                    .collect();
+                for live in idle {
+                    live.close().await;
+                }
+            }
+        });
     }
 
     /// Asks every Pi to exit, and waits a little for them to.

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::{Ask, AskKind, AskReply, Event, FromAgent, Session, SessionSummary};
 use serde_json::Value;
@@ -55,6 +55,8 @@ pub struct Live {
     replies: Waiting<Result<Value, String>>,
     /// `ask_user` questions waiting on an answer, by their ask's id.
     questions: Waiting<AskReply>,
+    /// When Pi last said or was told anything.
+    active: Mutex<Instant>,
 }
 
 impl Live {
@@ -109,6 +111,7 @@ impl Live {
             next: AtomicU64::new(1),
             replies: Mutex::default(),
             questions: Mutex::default(),
+            active: Mutex::new(Instant::now()),
         });
         let asking = listener.map(|(_, listener)| {
             let live = Arc::downgrade(&live);
@@ -174,6 +177,7 @@ impl Live {
     }
 
     async fn on_event(&self, event: PiEvent) {
+        *self.active.lock().expect("not poisoned") = Instant::now();
         if let PiEvent::Response {
             id: Some(id),
             error,
@@ -253,8 +257,22 @@ impl Live {
         Ok(())
     }
 
+    /// How long Pi has had nothing to do: not working, not waiting on an
+    /// answer, nothing queued, and nothing said either way. None while it
+    /// has something, however long that takes.
+    pub fn idle_for(&self) -> Option<Duration> {
+        let transcript = self.transcript.lock().expect("not poisoned");
+        let state = &transcript.state;
+        if state.busy || state.ask.is_some() || !state.queued.is_empty() || state.stopped.is_some()
+        {
+            return None;
+        }
+        Some(self.active.lock().expect("not poisoned").elapsed())
+    }
+
     /// Writes one command to Pi.
     pub async fn send(&self, command: Value) -> Result<(), Error> {
+        *self.active.lock().expect("not poisoned") = Instant::now();
         let mut stdin = self.stdin.lock().await;
         let stdin = stdin
             .as_mut()

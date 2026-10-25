@@ -43,6 +43,7 @@ async fn main() {
     });
 
     let ctx = router::Ctx::from_env(out.clone());
+    ctx.sessions.stop_idle(config::idle_after());
     let _ = out.send(FromAgent::Event(Event::Ready {
         version: env!("CARGO_PKG_VERSION").into(),
     }));

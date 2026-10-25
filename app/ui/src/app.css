@@ -1102,10 +1102,23 @@ p {
 }
 
 .notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   font-size: 13px;
   line-height: 1.5;
   color: var(--dim);
   white-space: pre-wrap;
+}
+
+.notice-text {
+  flex: 1;
+  min-width: 240px;
+}
+
+.notice-action {
+  height: 28px;
 }
 
 .notice[data-tone="warning"] {
@@ -1116,7 +1129,7 @@ p {
 }
 
 .notice[data-tone="error"] {
-  padding: 10px 12px;
+  padding: 10px 10px 10px 12px;
   border-radius: 10px;
   background: rgba(233, 150, 139, 0.12);
   color: var(--red);

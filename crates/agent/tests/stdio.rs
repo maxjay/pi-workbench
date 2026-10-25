@@ -40,6 +40,10 @@ struct Agent {
 
 impl Agent {
     fn start() -> Agent {
+        Agent::start_with(&[])
+    }
+
+    fn start_with(env: &[(&str, &str)]) -> Agent {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
@@ -52,6 +56,7 @@ impl Agent {
             .env("PATH", &bin)
             .env("WB_SCRATCH_DIR", dir.path().join("scratch"))
             .env("WB_DATA_DIR", dir.path().join("data"))
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -236,4 +241,17 @@ fn asks_the_question_tools_questions() {
     let mut back = String::new();
     BufReader::new(&tool).read_line(&mut back).unwrap();
     assert_eq!(back.trim(), r#"{"answers":["Tonight"]}"#);
+}
+
+#[test]
+fn stops_pi_once_its_been_idle() {
+    let mut agent = Agent::start_with(&[("WB_IDLE_SECS", "1")]);
+    agent.receive();
+    let start = r#"{"id":1,"method":"session.start","params":{"cwd":null,"text":"hello"}}"#;
+    writeln!(agent.stdin, "{start}").unwrap();
+    let reply = agent.until(|line| line["type"] == "reply" && line["id"] == 1);
+    let id = reply["ok"]["id"].as_str().unwrap().to_string();
+    // The run settles, a second goes by with nothing to do, and Pi stops.
+    let closed = agent.until(|line| line["change"]["change"] == "closed");
+    assert_eq!(closed["id"], id.as_str());
 }

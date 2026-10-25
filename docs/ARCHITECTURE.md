@@ -99,6 +99,11 @@ a terminal does. Scratchpads each get a folder under
   and remembers what changed. It's pure, so it's tested line by line.
 - `session.rs` owns the process: a task reads Pi's output into the
   transcript and sends the changes.
+- No Pi runs until you start a scratchpad or write in one, and wb-agent
+  stops a session's Pi once it has been idle for 30 minutes
+  (`WB_IDLE_SECS`): not working, not waiting on an answer, nothing queued,
+  nothing said. A run that takes hours is never idle. Writing in it again
+  starts Pi again.
 - `store.rs` lists saved sessions from Pi's own store, and reads one's
   current branch so a saved scratchpad shows without starting Pi. wb-agent
   keeps no copy of any conversation: writing in a saved one runs

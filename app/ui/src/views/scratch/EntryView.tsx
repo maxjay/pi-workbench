@@ -19,6 +19,8 @@ export function EntryView(props: {
   /** The newest entry of a run still going. */
   last: boolean;
   onOpenFile: (path: string) => void;
+  /** Offered on an error that ended the conversation so far. */
+  onRetry?: () => void;
 }) {
   return (
     <Switch>
@@ -44,9 +46,16 @@ export function EntryView(props: {
       </Match>
       <Match when={of(props.entry, 'notice')}>
         {(entry) => (
-          <p class="notice" data-tone={entry().tone} role={entry().tone === 'error' ? 'alert' : 'status'}>
-            {entry().text}
-          </p>
+          <div class="notice" data-tone={entry().tone} role={entry().tone === 'error' ? 'alert' : 'status'}>
+            <span class="notice-text">{entry().text}</span>
+            <Show when={props.onRetry}>
+              {(retry) => (
+                <button type="button" class="button button-primary notice-action" onClick={() => retry()()}>
+                  Try again
+                </button>
+              )}
+            </Show>
+          </div>
         )}
       </Match>
     </Switch>

@@ -9,7 +9,7 @@ import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
 import { draftKey, setDraft } from '../../state/drafts';
-import { reopen, setDone, unqueue } from '../../state/sessions';
+import { reopen, send, setDone, unqueue } from '../../state/sessions';
 import { AskCard } from './AskCard';
 import { Composer } from './Composer';
 import { EntryView } from './EntryView';
@@ -43,6 +43,20 @@ export function Conversation(props: {
     const file = state().file;
     if (file) await reopen(file);
   });
+  // Pi has no retry of its own once it gives up: asking again is the way.
+  const retry = createAction(() => send(props.session, 'Try again', false));
+  const canRetry = (i: number) => {
+    const entry = props.session.entries[i];
+    const state = props.session.state;
+    return (
+      i === props.session.entries.length - 1 &&
+      entry.kind === 'notice' &&
+      entry.tone === 'error' &&
+      !state.busy &&
+      !state.ask &&
+      !state.stopped
+    );
+  };
   const takeBack = createAction(async (index: number, edit: boolean) => {
     const item = state().queued[index];
     await unqueue(props.session.id, index);
@@ -133,7 +147,7 @@ export function Conversation(props: {
           )}
         </Show>
       </header>
-      <ErrorNote error={done.error()} />
+      <ErrorNote error={done.error() ?? retry.error()} />
 
       <div
         class="log"
@@ -150,6 +164,7 @@ export function Conversation(props: {
                 cwd={state().cwd}
                 last={i() === props.session.entries.length - 1 && state().busy}
                 onOpenFile={props.onOpenFile}
+                onRetry={canRetry(i()) && !retry.busy() ? () => void retry.run() : undefined}
               />
             )}
           </For>

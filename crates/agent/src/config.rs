@@ -35,6 +35,16 @@ pub fn data_dir() -> PathBuf {
     data.join("pi-workbench")
 }
 
+/// How long a session's Pi may sit idle before wb-agent stops it:
+/// `WB_IDLE_SECS`, or 30 minutes.
+pub fn idle_after() -> std::time::Duration {
+    let secs = std::env::var("WB_IDLE_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .unwrap_or(30 * 60);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Where scratchpads get their folders: `WB_SCRATCH_DIR`, or `scratchpads`
 /// in [`data_dir`].
 pub fn scratch_dir() -> PathBuf {
