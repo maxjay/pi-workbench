@@ -68,7 +68,9 @@ and says things on its own as events:
   `session.start`, `session.open`, `session.read`, `session.get`,
   `session.send`, `session.unqueue`, `session.abort`, `session.answer`,
   `session.models`, `session.setModel`, `session.setThinking`,
-  `session.commands`, `session.close`; `files.list`, `file.read`.
+  `session.commands`, `session.close`; `tasks.list`, `tasks.save`,
+  `tasks.setPaused`, `tasks.pauseAll`, `tasks.run`, `tasks.stop`,
+  `tasks.scheduleFrom`; `files.list`, `file.read`.
 - Each answer has a `kind`, and `ask(call, kind)` in `app/ui/src/agent.ts`
   checks the answer is the kind it expected.
 - Error codes are `badRequest`, `io`, `invalid` and `notFound`. A line
@@ -78,6 +80,8 @@ and says things on its own as events:
   the session's state, the whole conversation after loading it, or that it
   closed. Fast output is gathered up and sent every 40 ms, so a reply
   streaming word by word is about 25 messages a second, not hundreds.
+- Whenever a task or one of its runs changes, wb-agent sends every task
+  as `{"type":"event","event":"tasks","list":…}`.
 - `cargo test -p protocol` writes the TypeScript types. CI fails if they
   differ from what's committed.
 
@@ -124,6 +128,29 @@ wb-agent's own files (`done.json`, the extension) live in
 `~/.local/share/pi-workbench`, or `WB_DATA_DIR`; scratchpad folders in
 `scratchpads` there, or `WB_SCRATCH_DIR`.
 
+## Tasks
+
+A task is a prompt Pi runs at set times, every few hours, or only when you
+run it. `tasks.rs` keeps them and their runs in `tasks.json`, in wb-agent's
+folder, and gives each a folder of its own to work in under `tasks/`.
+
+- Every 20 seconds it looks for runs that are due, in local time
+  (`schedule.rs`, with jiff). A run whose time passed while wb-agent wasn't
+  running, or while tasks were paused, runs once, late, however many it
+  missed. One due while another run is going is skipped.
+- A run is a prompt in a Pi session: the task's one session if it
+  continues one, or a new one each run. wb-agent follows it until it ends:
+  running, waiting on your answer, done (with a line from Pi's reply and
+  the files it wrote), failed or stopped. Each run knows where it starts in
+  its session's conversation, so the page can show where each begins.
+- Tasks only run while wb-agent does, so the app keeps it running: closing
+  the window keeps the app in the tray, it starts in the tray when you sign
+  in, and only one copy runs (`app/src-tauri/src/background.rs`). The page
+  tells the tray how many tasks wait on you; the tray's Pause all goes back
+  through the page.
+- Windows notifications aren't sent yet: the page highlights a run that
+  needs you or failed, and `notify_run` is where they'll go.
+
 ## Layout
 
 ```
@@ -142,12 +169,15 @@ crates/
     src/sessions.rs  the live sessions; starting, resuming, listing
     src/store.rs     Pi's saved sessions
     src/done.rs      which scratchpads are done
+    src/tasks.rs     tasks: kept, due, run and followed
+    src/schedule.rs  when a schedule is due, in local time
     src/question.rs  the question tool's socket; ask_user.ts is the tool
     src/files.rs     files opened for viewing
     tests/stdio.rs   the real binary, spoken to in lines, with a fake pi
 app/
   src-tauri/         the app: start wb-agent, carry lines
     src/agent.rs     the child process
+    src/background.rs  the tray, closing to it, starting at sign-in
     src/launch.rs    which wb-agent to run
     src/wsl.rs       Windows only: run in WSL, install the bundled wb-agent
   ui/
@@ -208,10 +238,10 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
 
 1. **Browser shell:** tabs, Home, Ctrl K, Settings for Pi's instructions,
    MCP servers and models.
-2. **Scratchpad** (done) **and tasks:** Pi sessions in folders of their
-   own; then prompts Pi runs on a schedule, which keep running with the
-   window closed: the app stays in the tray, holding wb-agent, and starts
-   when you sign in.
+2. **Scratchpad and tasks** (done): Pi sessions in folders of their own;
+   prompts Pi runs on a schedule, which keep running with the window
+   closed: the app stays in the tray, holding wb-agent, and starts when you
+   sign in.
 3. **Codespaces:** a folder in WSL with its files, editor and terminals.
 4. **Sessions** inside codespaces.
 5. **Subagents.**

@@ -2818,3 +2818,43 @@ textarea.input {
   font-size: 12.5px;
   line-height: 1.5;
 }
+
+/* Settings › Background */
+
+.settings-line {
+  height: 1px;
+  margin: 10px 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tray-sketch {
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 10px;
+  background: #202326;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+
+.tray-sketch > span {
+  padding: 7px 12px;
+}
+
+.tray-sketch .tray-sketch-first {
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 600;
+}
+
+.tray-sketch .tray-sketch-waiting {
+  color: var(--blue);
+}
+
+.tray-sketch .tray-sketch-line {
+  height: 1px;
+  margin: 4px 8px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+}

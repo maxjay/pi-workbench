@@ -8,7 +8,8 @@ import { openPalette } from './Palette';
 
 export function Toolbar() {
   const where = () => {
-    if (active() === 'settings') return ['Settings', `› ${sections.find((s) => s.id === section())?.title}`];
+    if (active() === 'settings')
+      return ['Settings', `› ${sections.find((s) => s.id === section())?.title ?? 'Background'}`];
     if (active() === 'scratch') {
       const pad = current()?.state.title;
       return ['Scratchpad', pad ? `› ${pad}` : ''];

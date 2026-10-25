@@ -5,6 +5,7 @@ import { Match, onCleanup, onMount, Switch } from 'solid-js';
 import { closePalette, openPalette, Palette } from './components/Palette';
 import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
+import './state/app';
 import { active, close, open, taskOf } from './state/tabs';
 import { Home } from './views/Home';
 import { Scratchpad } from './views/Scratchpad';
