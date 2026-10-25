@@ -20,8 +20,8 @@ export function createPicker(props: {
   const [caret, setCaret] = createSignal(0);
   const [closed, setClosed] = createSignal<string>();
   const [index, setIndex] = createSignal(0);
-  /** What was picked into the text, shown highlighted and deleted whole. */
-  const [mentions, setMentions] = createSignal<string[]>([]);
+  /** What was picked into the text, highlighted even before the folder's files are in. */
+  const [picked, setPicked] = createSignal<string[]>([]);
   const before = () => props.text().slice(0, caret());
   const wants = () => {
     if (/^\/\S*$/.test(before())) return 'commands';
@@ -32,9 +32,17 @@ export function createPicker(props: {
   // Read afresh each time the list opens, as Pi may have written files since.
   const [opened, setOpened] = createSignal(0);
   createEffect(on(wants, (now, was) => now && now !== was && setOpened(opened() + 1)));
+  // The folder's files, also read when there's an @word to check against them.
+  const [known, setKnown] = createSignal<{ dir: string; paths: Set<string> }>();
+  const unchecked = () => /(^|\s)@\S/.test(props.text()) && known()?.dir !== props.session().state.cwd;
   const [files] = createResource(
-    () => (wants() === 'files' ? { dir: props.session().state.cwd, opened: opened() } : undefined),
-    async ({ dir }) => (await listFiles(dir)).paths,
+    () =>
+      wants() === 'files' || unchecked() ? { dir: props.session().state.cwd, opened: opened() } : undefined,
+    async ({ dir }) => {
+      const { paths } = await listFiles(dir);
+      setKnown({ dir, paths: new Set(paths) });
+      return paths;
+    },
   );
   const [commands] = createResource(
     () =>
@@ -52,6 +60,25 @@ export function createPicker(props: {
     },
   );
 
+  /**
+   * What's highlighted and deleted whole: picked mentions, every @word
+   * that's a file in the folder, and a /word at the start that's one of
+   * Pi's commands, typed or picked.
+   */
+  const mentions = () => {
+    const text = props.text();
+    const found = new Set(picked());
+    const folder = known();
+    if (folder?.dir === props.session().state.cwd) {
+      for (const word of text.matchAll(/(?:^|\s)@(\S+)/g))
+        if (folder.paths.has(word[1])) found.add(`@${word[1]}`);
+    }
+    const command = /^\/(\S+)/.exec(text);
+    if (command && (commands.latest ?? knownCommands()).some((c) => c.name === command[1]))
+      found.add(`/${command[1]}`);
+    return [...found];
+  };
+
   const current = () => {
     if (!wants() || closed() === before()) return undefined;
     return picker(before(), files.latest ?? [], commands.latest ?? knownCommands());
@@ -66,7 +93,7 @@ export function createPicker(props: {
     const next = before().slice(0, start) + choice.insert + props.text().slice(caret());
     const end = start + choice.insert.length;
     const mention = choice.insert.trimEnd();
-    if (!mentions().includes(mention)) setMentions([...mentions(), mention]);
+    if (!picked().includes(mention)) setPicked([...picked(), mention]);
     props.setText(next);
     setCaret(end);
     setIndex(0);
