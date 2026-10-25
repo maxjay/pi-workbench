@@ -1,5 +1,5 @@
 //! Files opened for viewing: text as text, images as images, and anything
-//! else described rather than sent.
+//! else described rather than sent. And the files in a folder, for `@`.
 
 use std::io::Read;
 use std::path::Path;
@@ -11,6 +11,59 @@ use protocol::{FileContent, FileView};
 const TEXT_LIMIT: usize = 512 * 1024;
 /// Images larger than this aren't sent.
 const IMAGE_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// No more paths than this are listed.
+const LIST_LIMIT: usize = 5000;
+
+/// Folders a file search skips, as nobody means a file in them.
+const SKIPPED: [&str; 6] = [
+    "node_modules",
+    "target",
+    "__pycache__",
+    "venv",
+    "dist",
+    "build",
+];
+
+/// The files under `dir`, as paths relative to it, sorted, skipping hidden
+/// files and folders and ones like `node_modules`. True when there were
+/// more than [`LIST_LIMIT`].
+pub fn list(dir: &Path) -> (Vec<String>, bool) {
+    let mut paths = Vec::new();
+    let mut folders = vec![dir.to_path_buf()];
+    let mut truncated = false;
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                if !SKIPPED.contains(&name.as_ref()) {
+                    folders.push(path);
+                }
+            } else if paths.len() >= LIST_LIMIT {
+                truncated = true;
+                break;
+            } else if let Ok(relative) = path.strip_prefix(dir) {
+                paths.push(relative.display().to_string());
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+    paths.sort();
+    (paths, truncated)
+}
 
 pub fn read(path: &Path) -> std::io::Result<FileView> {
     let view = |content| FileView {
@@ -62,6 +115,26 @@ fn image_type(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_a_folder_but_not_whats_hidden_or_built() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "plan.md",
+            "notes/a.md",
+            ".git/HEAD",
+            "node_modules/x/i.js",
+            ".env",
+        ] {
+            let path = dir.path().join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+        assert_eq!(
+            list(dir.path()),
+            (vec!["notes/a.md".into(), "plan.md".into()], false)
+        );
+    }
 
     #[test]
     fn reads_text_images_and_binaries() {

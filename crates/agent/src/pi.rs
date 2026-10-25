@@ -3,7 +3,7 @@
 //! workbench uses is read; everything else is [`PiEvent::Other`].
 //! See Pi's docs/rpc.md and docs/json.md.
 
-use protocol::{Ask, AskKind, AskReply, Tone};
+use protocol::{Ask, AskKind, AskReply, PiCommand, Tone};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -236,6 +236,22 @@ fn ui_request(value: &Value) -> PiEvent {
     }
 }
 
+/// The commands in `get_commands`'s reply.
+pub fn commands(data: &Value) -> Vec<PiCommand> {
+    data["commands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| {
+            Some(PiCommand {
+                name: command["name"].as_str()?.to_string(),
+                description: command["description"].as_str().map(str::to_string),
+                source: text(command, "source"),
+            })
+        })
+        .collect()
+}
+
 // Commands. Each is one line; replies come back as `response` events.
 
 pub fn command(kind: &str) -> Value {
@@ -350,6 +366,20 @@ mod tests {
                 text: "Careful".into(),
                 tone: Tone::Warning
             })
+        );
+    }
+
+    #[test]
+    fn reads_commands() {
+        let data = serde_json::json!({ "commands": [
+            { "name": "skill:grafana", "description": "Dashboards", "source": "skill" },
+            { "description": "no name" },
+        ]});
+        let found = commands(&data);
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0].name.as_str(), found[0].source.as_str()),
+            ("skill:grafana", "skill")
         );
     }
 

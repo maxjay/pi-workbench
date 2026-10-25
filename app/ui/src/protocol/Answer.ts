@@ -5,10 +5,11 @@ import type { FileView } from "./FileView";
 import type { Health } from "./Health";
 import type { McpServer } from "./McpServer";
 import type { Models } from "./Models";
+import type { PiCommand } from "./PiCommand";
 import type { Session } from "./Session";
 import type { SessionSummary } from "./SessionSummary";
 
 /**
  * A successful reply, by kind.
  */
-export type Answer = { "kind": "health" } & Health | { "kind": "config" } & ConfigText | { "kind": "mcp", servers: Array<McpServer>, } | { "kind": "models" } & Models | { "kind": "sessions", sessions: Array<SessionSummary>, } | { "kind": "session" } & Session | { "kind": "available", models: Array<Available>, } | { "kind": "unsent", texts: Array<string>, } | { "kind": "file" } & FileView | { "kind": "done" };
+export type Answer = { "kind": "health" } & Health | { "kind": "config" } & ConfigText | { "kind": "mcp", servers: Array<McpServer>, } | { "kind": "models" } & Models | { "kind": "sessions", sessions: Array<SessionSummary>, } | { "kind": "session" } & Session | { "kind": "available", models: Array<Available>, } | { "kind": "paths", paths: Array<string>, truncated: boolean, } | { "kind": "commands", commands: Array<PiCommand>, } | { "kind": "unsent", texts: Array<string>, } | { "kind": "file" } & FileView | { "kind": "done" };

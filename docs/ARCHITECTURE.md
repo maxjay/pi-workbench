@@ -67,7 +67,7 @@ and says things on its own as events:
   `session.start`, `session.open`, `session.read`, `session.get`,
   `session.send`, `session.unqueue`, `session.abort`, `session.answer`,
   `session.models`, `session.setModel`, `session.setThinking`,
-  `session.close`; `file.read`.
+  `session.commands`, `session.close`; `files.list`, `file.read`.
 - Each answer has a `kind`, and `ask(call, kind)` in `app/ui/src/agent.ts`
   checks the answer is the kind it expected.
 - Error codes are `badRequest`, `io`, `invalid` and `notFound`. A line

@@ -192,6 +192,20 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.sessions.close(&id).await?;
             Answer::Done
         }
+        Call::FilesList { dir } => {
+            let (paths, truncated) = files::list(&PathBuf::from(dir));
+            Answer::Paths { paths, truncated }
+        }
+        Call::SessionCommands { id } => {
+            let data = ctx
+                .sessions
+                .get(&id)?
+                .request(pi::command("get_commands"))
+                .await?;
+            Answer::Commands {
+                commands: pi::commands(&data),
+            }
+        }
         Call::FileRead { session, path } => {
             let path = match PathBuf::from(&path) {
                 path if path.is_absolute() => path,

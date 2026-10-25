@@ -222,3 +222,13 @@ export async function setDone(file: string, done: boolean) {
 export function readFile(session: Session, path: string) {
   return ask({ method: 'file.read', params: { session: session.id, path } }, 'file');
 }
+
+/** The files under a folder, relative to it, for `@`. */
+export function listFiles(dir: string) {
+  return ask({ method: 'files.list', params: { dir } }, 'paths');
+}
+
+/** The commands `/` runs in a live session. */
+export async function commandsFor(id: string) {
+  return (await ask({ method: 'session.commands', params: { id } }, 'commands')).commands;
+}

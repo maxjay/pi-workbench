@@ -255,6 +255,17 @@ pub struct Available {
     pub context_window: Option<u64>,
 }
 
+/// A command `/` runs in a session.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PiCommand {
+    /// Without the `/`, e.g. `skill:grafana`.
+    pub name: String,
+    pub description: Option<String>,
+    /// `extension`, `prompt` or `skill`.
+    pub source: String,
+}
+
 /// A file opened for viewing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]

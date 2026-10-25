@@ -1,7 +1,8 @@
 // Where you talk to Pi, as in a terminal: Enter sends, and while Pi works
 // it steers the run; Alt+Enter waits for the run to finish instead; Escape
-// stops it. `/` runs Pi's commands and `!` the shell. The model and
-// thinking level for this conversation open from the chip below.
+// stops it. `@` finds a file, `/` one of Pi's commands, and `!` runs the
+// shell. The model and thinking level for this conversation open from the
+// chip below.
 
 import { createEffect, createSignal, Show } from 'solid-js';
 import { createAction } from '../../components/action';
@@ -10,12 +11,15 @@ import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
 import { abort, draftKey, drafts, send, setDrafts } from '../../state/sessions';
 import { learnModels, ModelMenu, modelLabel } from './ModelMenu';
+import { createPicker } from './Picker';
 
 export function Composer(props: { session: Session }) {
   const key = () => draftKey(props.session);
   const text = () => drafts[key()] ?? '';
   const setText = (value: string) => setDrafts(key(), value);
   const [menu, setMenu] = createSignal(false);
+  let box: HTMLTextAreaElement | undefined;
+  const pick = createPicker({ session: () => props.session, text, setText, box: () => box });
   createEffect(() => {
     if (props.session.id) learnModels(props.session.id).catch(() => {});
   });
@@ -35,6 +39,11 @@ export function Composer(props: { session: Session }) {
   });
 
   const onKey = (e: KeyboardEvent) => {
+    if (pick.onKey(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void sending.run(e.altKey);
@@ -57,14 +66,22 @@ export function Composer(props: { session: Session }) {
         <Show when={menu()}>
           <ModelMenu session={props.session} onClose={() => setMenu(false)} />
         </Show>
+        {pick.view()}
         <textarea
+          ref={box}
           class="composer-input"
           rows={2}
           aria-label="Message Pi"
           placeholder={placeholder()}
           value={text()}
           disabled={stopped()}
-          onInput={(e) => setText(e.currentTarget.value)}
+          onInput={(e) => {
+            setText(e.currentTarget.value);
+            pick.follow(e.currentTarget);
+            pick.reset();
+          }}
+          onKeyUp={(e) => pick.follow(e.currentTarget)}
+          onClick={(e) => pick.follow(e.currentTarget)}
           onKeyDown={onKey}
         />
         <div class="composer-bar">
@@ -90,7 +107,8 @@ export function Composer(props: { session: Session }) {
             fallback={
               <>
                 <span class="composer-hint">
-                  <span class="mono">/</span> commands · <span class="mono">!</span> shell
+                  <span class="mono">/</span> commands · <span class="mono">@</span> files ·{' '}
+                  <span class="mono">!</span> shell
                 </span>
                 <button
                   type="button"

@@ -111,6 +111,13 @@ pub enum Call {
     /// Stop Pi for this session once it's idle. Its file stays.
     #[serde(rename = "session.close")]
     SessionClose { id: String },
+    /// The files under a folder, for `@` in the box you write in.
+    #[serde(rename = "files.list")]
+    FilesList { dir: String },
+    /// The commands `/` runs in this session: extension commands, prompt
+    /// templates and skills.
+    #[serde(rename = "session.commands")]
+    SessionCommands { id: String },
     /// A file, for viewing. A relative path is taken from the live session's
     /// folder; an absolute one needs no session.
     #[serde(rename = "file.read")]
@@ -161,6 +168,15 @@ pub enum Answer {
     Session(Box<Session>),
     Available {
         models: Vec<Available>,
+    },
+    /// Paths relative to the folder asked about, in order. `truncated` when
+    /// there were too many to send them all.
+    Paths {
+        paths: Vec<String>,
+        truncated: bool,
+    },
+    Commands {
+        commands: Vec<PiCommand>,
     },
     /// Messages taken back before Pi saw them, oldest first.
     Unsent {
