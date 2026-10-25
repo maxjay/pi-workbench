@@ -79,6 +79,17 @@ pub fn write(dir: &Path, file: ConfigFile, text: &str) -> Result<(), Error> {
     std::fs::rename(&temp, &path).map_err(|err| Error::io(&path, err))
 }
 
+/// Writes one of wb-agent's own files the same way: through a temporary
+/// file beside it, so a crash never leaves half of one.
+pub fn write_file(path: &Path, text: &str) -> Result<(), Error> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|err| Error::io(dir, err))?;
+    }
+    let temporary = path.with_extension("wb-tmp");
+    std::fs::write(&temporary, text).map_err(|err| Error::io(&temporary, err))?;
+    std::fs::rename(&temporary, path).map_err(|err| Error::io(path, err))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2,7 +2,7 @@
 //! keeps it: a list of session files, in a JSON file of its own.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::json;
 
@@ -45,20 +45,10 @@ impl Done {
             all.remove(file)
         };
         if changed {
-            write(&self.path, &json!({ "done": all }).to_string())?;
+            crate::config::write_file(&self.path, &json!({ "done": all }).to_string())?;
         }
         Ok(())
     }
-}
-
-/// Through a temporary file, so a crash never leaves half of one.
-fn write(path: &Path, text: &str) -> Result<(), Error> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|err| Error::io(dir, err))?;
-    }
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(&temporary, text).map_err(|err| Error::io(&temporary, err))?;
-    std::fs::rename(&temporary, path).map_err(|err| Error::io(path, err))
 }
 
 #[cfg(test)]

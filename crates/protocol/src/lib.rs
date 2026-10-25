@@ -10,9 +10,11 @@ use ts_rs::TS;
 
 mod config;
 mod session;
+mod task;
 
 pub use config::*;
 pub use session::*;
+pub use task::*;
 
 /// A call from the workbench, with the id its reply will carry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -118,6 +120,27 @@ pub enum Call {
     /// templates and skills.
     #[serde(rename = "session.commands")]
     SessionCommands { id: String },
+    /// Every task, with its runs.
+    #[serde(rename = "tasks.list")]
+    TasksList,
+    /// Make a task, or change one.
+    #[serde(rename = "tasks.save")]
+    TasksSave { task: TaskInput },
+    /// Pause one task, or resume it.
+    #[serde(rename = "tasks.setPaused")]
+    TasksSetPaused { id: String, paused: bool },
+    /// Pause every task, or resume them. Runs they miss happen on resuming.
+    #[serde(rename = "tasks.pauseAll")]
+    TasksPauseAll { paused: bool },
+    /// Run a task now.
+    #[serde(rename = "tasks.run")]
+    TasksRun { id: String },
+    /// Stop a task's run.
+    #[serde(rename = "tasks.stop")]
+    TasksStop { id: String },
+    /// A schedule from a description in words, worked out by Pi.
+    #[serde(rename = "tasks.scheduleFrom")]
+    TasksScheduleFrom { words: String },
     /// A file, for viewing. A relative path is taken from the live session's
     /// folder; an absolute one needs no session.
     #[serde(rename = "file.read")]
@@ -169,6 +192,12 @@ pub enum Answer {
     Available {
         models: Vec<Available>,
     },
+    Tasks {
+        list: TaskList,
+    },
+    Schedule {
+        schedule: Schedule,
+    },
     /// Paths relative to the folder asked about, in order. `truncated` when
     /// there were too many to send them all.
     Paths {
@@ -219,6 +248,8 @@ pub enum Event {
     Ready { version: String },
     /// Something changed in a live session.
     Session { id: String, change: Change },
+    /// The tasks, after any of them or their runs changed.
+    Tasks { list: TaskList },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

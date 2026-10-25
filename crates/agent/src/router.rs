@@ -4,30 +4,38 @@
 
 use std::path::PathBuf;
 
-use protocol::{Answer, Call, ConfigFile, Outcome};
+use protocol::{Answer, Call, ConfigFile, Outcome, Trigger};
 
 use crate::error::Error;
 use crate::session::Out;
 use crate::sessions::Sessions;
+use crate::tasks::Tasks;
 use crate::{config, files, health, mcp, models, pi};
 
-/// What every handler needs: where Pi keeps its files, and the sessions.
+/// What every handler needs: where Pi keeps its files, the sessions and
+/// the tasks.
 pub struct Ctx {
     pub agent_dir: PathBuf,
+    pub data_dir: PathBuf,
     pub sessions: Sessions,
+    pub tasks: Tasks,
 }
 
 impl Ctx {
     pub fn from_env(out: Out) -> Self {
         let agent_dir = config::agent_dir();
+        let data_dir = config::data_dir();
+        let sessions = Sessions::new(
+            out.clone(),
+            agent_dir.clone(),
+            config::scratch_dir(),
+            data_dir.clone(),
+        );
         Ctx {
-            sessions: Sessions::new(
-                out,
-                agent_dir.clone(),
-                config::scratch_dir(),
-                config::data_dir(),
-            ),
+            tasks: Tasks::new(&data_dir, sessions.clone(), out),
+            sessions,
             agent_dir,
+            data_dir,
         }
     }
 }
@@ -192,6 +200,30 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.sessions.close(&id).await?;
             Answer::Done
         }
+        Call::TasksList => Answer::Tasks {
+            list: ctx.tasks.list(),
+        },
+        Call::TasksSave { task } => Answer::Tasks {
+            list: ctx.tasks.save(task)?,
+        },
+        Call::TasksSetPaused { id, paused } => Answer::Tasks {
+            list: ctx.tasks.set_paused(&id, paused)?,
+        },
+        Call::TasksPauseAll { paused } => Answer::Tasks {
+            list: ctx.tasks.pause_all(paused).await,
+        },
+        Call::TasksRun { id } => Answer::Tasks {
+            list: ctx.tasks.run(&id, Trigger::Now).await?,
+        },
+        Call::TasksStop { id } => Answer::Tasks {
+            list: ctx.tasks.stop(&id).await?,
+        },
+        Call::TasksScheduleFrom { words } => Answer::Schedule {
+            schedule: ctx
+                .tasks
+                .schedule_from(&words, &ctx.data_dir.join("pi"))
+                .await?,
+        },
         Call::FilesList { dir } => {
             let (paths, truncated) = files::list(&PathBuf::from(dir));
             Answer::Paths { paths, truncated }

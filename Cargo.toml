@@ -17,6 +17,7 @@ ts-rs = "12"
 tokio = { version = "1", features = ["rt", "macros", "io-std", "io-util", "process", "sync", "time", "net"] }
 tempfile = "3"
 base64 = "0.22"
+jiff = "0.2"
 
 [profile.release]
 lto = "thin"

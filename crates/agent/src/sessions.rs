@@ -52,6 +52,11 @@ impl Sessions {
         }
     }
 
+    /// The program each session runs: `WB_PI`, or `pi`.
+    pub fn pi(&self) -> &Path {
+        &self.pi
+    }
+
     pub fn get(&self, id: &str) -> Result<Arc<Live>, Error> {
         self.live
             .lock()

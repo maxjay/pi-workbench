@@ -3866,6 +3866,7 @@ name = "wb-agent"
 version = "1.0.0-alpha.3"
 dependencies = [
  "base64 0.22.1",
+ "jiff",
  "protocol",
  "serde",
  "serde_json",

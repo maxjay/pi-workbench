@@ -312,6 +312,12 @@ impl Live {
         }
     }
 
+    /// Reads the transcript in place, for questions about it that don't
+    /// need a copy of the whole conversation.
+    pub fn look<R>(&self, read: impl FnOnce(&Transcript) -> R) -> R {
+        read(&self.transcript.lock().expect("not poisoned"))
+    }
+
     pub fn snapshot(&self) -> Session {
         self.flush();
         self.transcript

@@ -14,9 +14,11 @@ mod models;
 mod pi;
 mod question;
 mod router;
+mod schedule;
 mod session;
 mod sessions;
 mod store;
+mod tasks;
 mod transcript;
 
 use protocol::{Event, FailureCode, FromAgent, Outcome, Reply, Request};
@@ -44,6 +46,7 @@ async fn main() {
 
     let ctx = router::Ctx::from_env(out.clone());
     ctx.sessions.stop_idle(config::idle_after());
+    ctx.tasks.start();
     let _ = out.send(FromAgent::Event(Event::Ready {
         version: env!("CARGO_PKG_VERSION").into(),
     }));
