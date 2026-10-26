@@ -4,4 +4,4 @@ import type { Schedule } from "./Schedule";
 /**
  * A task to make, or, with an id, to change.
  */
-export type TaskInput = { id: string | null, name: string, prompt: string, schedule: Schedule, continuing: boolean, };
+export type TaskInput = { id: string | null, name: string, prompt: string, schedule: Schedule, continuing: boolean, codespace: string | null, };

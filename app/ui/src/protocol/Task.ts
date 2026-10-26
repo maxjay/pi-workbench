@@ -14,6 +14,10 @@ prompt: string, schedule: Schedule,
  */
 continuing: boolean, paused: boolean, 
 /**
- * The folder Pi works in, which is the task's own.
+ * The task's own folder, where Pi works unless it has a codespace.
  */
-folder: string, };
+folder: string, 
+/**
+ * A codespace's folder to work in instead, absolute.
+ */
+codespace: string | null, };

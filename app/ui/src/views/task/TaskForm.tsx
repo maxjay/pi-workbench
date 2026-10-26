@@ -9,6 +9,7 @@ import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Schedule } from '../../protocol/Schedule';
 import type { TaskView } from '../../protocol/TaskView';
+import { codespaces } from '../../state/codespaces';
 import { close, replace } from '../../state/tabs';
 import { saveTask, scheduleFrom } from '../../state/tasks';
 import { days, scheduleWords } from './words';
@@ -25,6 +26,7 @@ export function TaskForm(props: { view?: TaskView; onDone?: () => void }) {
   const [time, setTime] = createSignal(old?.kind === 'at' ? old.time : '09:00');
   const [hours, setHours] = createSignal(old?.kind === 'every' ? old.hours : 2);
   const [continuing, setContinuing] = createSignal(task?.continuing ?? true);
+  const [space, setSpace] = createSignal(task?.codespace ?? '');
   const [words, setWords] = createSignal('');
   const [filled, setFilled] = createSignal<string>();
 
@@ -60,6 +62,7 @@ export function TaskForm(props: { view?: TaskView; onDone?: () => void }) {
       prompt: prompt(),
       schedule: schedule(),
       continuing: continuing(),
+      codespace: space() || null,
     });
     if (task) props.onDone?.();
     else if (id) replace('newtask', `task:${id}`);
@@ -258,14 +261,17 @@ export function TaskForm(props: { view?: TaskView; onDone?: () => void }) {
         <div class="field-row field-row-top">
           <label class="form-field field-half">
             <span>Runs in</span>
-            <select class="input" disabled>
-              <option>No codespace</option>
+            <select class="input" value={space()} onChange={(e) => setSpace(e.currentTarget.value)}>
+              <option value="">No codespace</option>
+              <For each={codespaces()}>
+                {(view) => <option value={view.space.path}>{view.space.name}</option>}
+              </For>
             </select>
           </label>
           <div class="form-field field-half">
             <span>Writes to</span>
-            <span class="input input-static mono" title={task?.folder}>
-              {task ? task.folder : 'A folder of its own'}
+            <span class="input input-static mono" title={space() || task?.folder}>
+              {space() || (task ? task.folder : 'A folder of its own')}
             </span>
           </div>
         </div>

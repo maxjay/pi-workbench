@@ -150,13 +150,17 @@ impl Tasks {
                 if kept.task.schedule != input.schedule {
                     kept.since = now;
                 }
-                if kept.task.continuing != input.continuing {
+                // One conversation stays in one folder.
+                if kept.task.continuing != input.continuing
+                    || kept.task.codespace != input.codespace
+                {
                     kept.session = None;
                 }
                 kept.task.name = name.clone();
                 kept.task.prompt = input.prompt.clone();
                 kept.task.schedule = input.schedule.clone();
                 kept.task.continuing = input.continuing;
+                kept.task.codespace = input.codespace.clone();
                 Ok(None)
             }
             None => {
@@ -173,6 +177,7 @@ impl Tasks {
                         continuing: input.continuing,
                         paused: false,
                         folder: folder.display().to_string(),
+                        codespace: input.codespace.clone(),
                     },
                     since: now,
                     session: None,
@@ -292,7 +297,13 @@ impl Tasks {
         }
         let session = match (task.continuing, &file) {
             (true, Some(file)) if Path::new(file).exists() => self.sessions.open(file).await?,
-            _ => self.sessions.start(Some(task.folder.clone()), None).await?,
+            _ => {
+                let cwd = task
+                    .codespace
+                    .clone()
+                    .unwrap_or_else(|| task.folder.clone());
+                self.sessions.start(Some(cwd), None).await?
+            }
         };
         let live = self.sessions.get(&session.id)?;
         let run = Run {

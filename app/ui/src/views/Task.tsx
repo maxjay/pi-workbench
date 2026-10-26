@@ -10,6 +10,7 @@ import { ErrorNote } from '../components/Note';
 import type { Run } from '../protocol/Run';
 import type { Session } from '../protocol/Session';
 import type { TaskView } from '../protocol/TaskView';
+import { codespaces } from '../state/codespaces';
 import { follow, live, readTaskSession } from '../state/sessions';
 import { allPaused, going, markSeen, runTask, setTaskPaused, stopTask, taskById } from '../state/tasks';
 import { RunList } from './task/RunList';
@@ -17,6 +18,11 @@ import { RunOutput } from './task/RunOutput';
 import { TaskChat } from './task/TaskChat';
 import { TaskForm } from './task/TaskForm';
 import { scheduleWords, whenWords } from './task/words';
+
+const codespaceName = (path: string | null) =>
+  path
+    ? (codespaces().find((v) => v.space.path === path)?.space.name ?? path.split('/').pop())
+    : 'No codespace';
 
 /** The run picked in each task, while its tab is open. */
 const [picked, setPicked] = createStore<Record<string, string | undefined>>({});
@@ -151,7 +157,7 @@ function Header(props: { view: TaskView; onEdit: () => void }) {
         <span aria-hidden="true">·</span>
         <span>{task().continuing ? 'One conversation across runs' : 'Fresh each run'}</span>
         <span aria-hidden="true">·</span>
-        <span>No codespace</span>
+        <span>{codespaceName(task().codespace)}</span>
       </p>
       <div class="task-bar">
         <Show when={task().paused || allPaused()}>

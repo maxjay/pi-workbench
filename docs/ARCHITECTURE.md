@@ -9,10 +9,10 @@ does one job.
 ┌──────────────────────────────┐          ┌─────────────────────────────┐
 │ app/ui      the page         │          │ crates/agent   wb-agent     │
 │  Solid + TypeScript          │          │  Rust, one long-lived       │
-│  shows state, sends requests │          │  process: owns Pi's files   │
-│            │ ▲               │          │  (later: sessions, the      │
-│     invoke │ │ events        │          │  scheduler, files, git and  │
-│            ▼ │               │  stdio   │  terminals)                 │
+│  shows state, sends requests │          │  process: owns Pi's files,  │
+│            │ ▲               │          │  sessions, the scheduler,   │
+│     invoke │ │ events        │          │  codespaces' files, git and │
+│            ▼ │               │  stdio   │  terminals                  │
 │ app/src-tauri  the app       │◄────────►│                             │
 │  Tauri 2: a window, and a    │ JSON     │  reads and writes ~/.pi     │
 │  pipe to wb-agent            │ lines    │  runs pi                    │
@@ -26,9 +26,9 @@ does one job.
 - **The app** (`app/src-tauri`) opens the window, starts wb-agent through
   `wsl.exe`, and carries lines both ways. It doesn't read them.
 - **wb-agent** (`crates/agent`) runs inside WSL, next to Pi and the code.
-  It does the work: reading and writing files, and later running Pi
-  sessions, git and terminals. Doing that inside WSL avoids the slow
-  `\\wsl$` file share entirely.
+  It does the work: reading and writing files, and running Pi sessions,
+  git and terminals. Doing that inside WSL avoids the slow `\\wsl$` file
+  share entirely.
 - **The protocol** (`crates/protocol`) is the one contract between the page
   and wb-agent. The Rust types are the source; the TypeScript types in
   `app/ui/src/protocol` are generated from them.
@@ -36,8 +36,9 @@ does one job.
 Why a web page? Tauri uses the WebView2 that ships with Windows, so the app
 is a few megabytes and starts quickly. The page is where the hard UI
 already exists: a code editor (CodeMirror), a terminal (xterm.js), and
-later a view of Pi's Playwright browser. The heavy work happens in Rust in
-WSL, not in the page.
+later a view of Pi's Playwright browser. The editor and terminals load
+with the first codespace, not when the app starts. The heavy work happens
+in Rust in WSL, not in the page.
 
 ## The protocol
 
@@ -70,11 +71,21 @@ and says things on its own as events:
   `session.models`, `session.setModel`, `session.setThinking`,
   `session.commands`, `session.close`; `tasks.list`, `tasks.save`,
   `tasks.setPaused`, `tasks.pauseAll`, `tasks.run`, `tasks.stop`,
-  `tasks.scheduleFrom`; `files.list`, `file.read`.
+  `tasks.scheduleFrom`; `files.list`, `files.stat`, `file.read`,
+  `file.write`; `codespaces.list`, `codespaces.open`,
+  `codespaces.setPinned`, `codespaces.forget`; `folders.list`;
+  `sessions.in`; `git.status`, `git.original`; `terminals.list`,
+  `terminal.open`, `terminal.read`, `terminal.input`, `terminal.resize`,
+  `terminal.close`.
 - Each answer has a `kind`, and `ask(call, kind)` in `app/ui/src/agent.ts`
   checks the answer is the kind it expected.
-- Error codes are `badRequest`, `io`, `invalid` and `notFound`. A line
-  wb-agent can't read still gets an error, with its `id` if it had one.
+- Error codes are `badRequest`, `io`, `invalid`, `notFound`, `pi` and
+  `conflict` (a save refused because the file changed since it was read).
+  A line wb-agent can't read still gets an error, with its `id` if it had
+  one.
+- Requests are answered as they can be, so a slow one doesn't hold up the
+  rest; replies can come in any order. Keys typed in a terminal are the
+  exception, handled in the order they came.
 - A live session sends `{"type":"event","event":"session","id":…,"change":…}`
   whenever it changes: one entry (new, or replacing the one at its index),
   the session's state, the whole conversation after loading it, or that it
@@ -82,6 +93,10 @@ and says things on its own as events:
   streaming word by word is about 25 messages a second, not hundreds.
 - Whenever a task or one of its runs changes, wb-agent sends every task
   as `{"type":"event","event":"tasks","list":…}`.
+- A terminal's output comes as `{"type":"event","event":"terminal","id":…,"data":…}`,
+  as it printed it, every 30 ms at most; and every terminal, as
+  `terminals`, whenever one opens, closes, or starts or finishes running
+  something.
 - `cargo test -p protocol` writes the TypeScript types. CI fails if they
   differ from what's committed.
 
@@ -151,6 +166,42 @@ folder, and gives each a folder of its own to work in under `tasks/`.
 - Windows notifications aren't sent yet: the page highlights a run that
   needs you or failed, and `notify_run` is where they'll go.
 
+## Codespaces
+
+A codespace is a folder in WSL opened in the workbench. `codespaces.rs`
+keeps the list in `codespaces.json`; nothing is written into the folder.
+
+- **Files and git.** The tree is `files.list`, with git's marks from
+  `git.status`, which runs `git status` and `git diff --numstat` in the
+  folder (`git.rs`). The editor (CodeMirror) marks what changed since the
+  last commit, against the file as `git show HEAD:` has it. The page asks
+  again every few seconds while the tab is open, and when Pi finishes a
+  tool there.
+- **Saving.** `file.write` takes the text the editor last read; if the
+  file holds anything else, something changed it since, and the save is
+  refused as a `conflict`. Open files are checked for changes on disk
+  (`files.stat`) every second and a half: one with nothing unsaved just
+  shows the new text, and one with unsaved changes asks which to keep.
+  Saves go through a temporary file and keep the file's permissions.
+- **Terminals.** `terminals.rs` runs your shell in a pseudo-terminal in
+  the folder, sends what it prints as events and keeps the last 256 KB of
+  it, so a terminal can be drawn again. What runs in one is whatever leads
+  its foreground process group. Closing one hangs up on everything in it.
+- **Pi in the terminals.** Sessions that run in a codespace also load
+  `terminal.ts`, a tool that lists the codespace's terminals, reads one,
+  runs a command in one that's at its prompt, or opens one. It asks
+  wb-agent over one socket, named in `WB_TERMINALS`, with the folder Pi
+  runs in, so a session only sees its own codespace's terminals.
+- **Sessions** are Pi sessions in the codespace's folder, listed with
+  `sessions.in`. A task can run in a codespace too, instead of its own
+  folder.
+- **Language servers** such as jvmd aren't connected yet. They'll plug into
+  the editor's bar, with what they can run, and into Ctrl P's `@` symbols:
+  `app/ui/src/views/space/integrations.ts` is where.
+- Commands wb-agent runs for itself (git, `pi --version`) get a stdin of
+  their own: its stdin is the workbench's, and a child that changed it
+  could stop requests being read.
+
 ## Layout
 
 ```
@@ -172,7 +223,10 @@ crates/
     src/tasks.rs     tasks: kept, due, run and followed
     src/schedule.rs  when a schedule is due, in local time
     src/question.rs  the question tool's socket; ask_user.ts is the tool
-    src/files.rs     files opened for viewing
+    src/files.rs     files opened for viewing, saved, and listed for `@`
+    src/codespaces.rs  the codespaces, and folders to open as one
+    src/git.rs       where a repository stands; a file as the last commit has it
+    src/terminals.rs  shells in pseudo-terminals; terminal.ts is Pi's tool for them
     tests/stdio.rs   the real binary, spoken to in lines, with a fake pi
 app/
   src-tauri/         the app: start wb-agent, carry lines
@@ -185,7 +239,8 @@ app/
     src/protocol/    generated, do not edit
     src/state/       stores: what the page knows, and the calls that change it
     src/components/  pieces used across pages
-    src/views/       one file per page; scratch/ for the scratchpad's parts
+    src/views/       one file per page; chat/ for the parts every conversation
+                     has; scratch/, task/ and space/ for each page's own
     dev/             the dev server's bridge to wb-agent
 ```
 
@@ -197,8 +252,8 @@ app/
 2. **wb-agent owns state.** Stores in the page hold what wb-agent last said
    and ask it to change things. They don't compute their own version.
 3. **Logic is pure; I/O is at the edges.** `mcp.rs` and `models.rs` turn
-   text into values and back. Only `config.rs` and `router.rs` touch the
-   disk. Pure functions get unit tests.
+   text into values and back. Reading and writing happen at the edges:
+   `config.rs`, `files.rs` and the modules that keep wb-agent's own files. Pure functions get unit tests.
 4. **Keep Pi's files Pi's.** wb-agent edits the files Pi reads, keeps keys
    it doesn't know about and the order they're in, and writes through a
    temporary file so a crash never leaves half a file.
@@ -252,8 +307,9 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
    prompts Pi runs on a schedule, which keep running with the window
    closed: the app stays in the tray, holding wb-agent, and starts when you
    sign in.
-3. **Codespaces:** a folder in WSL with its files, editor and terminals.
-4. **Sessions** inside codespaces.
+3. **Codespaces** (done): a folder in WSL with its files, editor and
+   terminals.
+4. **Sessions** inside codespaces (done).
 5. **Subagents.**
 
 Then Pi's browser: Playwright's Chromium in WSL, shown in a tab through

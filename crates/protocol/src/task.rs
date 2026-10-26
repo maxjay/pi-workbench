@@ -17,8 +17,11 @@ pub struct Task {
     /// Every run adds to one conversation; otherwise each run has its own.
     pub continuing: bool,
     pub paused: bool,
-    /// The folder Pi works in, which is the task's own.
+    /// The task's own folder, where Pi works unless it has a codespace.
     pub folder: String,
+    /// A codespace's folder to work in instead, absolute.
+    #[serde(default)]
+    pub codespace: Option<String>,
 }
 
 /// When a task runs. Days are 0 for Monday to 6 for Sunday, and times are
@@ -47,6 +50,7 @@ pub struct TaskInput {
     pub prompt: String,
     pub schedule: Schedule,
     pub continuing: bool,
+    pub codespace: Option<String>,
 }
 
 /// One run of a task.
