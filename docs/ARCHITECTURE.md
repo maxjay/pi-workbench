@@ -209,6 +209,13 @@ app/
    dependency only when writing it ourselves would be worse.
 7. **CI is the gate.** Formatting, lints, tests, generated types and both
    builds pass before anything merges.
+8. **One set of chat parts.** Every conversation with Pi, in the scratchpad,
+   a task, a codespace's sessions or beside any other tab, is drawn with the
+   same parts: its entries, the question card that takes the place of the
+   box you write in, messages waiting to be sent, the box itself with its
+   `@` and `/` picker and model menu, and the status line. A place adds
+   what's its own around them (a run's header, a subagent's card) rather
+   than drawing its own version.
 
 ## Running it
 
