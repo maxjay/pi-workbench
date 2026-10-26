@@ -83,3 +83,11 @@ export function todos(entries: Entry[]): Step[] | undefined {
   }
   return undefined;
 }
+
+/** The file a write or edit changes, by absolute path, taken from `cwd`. */
+export function writes(tool: Tool, cwd: string): string | undefined {
+  if (tool.name !== 'write' && tool.name !== 'edit') return undefined;
+  const path = str(((tool.args ?? {}) as Args).path);
+  if (!path) return undefined;
+  return path.startsWith('/') ? path : `${cwd.replace(/\/$/, '')}/${path.replace(/^\.\//, '')}`;
+}

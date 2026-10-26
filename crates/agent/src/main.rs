@@ -27,7 +27,7 @@ mod transcript;
 use std::sync::Arc;
 
 use protocol::{Call, Event, FailureCode, FromAgent, Outcome, Reply, Request};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 #[tokio::main(flavor = "current_thread")]
@@ -57,8 +57,8 @@ async fn main() {
         version: env!("CARGO_PKG_VERSION").into(),
     }));
 
-    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
-    while let Ok(Some(line)) = stdin.next_line().await {
+    let mut stdin = requests();
+    while let Some(line) = stdin.recv().await {
         if line.trim().is_empty() {
             continue;
         }
@@ -104,6 +104,47 @@ async fn main() {
     drop(ctx);
     drop(out);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), writer).await;
+}
+
+/// The workbench's lines, read on a thread of their own until stdin ends.
+/// A signal, or stdin left non-blocking by whoever made it, isn't the end:
+/// the read waits and goes on, keeping what it had of the line.
+fn requests() -> mpsc::UnboundedReceiver<String> {
+    use std::io::{BufRead, ErrorKind};
+    let (tx, rx) = mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        blocking_stdin();
+        let stdin = std::io::stdin();
+        let mut stdin = stdin.lock();
+        let mut line = String::new();
+        loop {
+            match stdin.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if tx.send(std::mem::take(&mut line)).is_err() {
+                        break;
+                    }
+                }
+                Err(err) if err.kind() == ErrorKind::Interrupted => {}
+                Err(err) if err.kind() == ErrorKind::WouldBlock => blocking_stdin(),
+                Err(err) => {
+                    eprintln!("wb-agent: couldn't read a request: {err}");
+                    break;
+                }
+            }
+        }
+    });
+    rx
+}
+
+/// Makes stdin wait for lines again, rather than fail when none has come.
+fn blocking_stdin() {
+    unsafe {
+        let flags = libc::fcntl(0, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(0, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
 }
 
 /// The id of a line that isn't a request we understand, if it has one, so

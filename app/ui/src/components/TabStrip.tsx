@@ -1,10 +1,13 @@
 import { For, Show } from 'solid-js';
+import { spaceById } from '../state/codespaces';
+import { live } from '../state/sessions';
 import {
   active,
   close,
   focus,
   kindOf,
   open,
+  spaceOf,
   type TabId,
   type TabKind,
   tabs,
@@ -19,10 +22,24 @@ const icons: Record<TabKind, IconName> = {
   scratch: 'pencil',
   settings: 'settings',
   task: 'clock',
+  space: 'folder',
 };
 
-/** A task tab's dot: amber while Pi runs it, blue while it waits on you. */
+/**
+ * A task tab's dot: amber while Pi runs it, blue while it waits on you. A
+ * codespace's: the same, for any of its sessions.
+ */
 function dot(id: TabId) {
+  const space = spaceOf(id);
+  if (space) {
+    const path = spaceById(space)?.space.path;
+    if (!path) return undefined;
+    const here = Object.values(live).filter(
+      (s) => s.state.cwd === path || s.state.cwd.startsWith(`${path}/`),
+    );
+    if (here.some((s) => s.state.ask)) return 'asking';
+    return here.some((s) => s.state.busy) ? 'running' : undefined;
+  }
   const task = taskOf(id);
   const view = task ? taskById(task) : undefined;
   const now = view ? standing(view) : undefined;

@@ -9,7 +9,7 @@ import type { FileContent } from '../../protocol/FileContent';
 import type { Session } from '../../protocol/Session';
 import type { Tool } from '../../protocol/Tool';
 import { readFile } from '../../state/sessions';
-import { edits } from './tools';
+import { edits } from '../chat/tools';
 
 const name = (path: string) => path.split('/').pop() ?? path;
 

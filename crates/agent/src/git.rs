@@ -14,6 +14,8 @@ async fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .arg(dir)
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // wb-agent's own stdin is the workbench's; nothing else may touch it.
+        .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output()
         .await

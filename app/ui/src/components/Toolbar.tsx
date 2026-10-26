@@ -1,8 +1,11 @@
 import { status, stopReason } from '../agent';
+import { spaceById } from '../state/codespaces';
 import { health } from '../state/health';
+import { repos } from '../state/repo';
 import { current } from '../state/sessions';
 import { section, sections } from '../state/settings';
-import { active, kindOf, open, title } from '../state/tabs';
+import { active, kindOf, open, spaceOf, title } from '../state/tabs';
+import { uiOf } from '../views/space/ui';
 import { Icon } from './Icon';
 import { openPalette } from './Palette';
 
@@ -15,9 +18,26 @@ export function Toolbar() {
       return ['Scratchpad', pad ? `› ${pad}` : ''];
     }
     if (kindOf(active()) === 'task') return ['Tasks', `› ${title(active())}`];
+    const space = spaceOf(active());
+    const view = space ? spaceById(space) : undefined;
+    if (space && view) {
+      const branch = repos[view.space.path]?.git?.summary.branch ?? view.git?.branch;
+      const file = uiOf(space).file?.split('/').pop();
+      return [
+        view.space.name,
+        [branch, file]
+          .filter(Boolean)
+          .map((part) => `› ${part}`)
+          .join(' '),
+      ];
+    }
     return ['Home', ''];
   };
   const agent = () => {
+    const space = spaceOf(active());
+    const view = space ? spaceById(space) : undefined;
+    if (view && status() === 'ready')
+      return view.running.length > 0 ? `${view.running.join(', ')} running` : 'Nothing running';
     if (status() === 'connecting') return 'Starting wb-agent…';
     if (status() === 'down') return 'wb-agent stopped';
     const h = health();

@@ -15,6 +15,12 @@ const paths = {
   clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2',
   play: 'M8 5l11 7-11 7z',
   back: 'M15 6l-6 6 6 6',
+  folder:
+    'M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z',
+  pin: 'M9 3h6l-1 6 4 4H6l4-4zM12 13v8',
+  'file-plus': 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 11v6M9 14h6',
+  collapse: 'M7 15l5-5 5 5M7 20l5-5 5 5M5 4h14',
+  terminal: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
 } as const;
 
 export type IconName = keyof typeof paths;

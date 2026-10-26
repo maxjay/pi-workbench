@@ -1,19 +1,23 @@
 // The open tabs, as in a browser: Home is always first and can't close;
 // the rest open, focus and close. Home, the Scratchpad and Settings have a
-// tab each; every task has one of its own, and a new task one while it's
-// being made.
+// tab each; every task and every codespace has one of its own, and a new
+// task one while it's being made.
 
 import { createSignal } from 'solid-js';
+import { spaceById } from './codespaces';
 import { taskById } from './tasks';
 
-export type TabId = 'home' | 'scratch' | 'settings' | 'newtask' | `task:${string}`;
-export type TabKind = 'home' | 'scratch' | 'settings' | 'task';
+export type TabId = 'home' | 'scratch' | 'settings' | 'newtask' | `task:${string}` | `space:${string}`;
+export type TabKind = 'home' | 'scratch' | 'settings' | 'task' | 'space';
 
 export const kindOf = (id: TabId): TabKind =>
-  id === 'newtask' || id.startsWith('task:') ? 'task' : (id as TabKind);
+  id === 'newtask' || id.startsWith('task:') ? 'task' : id.startsWith('space:') ? 'space' : (id as TabKind);
 
 /** The task a tab shows, if it shows one. */
 export const taskOf = (id: TabId) => (id.startsWith('task:') ? id.slice(5) : undefined);
+
+/** The codespace a tab shows, if it shows one. */
+export const spaceOf = (id: TabId) => (id.startsWith('space:') ? id.slice(6) : undefined);
 
 const fixed: Record<string, string> = {
   home: 'Home',
@@ -24,7 +28,10 @@ const fixed: Record<string, string> = {
 
 export function title(id: TabId) {
   const task = taskOf(id);
-  return task ? (taskById(task)?.task.name ?? 'Task') : fixed[id];
+  if (task) return taskById(task)?.task.name ?? 'Task';
+  const space = spaceOf(id);
+  if (space) return spaceById(space)?.space.name ?? 'Codespace';
+  return fixed[id];
 }
 
 const [tabs, setTabs] = createSignal<TabId[]>(['home']);

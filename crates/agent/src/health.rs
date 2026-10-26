@@ -17,6 +17,8 @@ pub async fn check(agent_dir: &Path) -> Health {
 async fn pi_version() -> Option<String> {
     let run = Command::new("pi")
         .arg("--version")
+        // wb-agent's own stdin is the workbench's; Pi mustn't touch it.
+        .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
     let output = tokio::time::timeout(Duration::from_secs(5), run)

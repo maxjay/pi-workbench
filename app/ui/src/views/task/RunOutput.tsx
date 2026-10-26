@@ -8,7 +8,7 @@ import type { Run } from '../../protocol/Run';
 import type { Session } from '../../protocol/Session';
 import type { TaskView } from '../../protocol/TaskView';
 import { readFile } from '../../state/sessions';
-import { summarize } from '../scratch/tools';
+import { summarize } from '../chat/tools';
 import { dayWords, timeWords, whenWords } from './words';
 
 /** The run's part of its conversation. */

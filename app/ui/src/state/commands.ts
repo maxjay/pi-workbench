@@ -2,13 +2,15 @@
 // The palette only filters and runs these; they're defined here.
 
 import { reconnect } from '../agent';
+import { openFolderDialog } from '../components/OpenFolder';
+import { codespaces, openFolder } from './codespaces';
 import { scratchpads, showScratchpad } from './sessions';
 import { reload, sections, setSection } from './settings';
 import { open, tabs, title } from './tabs';
 import { tasks } from './tasks';
 
 export interface Command {
-  group: 'Tabs' | 'Scratchpads' | 'Tasks' | 'Settings' | 'Actions';
+  group: 'Tabs' | 'Codespaces' | 'Scratchpads' | 'Tasks' | 'Settings' | 'Actions';
   title: string;
   detail?: string;
   run: () => void;
@@ -18,6 +20,14 @@ export function commands(): Command[] {
   return [
     ...tabs().map(
       (tab): Command => ({ group: 'Tabs', title: title(tab), detail: 'open tab', run: () => open(tab) }),
+    ),
+    ...codespaces().map(
+      (view): Command => ({
+        group: 'Codespaces',
+        title: view.space.name,
+        detail: view.space.path,
+        run: () => void openFolder(view.space.path).then((v) => open(`space:${v.space.id}`)),
+      }),
     ),
     ...scratchpads().map(
       (pad): Command => ({
@@ -50,6 +60,7 @@ export function commands(): Command[] {
       }),
     ),
     { group: 'Actions', title: 'New scratchpad', detail: 'Ctrl N', run: () => open('scratch') },
+    { group: 'Actions', title: 'Open folder', detail: 'as a codespace', run: openFolderDialog },
     {
       group: 'Actions',
       title: 'New task',

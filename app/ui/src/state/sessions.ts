@@ -79,16 +79,16 @@ createRoot(() =>
   }),
 );
 
-// Tasks' sessions are followed here too, for their conversations, but they
-// aren't scratchpads: they stay out of the list and never take the
-// Scratchpad tab's view.
-const taskFiles = new Set<string>();
+// Tasks' and codespaces' sessions are followed here too, for their
+// conversations, but they aren't scratchpads: they stay out of the list
+// and never take the Scratchpad tab's view.
+const elsewhere = new Set<string>();
 const [background, setBackground] = createSignal<ReadonlySet<string>>(new Set());
 
 function inBackground(session: Session) {
   setLive(session.id, reconcile(session));
   setBackground(new Set([...background(), session.id]));
-  if (session.state.file) taskFiles.add(session.state.file);
+  if (session.state.file) elsewhere.add(session.state.file);
   return session;
 }
 
@@ -100,9 +100,31 @@ export async function follow(id: string) {
 
 /** A task's saved session, read from its file without starting Pi. */
 export async function readTaskSession(file: string) {
-  taskFiles.add(file);
+  elsewhere.add(file);
   const found = Object.values(live).find((session) => session.state.file === file);
   return found ?? ask({ method: 'session.read', params: { file } }, 'session');
+}
+
+/** Starts Pi in a codespace's folder, kept out of the scratchpad, and asks it `text`. */
+export async function startIn(cwd: string, text: string) {
+  return inBackground(await ask({ method: 'session.start', params: { cwd, text } }, 'session'));
+}
+
+/** The sessions that ran in a folder or under it, live ones first. */
+export async function sessionsIn(dir: string) {
+  return (await ask({ method: 'sessions.in', params: { dir } }, 'sessions')).sessions;
+}
+
+/** A codespace's session to show: live as it is, or read from Pi's file without starting Pi. */
+export async function showElsewhere(pad: { id?: string | null; file?: string | null }) {
+  if (pad.id) return live[pad.id] ?? follow(pad.id);
+  if (!pad.file) throw new Error('This conversation has no file to open');
+  const file = pad.file;
+  elsewhere.add(file);
+  const found = Object.values(live).find((session) => session.state.file === file);
+  if (found) return found;
+  setKept(file, reconcile(await ask({ method: 'session.read', params: { file } }, 'session')));
+  return kept[file];
 }
 
 /** A scratchpad in the list: live, or saved in Pi's store. */
@@ -195,7 +217,7 @@ async function wake(session: Session) {
   if (session.id && live[session.id]) return session.id;
   const file = session.state.file;
   if (!file) throw new Error('This conversation has no file to open');
-  if (taskFiles.has(file))
+  if (elsewhere.has(file))
     return inBackground(await ask({ method: 'session.open', params: { file } }, 'session')).id;
   return reopen(file);
 }

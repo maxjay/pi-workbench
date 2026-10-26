@@ -1,23 +1,19 @@
-// A scratchpad's conversation is the page, as with Pi in a terminal: what
-// you asked, what Pi thought, ran and said. It follows the newest line
-// unless you've scrolled up to read. While Pi asks something, its card
-// takes the place of the box you write in.
+// A scratchpad's conversation is the page, as with Pi in a terminal: its
+// title, plan and actions on top, then the parts every conversation has:
+// the log, and the foot with the box you write in.
 
-import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import { Icon } from '../../components/Icon';
 import { ErrorNote } from '../../components/Note';
 import type { Session } from '../../protocol/Session';
-import { draftKey, setDraft } from '../../state/drafts';
-import { reopen, send, setDone, unqueue } from '../../state/sessions';
-import { AskCard } from './AskCard';
-import { Composer } from './Composer';
-import { EntryView } from './EntryView';
-import { todos } from './tools';
-import { usage } from './usage';
+import { setDone } from '../../state/sessions';
+import { Foot } from '../chat/Foot';
+import { Log } from '../chat/Log';
+import { todos } from '../chat/tools';
 
 /** Where the session stands, in a word or two, and its dot. */
-function standing(session: Session) {
+export function standing(session: Session) {
   const state = session.state;
   if (state.ask) return { word: 'Waiting for you', dot: 'asking' };
   if (state.busy) return { word: 'Working', dot: 'busy' };
@@ -38,40 +34,6 @@ export function Conversation(props: {
   const done = createAction(async () => {
     const file = state().file;
     if (file) await setDone(file, true);
-  });
-  const restart = createAction(async () => {
-    const file = state().file;
-    if (file) await reopen(file);
-  });
-  // Pi has no retry of its own once it gives up: asking again is the way.
-  const retry = createAction(() => send(props.session, 'Try again', false));
-  const canRetry = (i: number) => {
-    const entry = props.session.entries[i];
-    const state = props.session.state;
-    return (
-      i === props.session.entries.length - 1 &&
-      entry.kind === 'notice' &&
-      entry.tone === 'error' &&
-      !state.busy &&
-      !state.ask &&
-      !state.stopped
-    );
-  };
-  const takeBack = createAction(async (index: number, edit: boolean) => {
-    const item = state().queued[index];
-    await unqueue(props.session.id, index);
-    if (edit && item) setDraft(draftKey(props.session), item.text);
-  });
-
-  let log!: HTMLDivElement;
-  let content!: HTMLDivElement;
-  let following = true;
-  onMount(() => {
-    const follow = new ResizeObserver(() => {
-      if (following) log.scrollTop = log.scrollHeight;
-    });
-    follow.observe(content);
-    onCleanup(() => follow.disconnect());
   });
 
   return (
@@ -147,92 +109,9 @@ export function Conversation(props: {
           )}
         </Show>
       </header>
-      <ErrorNote error={done.error() ?? retry.error()} />
-
-      <div
-        class="log"
-        ref={log}
-        onScroll={() => {
-          following = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
-        }}
-      >
-        <div class="log-content" ref={content}>
-          <For each={props.session.entries}>
-            {(entry, i) => (
-              <EntryView
-                entry={entry}
-                cwd={state().cwd}
-                last={i() === props.session.entries.length - 1 && state().busy}
-                onOpenFile={props.onOpenFile}
-                onRetry={canRetry(i()) && !retry.busy() ? () => void retry.run() : undefined}
-              />
-            )}
-          </For>
-          <Show when={props.session.entries.length === 0 && !state().busy}>
-            <p class="log-empty">Ask Pi anything. It works in {state().cwd}.</p>
-          </Show>
-        </div>
-      </div>
-
-      <div class="conversation-foot">
-        <Show when={state().stopped}>
-          <div class="stopped" role="alert">
-            <span>{state().stopped}</span>
-            <Show when={state().file}>
-              <button
-                type="button"
-                class="button"
-                disabled={restart.busy()}
-                onClick={() => void restart.run()}
-              >
-                Start Pi again
-              </button>
-            </Show>
-          </div>
-          <ErrorNote error={restart.error()} />
-        </Show>
-        <Show when={state().ask} keyed>
-          {(ask) => <AskCard session={props.session.id} ask={ask} />}
-        </Show>
-        <Show when={state().queued.length > 0}>
-          <ul class="queued" aria-label="Waiting to be sent">
-            <For each={state().queued}>
-              {(item, i) => (
-                <li>
-                  <span class="queued-when">{item.later ? 'after this run' : 'next'}</span>
-                  <span class="queued-text">{item.text}</span>
-                  <button
-                    type="button"
-                    class="button button-text button-small"
-                    disabled={takeBack.busy()}
-                    onClick={() => void takeBack.run(i(), true)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    class="icon-button icon-button-small"
-                    aria-label="Don’t send it"
-                    disabled={takeBack.busy()}
-                    onClick={() => void takeBack.run(i(), false)}
-                  >
-                    <Icon name="close" size={11} />
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-          <ErrorNote error={takeBack.error()} />
-        </Show>
-        <Show when={!state().ask}>
-          <Composer session={props.session} />
-        </Show>
-        <div class="status-line mono">
-          <span title={state().cwd}>{state().cwd}</span>
-          <For each={state().statuses}>{(line) => <span>{line.text}</span>}</For>
-          <Show when={usage(state().usage)}>{(text) => <span>{text()}</span>}</Show>
-        </div>
-      </div>
+      <ErrorNote error={done.error()} />
+      <Log session={props.session} onOpenFile={props.onOpenFile} />
+      <Foot session={props.session} />
     </main>
   );
 }

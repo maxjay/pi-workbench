@@ -7,9 +7,9 @@ import { For, Show } from 'solid-js';
 import type { Run } from '../../protocol/Run';
 import type { Session } from '../../protocol/Session';
 import type { TaskView } from '../../protocol/TaskView';
-import { AskCard } from '../scratch/AskCard';
-import { Composer } from '../scratch/Composer';
-import { EntryView } from '../scratch/EntryView';
+import { AskCard } from '../chat/AskCard';
+import { Composer } from '../chat/Composer';
+import { EntryView } from '../chat/EntryView';
 import { dayWords, timeWords, whenWords } from './words';
 
 const states: Record<Run['state'], string> = {

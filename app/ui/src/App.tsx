@@ -1,16 +1,20 @@
 // The window: tabs on top, the toolbar under them, the active tab's page,
 // and Ctrl K over everything.
 
-import { Match, onCleanup, onMount, Switch } from 'solid-js';
+import { lazy, Match, onCleanup, onMount, Switch } from 'solid-js';
+import { OpenFolder } from './components/OpenFolder';
 import { closePalette, openPalette, Palette } from './components/Palette';
 import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
 import './state/app';
-import { active, close, open, taskOf } from './state/tabs';
+import { active, close, open, spaceOf, taskOf } from './state/tabs';
 import { Home } from './views/Home';
 import { Scratchpad } from './views/Scratchpad';
 import { Settings } from './views/Settings';
 import { NewTask, TaskPage } from './views/Task';
+
+// The editor and the terminals are big; they load with the first codespace.
+const SpacePage = lazy(() => import('./views/Space').then((m) => ({ default: m.SpacePage })));
 
 function onKey(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
@@ -48,9 +52,13 @@ export function App() {
           <Match when={taskOf(active())} keyed>
             {(id) => <TaskPage id={id} />}
           </Match>
+          <Match when={spaceOf(active())} keyed>
+            {(id) => <SpacePage id={id} />}
+          </Match>
         </Switch>
       </main>
       <Palette />
+      <OpenFolder />
     </div>
   );
 }

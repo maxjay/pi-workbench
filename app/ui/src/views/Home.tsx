@@ -11,6 +11,7 @@ import { health } from '../state/health';
 import { scratchpads, showScratchpad, startScratchpad } from '../state/sessions';
 import { open } from '../state/tabs';
 import { allPaused, pauseAll, standing as taskStanding, tasks } from '../state/tasks';
+import { HomeSpaces } from './HomeSpaces';
 import { standing } from './scratch/Nav';
 import { scheduleWords, timeWords } from './task/words';
 
@@ -65,10 +66,7 @@ export function Home() {
         </Show>
       </section>
 
-      <section class="list">
-        <h2>Codespaces</h2>
-        <Empty>No codespaces yet. Opening a folder in WSL as a codespace comes in stage 3.</Empty>
-      </section>
+      <HomeSpaces />
 
       <Tasks />
 
