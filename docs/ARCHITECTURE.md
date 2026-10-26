@@ -215,7 +215,10 @@ app/
    box you write in, messages waiting to be sent, the box itself with its
    `@` and `/` picker and model menu, and the status line. A place adds
    what's its own around them (a run's header, a subagent's card) rather
-   than drawing its own version.
+   than drawing its own version. The parts nest: a subagent's card holds
+   its own entries, box and questions, and a question takes the place of
+   the box of whatever waits on it, so a subagent asking never takes the
+   session's box from you.
 
 ## Running it
 
