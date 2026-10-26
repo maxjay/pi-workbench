@@ -3,7 +3,7 @@ members = ["crates/protocol", "crates/agent", "app/src-tauri"]
 resolver = "3"
 
 [workspace.package]
-version = "1.0.0-alpha.3"
+version = "1.0.0-alpha.4"
 edition = "2024"
 rust-version = "1.91"
 license = "LicenseRef-Proprietary"
