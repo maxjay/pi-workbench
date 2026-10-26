@@ -144,6 +144,17 @@ function TermView(props: { terminal: Terminal; shown: boolean }) {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // Ctrl C copies what's selected, as in an editor's terminal; with nothing
+  // selected it goes to the shell. Ctrl Shift C always copies.
+  term.attachCustomKeyEventHandler((e) => {
+    const copy = e.type === 'keydown' && e.ctrlKey && e.key.toLowerCase() === 'c';
+    if (copy && (e.shiftKey || term.hasSelection())) {
+      void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+      term.clearSelection();
+      return false;
+    }
+    return true;
+  });
 
   onMount(() => {
     term.open(host);

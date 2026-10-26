@@ -16,8 +16,12 @@ import { NewTask, TaskPage } from './views/Task';
 // The editor and the terminals are big; they load with the first codespace.
 const SpacePage = lazy(() => import('./views/Space').then((m) => ({ default: m.SpacePage })));
 
+/** Keys a shell needs, such as Ctrl W to delete a word, which go to a terminal rather than the app. */
+const shellKeys = new Set(['k', 'w', 't', 'n']);
+
 function onKey(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && shellKeys.has(e.key) && (e.target as Element | null)?.closest?.('.xterm')) return;
   if (ctrl && e.key === 'k') openPalette();
   else if (ctrl && e.key === 'w') close(active());
   else if (ctrl && e.key === 't') open('home');
