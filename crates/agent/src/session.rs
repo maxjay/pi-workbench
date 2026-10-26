@@ -38,6 +38,8 @@ pub struct Launch {
     pub file: Option<PathBuf>,
     /// The `ask_user` extension, to load into Pi.
     pub extension: Option<PathBuf>,
+    /// The terminal tool and the socket it asks on, in a codespace.
+    pub terminals: Option<(PathBuf, PathBuf)>,
     pub done: bool,
 }
 
@@ -87,6 +89,10 @@ impl Live {
         if let Some((extension, _)) = &listener {
             command.arg("--extension").arg(extension);
             command.env("WB_ASK", &socket);
+        }
+        if let Some((extension, socket)) = &launch.terminals {
+            command.arg("--extension").arg(extension);
+            command.env("WB_TERMINALS", socket);
         }
         let mut child = command
             .current_dir(&launch.cwd)

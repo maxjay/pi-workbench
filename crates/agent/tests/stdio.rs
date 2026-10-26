@@ -255,3 +255,36 @@ fn stops_pi_once_its_been_idle() {
     let closed = agent.until(|line| line["change"]["change"] == "closed");
     assert_eq!(closed["id"], id.as_str());
 }
+
+#[test]
+fn opens_a_codespace_with_a_terminal_and_saves_its_files() {
+    let mut agent = Agent::start();
+    agent.until(|line| line["event"] == "ready");
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().canonicalize().unwrap().display().to_string();
+    let reply = |agent: &mut Agent, id: u64| agent.until(move |line| line["id"] == id);
+
+    writeln!(agent.stdin, r#"{{"id":1,"method":"codespaces.open","params":{{"path":"{path}"}}}}"#).unwrap();
+    let opened = reply(&mut agent, 1);
+    assert_eq!(opened["ok"]["space"]["path"], path.as_str());
+    assert_eq!(opened["ok"]["exists"], true);
+
+    writeln!(agent.stdin, r#"{{"id":2,"method":"terminal.open","params":{{"cwd":"{path}","cols":80,"rows":24}}}}"#).unwrap();
+    let term = reply(&mut agent, 2)["ok"]["id"].as_str().unwrap().to_string();
+    writeln!(agent.stdin, r#"{{"id":3,"method":"terminal.input","params":{{"id":"{term}","data":"echo made-$((6*7))\r"}}}}"#).unwrap();
+    let printed = agent.until(|line| {
+        line["event"] == "terminal" && line["data"].as_str().is_some_and(|d| d.contains("made-42"))
+    });
+    assert_eq!(printed["id"], term.as_str());
+
+    let file = format!("{path}/notes.md");
+    writeln!(agent.stdin, r#"{{"id":4,"method":"file.write","params":{{"path":"{file}","text":"one","expected":null}}}}"#).unwrap();
+    assert!(reply(&mut agent, 4)["ok"]["modified"].as_u64().unwrap() > 0);
+    writeln!(agent.stdin, r#"{{"id":5,"method":"file.write","params":{{"path":"{file}","text":"two","expected":"zero"}}}}"#).unwrap();
+    assert_eq!(reply(&mut agent, 5)["error"]["code"], "conflict");
+
+    writeln!(agent.stdin, r#"{{"id":6,"method":"terminal.close","params":{{"id":"{term}"}}}}"#).unwrap();
+    assert_eq!(reply(&mut agent, 6)["ok"]["kind"], "done");
+    writeln!(agent.stdin, r#"{{"id":7,"method":"codespaces.list"}}"#).unwrap();
+    assert_eq!(reply(&mut agent, 7)["ok"]["list"].as_array().unwrap().len(), 1);
+}

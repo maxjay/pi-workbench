@@ -2,41 +2,97 @@
 //! files and drive sessions; what Pi's files and lines mean is worked out
 //! in `mcp`, `models`, `pi` and `transcript`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use protocol::{Answer, Call, ConfigFile, Outcome, Trigger};
+use protocol::{
+    Answer, Call, Codespace, CodespaceView, ConfigFile, Outcome, SessionSummary, Trigger,
+};
 
+use crate::codespaces::Codespaces;
 use crate::error::Error;
 use crate::session::Out;
 use crate::sessions::Sessions;
 use crate::tasks::Tasks;
-use crate::{config, files, health, mcp, models, pi};
+use crate::terminals::Terminals;
+use crate::{config, files, git, health, mcp, models, pi};
 
-/// What every handler needs: where Pi keeps its files, the sessions and
-/// the tasks.
+/// What every handler needs: where Pi keeps its files, the sessions, the
+/// tasks, the codespaces and their terminals.
 pub struct Ctx {
     pub agent_dir: PathBuf,
     pub data_dir: PathBuf,
     pub sessions: Sessions,
     pub tasks: Tasks,
+    pub spaces: Arc<Codespaces>,
+    pub terminals: Terminals,
 }
 
 impl Ctx {
     pub fn from_env(out: Out) -> Self {
         let agent_dir = config::agent_dir();
         let data_dir = config::data_dir();
+        let spaces = Arc::new(Codespaces::new(&data_dir));
+        let terminals = Terminals::new(out.clone(), spaces.clone());
+        // Without its socket or its file, Pi just goes without the tool.
+        let tool = Terminals::install(&data_dir.join("extensions"))
+            .and_then(|extension| Ok((extension, terminals.serve()?)))
+            .map_err(|err| eprintln!("wb-agent: no terminal tool: {err}"))
+            .ok();
         let sessions = Sessions::new(
             out.clone(),
             agent_dir.clone(),
             config::scratch_dir(),
             data_dir.clone(),
+            spaces.clone(),
+            tool,
         );
         Ctx {
             tasks: Tasks::new(&data_dir, sessions.clone(), out),
             sessions,
             agent_dir,
             data_dir,
+            spaces,
+            terminals,
         }
+    }
+
+    /// Each codespace with its git, what runs in it, and its sessions. Pi's
+    /// store is read once for them all, and git asked for each at once.
+    async fn views(&self, spaces: Vec<Codespace>) -> Vec<CodespaceView> {
+        let sessions = self.sessions.under(Path::new("/"));
+        let asks: Vec<_> = spaces
+            .iter()
+            .map(|space| {
+                let path = PathBuf::from(&space.path);
+                tokio::spawn(async move { git::status(&path).await })
+            })
+            .collect();
+        let mut views = Vec::new();
+        for (space, git) in spaces.into_iter().zip(asks) {
+            let path = PathBuf::from(&space.path);
+            let mine: Vec<SessionSummary> = sessions
+                .iter()
+                .filter(|s| Path::new(&s.cwd).starts_with(&path))
+                .cloned()
+                .collect();
+            views.push(CodespaceView {
+                git: git.await.ok().flatten().map(|status| status.summary),
+                exists: path.is_dir(),
+                running: self
+                    .terminals
+                    .list(&path)
+                    .into_iter()
+                    .filter(|t| t.running)
+                    .map(|t| t.title)
+                    .collect(),
+                sessions: mine.len() as u32,
+                need_you: mine.iter().filter(|s| s.asking).count() as u32,
+                latest: mine.into_iter().take(3).collect(),
+                space,
+            });
+        }
+        views
     }
 }
 
@@ -244,6 +300,81 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 path => ctx.sessions.get(&session)?.cwd().join(path),
             };
             Answer::File(files::read(&path).map_err(|err| Error::io(&path, err))?)
+        }
+        Call::FileWrite {
+            path,
+            text,
+            expected,
+        } => {
+            let at = PathBuf::from(&path);
+            let modified =
+                files::write(&at, &text, expected.as_deref()).map_err(|err| match err {
+                    files::Unsaved::Changed => {
+                        Error::Conflict(format!("{path} changed since it was opened"))
+                    }
+                    files::Unsaved::Io(err) => Error::io(&at, err),
+                })?;
+            Answer::Written { modified }
+        }
+        Call::FilesStat { paths } => Answer::Stats {
+            modified: files::stat(&paths),
+        },
+        Call::CodespacesList => Answer::Codespaces {
+            list: ctx.views(ctx.spaces.all()).await,
+        },
+        Call::CodespacesOpen { path } => {
+            let space = ctx.spaces.open(&path)?;
+            let view = ctx.views(vec![space]).await.remove(0);
+            Answer::Codespace(Box::new(view))
+        }
+        Call::CodespacesSetPinned { id, pinned } => {
+            ctx.spaces.set_pinned(&id, pinned)?;
+            Answer::Codespaces {
+                list: ctx.views(ctx.spaces.all()).await,
+            }
+        }
+        Call::CodespacesForget { id } => {
+            ctx.spaces.forget(&id)?;
+            Answer::Codespaces {
+                list: ctx.views(ctx.spaces.all()).await,
+            }
+        }
+        Call::FoldersList { dir } => {
+            let (dir, folders) = ctx.spaces.folders(&dir)?;
+            Answer::Folders {
+                dir: dir.display().to_string(),
+                folders,
+            }
+        }
+        Call::SessionsIn { dir } => Answer::Sessions {
+            sessions: ctx.sessions.under(Path::new(&dir)),
+        },
+        Call::GitStatus { dir } => Answer::Git {
+            status: git::status(Path::new(&dir)).await,
+        },
+        Call::GitOriginal { path } => Answer::Original {
+            text: git::original(Path::new(&path)).await,
+        },
+        Call::TerminalsList { dir } => Answer::Terminals {
+            list: ctx.terminals.list(Path::new(&dir)),
+        },
+        Call::TerminalOpen { cwd, cols, rows } => {
+            Answer::Terminal(ctx.terminals.open(Path::new(&cwd), cols, rows)?)
+        }
+        Call::TerminalRead { id } => Answer::Output {
+            data: ctx.terminals.read(&id)?,
+        },
+        Call::TerminalInput { id, data } => {
+            ctx.terminals.input(&id, &data)?;
+            Answer::Done
+        }
+        Call::TerminalResize { id, cols, rows } => {
+            ctx.terminals.resize(&id, cols, rows)?;
+            Answer::Done
+        }
+        Call::TerminalClose { id } => {
+            ctx.terminals.close(&id)?;
+            Answer::Done
         }
     })
 }

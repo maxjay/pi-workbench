@@ -15,6 +15,8 @@ pub enum Error {
     NotFound(String),
     #[error("{0}")]
     Pi(String),
+    #[error("{0}")]
+    Conflict(String),
 }
 
 impl Error {
@@ -40,6 +42,7 @@ impl From<Error> for Failure {
             Error::Invalid { .. } => FailureCode::Invalid,
             Error::NotFound(_) => FailureCode::NotFound,
             Error::Pi(_) => FailureCode::Pi,
+            Error::Conflict(_) => FailureCode::Conflict,
         };
         Failure {
             code,

@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use protocol::{Change, Event, FromAgent, Session, SessionSummary};
 use serde_json::json;
 
+use crate::codespaces::Codespaces;
 use crate::done::Done;
 use crate::error::Error;
 use crate::pi::{self, PiEvent};
@@ -29,10 +30,20 @@ pub struct Sessions {
     done: Arc<Done>,
     /// The `ask_user` extension, if it could be written out.
     extension: Option<PathBuf>,
+    /// Sessions in a codespace get the terminal tool, and where it asks.
+    spaces: Arc<Codespaces>,
+    terminals: Option<(PathBuf, PathBuf)>,
 }
 
 impl Sessions {
-    pub fn new(out: Out, agent_dir: PathBuf, scratch_dir: PathBuf, data_dir: PathBuf) -> Self {
+    pub fn new(
+        out: Out,
+        agent_dir: PathBuf,
+        scratch_dir: PathBuf,
+        data_dir: PathBuf,
+        spaces: Arc<Codespaces>,
+        terminals: Option<(PathBuf, PathBuf)>,
+    ) -> Self {
         let extension = match question::install(&data_dir.join("extensions")) {
             Ok(path) => Some(path),
             Err(err) => {
@@ -49,6 +60,8 @@ impl Sessions {
             scratch_dir,
             done: Arc::new(Done::new(data_dir.join("done.json"))),
             extension,
+            spaces,
+            terminals,
         }
     }
 
@@ -172,11 +185,16 @@ impl Sessions {
         let done = file
             .as_ref()
             .is_some_and(|file| self.done.contains(&file.display().to_string()));
+        let terminals = self
+            .terminals
+            .clone()
+            .filter(|_| self.spaces.holding(&cwd).is_some());
         let launch = Launch {
             pi: self.pi.clone(),
             cwd,
             file,
             extension: self.extension.clone(),
+            terminals,
             done,
         };
         let on_close = {
@@ -258,17 +276,23 @@ impl Sessions {
 
     /// Scratchpads: the live ones first, then those in Pi's store.
     pub fn list(&self) -> Vec<SessionSummary> {
+        self.under(&self.scratch_dir.clone())
+    }
+
+    /// Sessions that ran in `dir` or under it: the live ones first, then
+    /// those in Pi's store, newest first.
+    pub fn under(&self, dir: &Path) -> Vec<SessionSummary> {
         let now = millis(SystemTime::now());
         let live: Vec<SessionSummary> = self
             .live
             .lock()
             .expect("not poisoned")
             .values()
-            .filter(|live| live.cwd().starts_with(&self.scratch_dir))
+            .filter(|live| live.cwd().starts_with(dir))
             .map(|live| live.summary(now))
             .collect();
         let done = self.done.all();
-        let saved = store::under(&self.agent_dir, &self.scratch_dir)
+        let saved = store::under(&self.agent_dir, dir)
             .into_iter()
             .filter(|saved| !live.iter().any(|live| live.file == saved.file))
             .map(|saved| SessionSummary {

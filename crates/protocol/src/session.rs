@@ -273,6 +273,9 @@ pub struct FileView {
     /// Absolute.
     pub path: String,
     pub content: FileContent,
+    /// When it last changed, in milliseconds since 1970; 0 when it's gone.
+    #[ts(type = "number")]
+    pub modified: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]

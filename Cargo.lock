@@ -4293,6 +4293,7 @@ version = "1.0.0-alpha.3"
 dependencies = [
  "base64 0.22.1",
  "jiff",
+ "libc",
  "protocol",
  "serde",
  "serde_json",

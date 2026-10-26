@@ -2,10 +2,12 @@
 //! line on stdin and writes replies and events, one per line, on stdout.
 //! Everything it says goes through one writer, so lines never interleave.
 
+mod codespaces;
 mod config;
 mod done;
 mod error;
 mod files;
+mod git;
 mod health;
 mod json;
 mod mcp;
@@ -19,9 +21,12 @@ mod session;
 mod sessions;
 mod store;
 mod tasks;
+mod terminals;
 mod transcript;
 
-use protocol::{Event, FailureCode, FromAgent, Outcome, Reply, Request};
+use std::sync::Arc;
+
+use protocol::{Call, Event, FailureCode, FromAgent, Outcome, Reply, Request};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -44,9 +49,10 @@ async fn main() {
         }
     });
 
-    let ctx = router::Ctx::from_env(out.clone());
+    let ctx = Arc::new(router::Ctx::from_env(out.clone()));
     ctx.sessions.stop_idle(config::idle_after());
     ctx.tasks.start();
+    ctx.terminals.start();
     let _ = out.send(FromAgent::Event(Event::Ready {
         version: env!("CARGO_PKG_VERSION").into(),
     }));
@@ -56,24 +62,44 @@ async fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let reply = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => Reply {
-                id: request.id,
-                outcome: router::handle(&ctx, request.call).await,
-            },
-            Err(err) => Reply {
-                id: id_of(&line),
-                outcome: Outcome::Error(protocol::Failure {
-                    code: FailureCode::BadRequest,
-                    message: err.to_string(),
-                }),
-            },
+        let request = match serde_json::from_str::<Request>(&line) {
+            Ok(request) => request,
+            Err(err) => {
+                let _ = out.send(FromAgent::Reply(Reply {
+                    id: id_of(&line),
+                    outcome: Outcome::Error(protocol::Failure {
+                        code: FailureCode::BadRequest,
+                        message: err.to_string(),
+                    }),
+                }));
+                continue;
+            }
         };
-        let _ = out.send(FromAgent::Reply(reply));
+        // Keys go to a terminal in the order they were typed, so they're
+        // handled here, in turn. Everything else is answered as it can be,
+        // so a slow call doesn't hold up the rest.
+        let typed = matches!(
+            request.call,
+            Call::TerminalInput { .. } | Call::TerminalResize { .. }
+        );
+        let (ctx, out) = (ctx.clone(), out.clone());
+        let answer = async move {
+            let outcome = router::handle(&ctx, request.call).await;
+            let _ = out.send(FromAgent::Reply(Reply {
+                id: request.id,
+                outcome,
+            }));
+        };
+        if typed {
+            answer.await;
+        } else {
+            tokio::spawn(answer);
+        }
     }
 
     // The workbench has gone: let each Pi finish writing its session, and
     // what's left to say go out, without waiting on either for long.
+    ctx.terminals.shutdown();
     ctx.sessions.shutdown().await;
     drop(ctx);
     drop(out);

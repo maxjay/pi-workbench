@@ -8,10 +8,12 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod codespace;
 mod config;
 mod session;
 mod task;
 
+pub use codespace::*;
 pub use config::*;
 pub use session::*;
 pub use task::*;
@@ -145,6 +147,58 @@ pub enum Call {
     /// folder; an absolute one needs no session.
     #[serde(rename = "file.read")]
     FileRead { session: String, path: String },
+    /// Write a file, by its absolute path. With `expected`, only if the file
+    /// still holds that text: anything else changed it since it was read.
+    #[serde(rename = "file.write")]
+    FileWrite {
+        path: String,
+        text: String,
+        expected: Option<String>,
+    },
+    /// When each file last changed, by absolute path, in the same order.
+    #[serde(rename = "files.stat")]
+    FilesStat { paths: Vec<String> },
+    /// The codespaces, pinned first, then the last opened first.
+    #[serde(rename = "codespaces.list")]
+    CodespacesList,
+    /// Open a folder as a codespace, or open it again. `~` is home.
+    #[serde(rename = "codespaces.open")]
+    CodespacesOpen { path: String },
+    #[serde(rename = "codespaces.setPinned")]
+    CodespacesSetPinned { id: String, pinned: bool },
+    /// Take a codespace off the list. Its folder and sessions stay.
+    #[serde(rename = "codespaces.forget")]
+    CodespacesForget { id: String },
+    /// The folders in a folder, for picking one to open. `~` is home.
+    #[serde(rename = "folders.list")]
+    FoldersList { dir: String },
+    /// Sessions that ran in a folder or under it: the live ones first, then
+    /// those in Pi's store.
+    #[serde(rename = "sessions.in")]
+    SessionsIn { dir: String },
+    /// Where the repository a folder is in stands. None outside git.
+    #[serde(rename = "git.status")]
+    GitStatus { dir: String },
+    /// A file as the last commit has it. None when the commit doesn't have it.
+    #[serde(rename = "git.original")]
+    GitOriginal { path: String },
+    /// The terminals in a folder or under it.
+    #[serde(rename = "terminals.list")]
+    TerminalsList { dir: String },
+    /// Start a shell in `cwd`.
+    #[serde(rename = "terminal.open")]
+    TerminalOpen { cwd: String, cols: u16, rows: u16 },
+    /// What a terminal has shown lately, to draw it again.
+    #[serde(rename = "terminal.read")]
+    TerminalRead { id: String },
+    /// Keys typed, or pasted text.
+    #[serde(rename = "terminal.input")]
+    TerminalInput { id: String, data: String },
+    #[serde(rename = "terminal.resize")]
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    /// Close a terminal, stopping what runs in it.
+    #[serde(rename = "terminal.close")]
+    TerminalClose { id: String },
 }
 
 /// Everything wb-agent writes: replies to requests, and events.
@@ -212,6 +266,40 @@ pub enum Answer {
         texts: Vec<String>,
     },
     File(FileView),
+    /// A file written, and when, in milliseconds since 1970.
+    Written {
+        #[ts(type = "number")]
+        modified: u64,
+    },
+    /// When each file asked about last changed; 0 for one that's gone.
+    Stats {
+        #[ts(type = "number[]")]
+        modified: Vec<u64>,
+    },
+    Codespaces {
+        list: Vec<CodespaceView>,
+    },
+    Codespace(Box<CodespaceView>),
+    Folders {
+        /// The folder listed, absolute.
+        dir: String,
+        folders: Vec<Folder>,
+    },
+    Git {
+        status: Option<GitStatus>,
+    },
+    /// A file's text, when there is one.
+    Original {
+        text: Option<String>,
+    },
+    Terminals {
+        list: Vec<Terminal>,
+    },
+    Terminal(Terminal),
+    /// What a terminal showed, as it was sent to it.
+    Output {
+        data: String,
+    },
     Done,
 }
 
@@ -237,6 +325,8 @@ pub enum FailureCode {
     NotFound,
     /// Pi couldn't be started, or has stopped.
     Pi,
+    /// Something else changed it first.
+    Conflict,
 }
 
 /// What wb-agent says without being asked.
@@ -250,6 +340,11 @@ pub enum Event {
     Session { id: String, change: Change },
     /// The tasks, after any of them or their runs changed.
     Tasks { list: TaskList },
+    /// What a terminal printed, as it printed it.
+    Terminal { id: String, data: String },
+    /// Every terminal, after one opened, closed, exited, or started or
+    /// finished running something.
+    Terminals { list: Vec<Terminal> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -369,6 +464,39 @@ mod tests {
                 file: "/s.jsonl".into(),
                 done: true
             }
+        );
+    }
+
+    #[test]
+    fn codespace_calls() {
+        let line = r#"{"id":5,"method":"terminal.input","params":{"id":"t1","data":"ls\r"}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap().call,
+            Call::TerminalInput {
+                id: "t1".into(),
+                data: "ls\r".into()
+            }
+        );
+        let line = r#"{"id":6,"method":"file.write","params":{"path":"/a.txt","text":"b","expected":null}}"#;
+        assert_eq!(
+            serde_json::from_str::<Request>(line).unwrap().call,
+            Call::FileWrite {
+                path: "/a.txt".into(),
+                text: "b".into(),
+                expected: None
+            }
+        );
+        let output = FromAgent::Event(Event::Terminal {
+            id: "t1".into(),
+            data: "$ ".into(),
+        });
+        assert_eq!(
+            serde_json::to_string(&output).unwrap(),
+            r#"{"type":"event","event":"terminal","id":"t1","data":"$ "}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&GitMark::Untracked).unwrap(),
+            r#""untracked""#
         );
     }
 

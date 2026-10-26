@@ -8,4 +8,8 @@ export type FileView = {
 /**
  * Absolute.
  */
-path: string, content: FileContent, };
+path: string, content: FileContent, 
+/**
+ * When it last changed, in milliseconds since 1970; 0 when it's gone.
+ */
+modified: number, };
