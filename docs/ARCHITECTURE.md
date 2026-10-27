@@ -36,7 +36,7 @@ does one job.
 Why a web page? Tauri uses the WebView2 that ships with Windows, so the app
 is a few megabytes and starts quickly. The page is where the hard UI
 already exists: a code editor (CodeMirror), a terminal (xterm.js), and
-later a view of Pi's Playwright browser. The editor and terminals load
+and web tabs' conversations beside the page. The editor and terminals load
 with the first codespace, not when the app starts. The heavy work happens
 in Rust in WSL, not in the page.
 
@@ -202,6 +202,41 @@ keeps the list in `codespaces.json`; nothing is written into the folder.
   their own: its stdin is the workbench's, and a child that changed it
   could stop requests being read.
 
+## Web tabs
+
+Web tabs are pages in the workbench's own Chromium: wb-browser, a CEF
+program beside the app, with your profile brought in from the Chromium you
+use. The app lays each tab's page over the window where the page says
+(`browser_place`); the rest is the page's, as for every other tab.
+
+- **wb-agent follows the browser** (`browser/`) over the DevTools protocol:
+  every page, its title, loading and back/forward, downloads, and history,
+  kept in `history.jsonl` for the address bar's suggestions. It drives your
+  tabs (`browser.navigate`, `.go`, `.reload`, `.close`) and takes a page's
+  picture (`browser.shot`).
+- **Reaching it from WSL.** wb-agent runs in WSL and the browser on
+  Windows. In the app, wb-agent runs with `--browser-tunnel`: each stream
+  it opens to the DevTools port is lines through the app, which connects on
+  Windows (`app/src-tauri/src/browser.rs`). WSL's networking never matters.
+  In development, `WB_BROWSER=host:port` points wb-agent at any Chromium
+  directly.
+- **Pi uses the browser** through a Playwright MCP server called `browser`,
+  which wb-agent adds to `mcp.json` once. It connects to wb-agent's gate
+  (`browser/gate.rs`) on 127.0.0.1, in WSL, with the session in the path
+  (`WB_SESSION` from Pi's environment, or `terminal`). Through the gate,
+  each Pi sees only its own pages and those its session sits beside, and
+  starts on a blank page of its own, never one of yours. Any other
+  Playwright server keeps its own browser.
+- **Pi's pages stay out of your strip.** A call that used the browser gets
+  the page it left Pi on (`Tool.browser`), shown as a card with the page's
+  picture; opening it puts the page in your strip, with that session
+  beside it. A page Pi opens from a terminal joins your strip at once,
+  having no card to open it from.
+- **Your pages** get a conversation when you first ask about one: a
+  session in a scratchpad folder, kept out of the Scratchpad's list.
+- In a plain browser (`npm run dev`) the page area shows the page's
+  picture, a moment behind, as there's no Chromium view to lay over it.
+
 ## Layout
 
 ```
@@ -227,11 +262,15 @@ crates/
     src/codespaces.rs  the codespaces, and folders to open as one
     src/git.rs       where a repository stands; a file as the last commit has it
     src/terminals.rs  shells in pseudo-terminals; terminal.ts is Pi's tool for them
+    src/browser/     the browser: following it (mod.rs), the DevTools client
+                     (cdp.rs, ws.rs), reaching it (dial.rs), history, Pi's
+                     server in mcp.json (server.rs) and the gate Pi uses
     tests/stdio.rs   the real binary, spoken to in lines, with a fake pi
 app/
   src-tauri/         the app: start wb-agent, carry lines
     src/agent.rs     the child process
     src/background.rs  the tray, closing to it, starting at sign-in
+    src/browser.rs   wb-browser, and wb-agent's streams to it
     src/launch.rs    which wb-agent to run
     src/wsl.rs       Windows only: run in WSL, install the bundled wb-agent
   ui/
@@ -286,7 +325,9 @@ cd app/ui && npm install && npm run dev     # http://localhost:5173
 
 The dev server starts `target/debug/wb-agent` for each page; set `WB_AGENT`
 to run another. `PI_CODING_AGENT_DIR` points wb-agent at a different set of
-Pi files, which is handy for trying things out.
+Pi files, which is handy for trying things out. Web tabs need a Chromium:
+start one with `--remote-debugging-port=9222 --user-data-dir=<a folder>`
+and set `WB_BROWSER=127.0.0.1:9222`.
 
 The app:
 
@@ -312,5 +353,5 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
 4. **Sessions** inside codespaces (done).
 5. **Subagents.**
 
-Then Pi's browser: Playwright's Chromium in WSL, shown in a tab through
-CDP screencasts, which you and Pi both drive.
+Web tabs (in progress): everything but wb-browser itself, the CEF host,
+which is next.
