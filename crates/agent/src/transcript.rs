@@ -112,6 +112,7 @@ impl Transcript {
                         output: String::new(),
                         images: Vec::new(),
                         details: Value::Null,
+                        browser: None,
                     }))
                 });
                 self.edit_tool(index, |tool| {
@@ -216,6 +217,7 @@ impl Transcript {
             output: String::new(),
             images: Vec::new(),
             details: Value::Null,
+            browser: None,
         }));
     }
 
@@ -343,6 +345,7 @@ impl Transcript {
                         output: String::new(),
                         images: Vec::new(),
                         details: Value::Null,
+                        browser: None,
                     }),
                 );
             }
@@ -543,6 +546,13 @@ impl Transcript {
     fn set(&mut self, index: usize, entry: Entry) {
         self.entries[index] = entry;
         self.changed.insert(index);
+    }
+
+    /// The page a call left Pi on in the browser.
+    pub fn show_browser(&mut self, tool: &str, shot: protocol::Shot) {
+        if let Some(index) = self.tool_index(tool) {
+            self.edit_tool(index, |t| t.browser = Some(Box::new(shot)));
+        }
     }
 
     fn tool_index(&self, id: &str) -> Option<usize> {

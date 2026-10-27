@@ -8,11 +8,13 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod browser;
 mod codespace;
 mod config;
 mod session;
 mod task;
 
+pub use browser::*;
 pub use codespace::*;
 pub use config::*;
 pub use session::*;
@@ -199,6 +201,74 @@ pub enum Call {
     /// Close a terminal, stopping what runs in it.
     #[serde(rename = "terminal.close")]
     TerminalClose { id: String },
+    /// The browser's pages and downloads.
+    #[serde(rename = "browser.get")]
+    BrowserGet,
+    /// Open a page in a new tab of yours, with `session` beside it.
+    #[serde(rename = "browser.open")]
+    BrowserOpen {
+        url: String,
+        session: Option<String>,
+    },
+    /// Put a page Pi opened in your tab strip.
+    #[serde(rename = "browser.show")]
+    BrowserShow { tab: String },
+    #[serde(rename = "browser.navigate")]
+    BrowserNavigate { tab: String, url: String },
+    /// Back (-1) or forward (1) in the page's history.
+    #[serde(rename = "browser.go")]
+    BrowserGo { tab: String, by: i32 },
+    #[serde(rename = "browser.reload")]
+    BrowserReload { tab: String },
+    #[serde(rename = "browser.close")]
+    BrowserClose { tab: String },
+    /// The session beside a page, or none.
+    #[serde(rename = "browser.setSession")]
+    BrowserSetSession {
+        tab: String,
+        session: Option<String>,
+    },
+    /// Pages you've been to that match what's typed, the best first.
+    #[serde(rename = "browser.history")]
+    BrowserHistory { query: String },
+    /// A page as it looks now, small.
+    #[serde(rename = "browser.shot")]
+    BrowserShot { tab: String },
+    /// Put Pi's `browser` server back in `mcp.json`.
+    #[serde(rename = "browser.addServer")]
+    BrowserAddServer,
+}
+
+/// Lines the app writes to wb-agent besides requests.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum FromApp {
+    Tunnel(Tunnel),
+}
+
+/// A TCP stream to the browser carried in lines between wb-agent and the
+/// app: how wb-agent and Pi, in WSL, reach the browser on Windows. Either
+/// side may close a stream; the other stops using it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Tunnel {
+    pub stream: u32,
+    #[serde(flatten)]
+    pub op: TunnelOp,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "op", rename_all = "camelCase")]
+#[ts(export)]
+pub enum TunnelOp {
+    /// wb-agent asks the app to connect to the browser.
+    Open,
+    /// Bytes, as base64.
+    Data {
+        data: String,
+    },
+    Close,
 }
 
 /// Everything wb-agent writes: replies to requests, and events.
@@ -208,6 +278,8 @@ pub enum Call {
 pub enum FromAgent {
     Reply(Reply),
     Event(Event),
+    /// For the app, not the page.
+    Tunnel(Tunnel),
 }
 
 /// The answer to the request with the same id.
@@ -300,6 +372,12 @@ pub enum Answer {
     Output {
         data: String,
     },
+    Browser(Browser),
+    WebTab(WebTab),
+    Visits {
+        list: Vec<Visit>,
+    },
+    Shot(Shot),
     Done,
 }
 
@@ -345,6 +423,8 @@ pub enum Event {
     /// Every terminal, after one opened, closed, exited, or started or
     /// finished running something.
     Terminals { list: Vec<Terminal> },
+    /// The browser, after a page or a download changed.
+    Browser { browser: Browser },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
@@ -533,12 +613,13 @@ mod tests {
                     output: String::new(),
                     images: Vec::new(),
                     details: serde_json::Value::Null,
+                    browser: None,
                 })),
             },
         });
         assert_eq!(
             serde_json::to_string(&change).unwrap(),
-            r#"{"type":"event","event":"session","id":"s1","change":{"change":"entry","index":3,"entry":{"kind":"tool","id":"c1","name":"bash","args":{"command":"ls"},"status":"running","output":"","images":[],"details":null}}}"#
+            r#"{"type":"event","event":"session","id":"s1","change":{"change":"entry","index":3,"entry":{"kind":"tool","id":"c1","name":"bash","args":{"command":"ls"},"status":"running","output":"","images":[],"details":null,"browser":null}}}"#
         );
         let image = FileContent::Image {
             mime_type: "image/png".into(),

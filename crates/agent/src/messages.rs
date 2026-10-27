@@ -62,6 +62,7 @@ pub fn block(block: &Value) -> Option<Entry> {
             output: String::new(),
             images: Vec::new(),
             details: Value::Null,
+            browser: None,
         })),
         _ => None,
     }
@@ -117,6 +118,7 @@ pub fn other(message: &Value) -> Option<Entry> {
             output: message["output"].as_str().unwrap_or_default().to_string(),
             images: Vec::new(),
             details: Value::Null,
+            browser: None,
         })),
         "custom" if message["display"] == true => Some(Entry::Notice {
             text: text(&message["content"]),

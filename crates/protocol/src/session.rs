@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::Shot;
+
 /// A live session: where it stands, and everything said so far.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -147,6 +149,9 @@ pub enum AskReply {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(export)]
+// Most of a conversation is tool calls: boxing them would cost an
+// allocation each to save space on the few entries that aren't.
+#[allow(clippy::large_enum_variant)]
 pub enum Entry {
     User { text: String, images: Vec<Image> },
     Text { text: String },
@@ -170,6 +175,10 @@ pub struct Tool {
     /// What the tool kept for itself, such as a todo tool's list.
     #[ts(type = "unknown")]
     pub details: serde_json::Value,
+    /// The page Pi was on in the browser when the call finished, for a
+    /// call that used it.
+    #[serde(default)]
+    pub browser: Option<Box<Shot>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

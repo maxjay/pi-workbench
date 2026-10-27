@@ -2,6 +2,7 @@
 //! line on stdin and writes replies and events, one per line, on stdout.
 //! Everything it says goes through one writer, so lines never interleave.
 
+mod browser;
 mod codespaces;
 mod config;
 mod done;
@@ -26,7 +27,7 @@ mod transcript;
 
 use std::sync::Arc;
 
-use protocol::{Call, Event, FailureCode, FromAgent, Outcome, Reply, Request};
+use protocol::{Call, Event, FailureCode, FromAgent, FromApp, Outcome, Reply, Request};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
@@ -49,7 +50,19 @@ async fn main() {
         }
     });
 
-    let ctx = Arc::new(router::Ctx::from_env(out.clone()));
+    // The browser: through the app with `--browser-tunnel`, at `WB_BROWSER`
+    // (`host:port`) in development, or not at all.
+    let tunnels = std::env::args()
+        .any(|arg| arg == "--browser-tunnel")
+        .then(|| browser::Tunnels::new(out.clone()));
+    let dialer = match (&tunnels, std::env::var("WB_BROWSER")) {
+        (Some(tunnels), _) => Some(browser::Dialer::Tunnel(tunnels.clone())),
+        (None, Ok(address)) => Some(browser::Dialer::Direct(address)),
+        (None, Err(_)) => None,
+    };
+    let web = browser::Web::new(out.clone(), config::agent_dir(), config::data_dir(), dialer);
+    let ctx = Arc::new(router::Ctx::from_env(out.clone(), web.clone()));
+    web.start();
     ctx.sessions.stop_idle(config::idle_after());
     ctx.tasks.start();
     ctx.terminals.start();
@@ -60,6 +73,15 @@ async fn main() {
     let mut stdin = requests();
     while let Some(line) = stdin.recv().await {
         if line.trim().is_empty() {
+            continue;
+        }
+        // The app's own lines: streams to the browser.
+        if line.starts_with(r#"{"type":"#)
+            && let Ok(FromApp::Tunnel(tunnel)) = serde_json::from_str(&line)
+        {
+            if let Some(tunnels) = &tunnels {
+                tunnels.incoming(tunnel);
+            }
             continue;
         }
         let request = match serde_json::from_str::<Request>(&line) {

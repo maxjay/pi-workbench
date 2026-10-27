@@ -9,6 +9,7 @@ use protocol::{
     Answer, Call, Codespace, CodespaceView, ConfigFile, Outcome, SessionSummary, Trigger,
 };
 
+use crate::browser::Web;
 use crate::codespaces::Codespaces;
 use crate::error::Error;
 use crate::session::Out;
@@ -26,10 +27,11 @@ pub struct Ctx {
     pub tasks: Tasks,
     pub spaces: Arc<Codespaces>,
     pub terminals: Terminals,
+    pub web: Arc<Web>,
 }
 
 impl Ctx {
-    pub fn from_env(out: Out) -> Self {
+    pub fn from_env(out: Out, web: Arc<Web>) -> Self {
         let agent_dir = config::agent_dir();
         let data_dir = config::data_dir();
         let spaces = Arc::new(Codespaces::new(&data_dir));
@@ -46,6 +48,7 @@ impl Ctx {
             data_dir.clone(),
             spaces.clone(),
             tool,
+            web.clone(),
         );
         Ctx {
             tasks: Tasks::new(&data_dir, sessions.clone(), out),
@@ -54,6 +57,7 @@ impl Ctx {
             data_dir,
             spaces,
             terminals,
+            web,
         }
     }
 
@@ -105,7 +109,42 @@ pub async fn handle(ctx: &Ctx, call: Call) -> Outcome {
 
 async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
     let dir = &ctx.agent_dir;
+    let web = &ctx.web;
     Ok(match call {
+        Call::BrowserGet => Answer::Browser(web.view()),
+        Call::BrowserOpen { url, session } => Answer::WebTab(web.open(&url, session).await?),
+        Call::BrowserShow { tab } => {
+            web.show(&tab)?;
+            Answer::Done
+        }
+        Call::BrowserNavigate { tab, url } => {
+            web.navigate(&tab, &url).await?;
+            Answer::Done
+        }
+        Call::BrowserGo { tab, by } => {
+            web.go(&tab, by).await?;
+            Answer::Done
+        }
+        Call::BrowserReload { tab } => {
+            web.reload(&tab).await?;
+            Answer::Done
+        }
+        Call::BrowserClose { tab } => {
+            web.close(&tab).await?;
+            Answer::Done
+        }
+        Call::BrowserSetSession { tab, session } => {
+            web.set_session(&tab, session)?;
+            Answer::Done
+        }
+        Call::BrowserHistory { query } => Answer::Visits {
+            list: web.history(&query),
+        },
+        Call::BrowserShot { tab } => Answer::Shot(web.shot(&tab).await?),
+        Call::BrowserAddServer => {
+            web.add_server()?;
+            Answer::Browser(web.view())
+        }
         Call::Health => Answer::Health(health::check(dir).await),
         Call::ConfigRead { file } => Answer::Config(config::read(dir, file)?),
         Call::ConfigWrite { file, text } => {

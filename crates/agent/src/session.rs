@@ -18,6 +18,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::browser::Web;
 use crate::error::Error;
 use crate::pi::{self, PiEvent};
 use crate::question;
@@ -41,6 +42,9 @@ pub struct Launch {
     /// The terminal tool and the socket it asks on, in a codespace.
     pub terminals: Option<(PathBuf, PathBuf)>,
     pub done: bool,
+    /// The browser, for Pi's `browser` server to find, and to show where
+    /// Pi was after a call that used it.
+    pub web: Option<Arc<Web>>,
 }
 
 type Waiting<T> = Mutex<HashMap<String, oneshot::Sender<T>>>;
@@ -71,6 +75,12 @@ impl Live {
     ) -> Result<Arc<Live>, Error> {
         let mut command = Command::new(&launch.pi);
         command.args(["--mode", "rpc"]);
+        // Pi's `browser` server says whose it is with these.
+        command.env("WB_SESSION", &id);
+        if let Some(port) = launch.web.as_ref().and_then(|web| web.port()) {
+            command.env("WB_BROWSER_PORT", port.to_string());
+        }
+        let web = launch.web.clone();
         if let Some(file) = &launch.file {
             command.arg("--session").arg(file);
         }
@@ -146,6 +156,8 @@ impl Live {
         let reader = live.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            // When each running tool started, to tell whether it used the browser.
+            let mut started: HashMap<String, Instant> = HashMap::new();
             let mut tick = tokio::time::interval(FLUSH);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -153,7 +165,18 @@ impl Live {
                     line = lines.next_line() => match line {
                         Ok(Some(line)) => {
                             if let Some(event) = pi::decode(&line) {
+                                let ended = match &event {
+                                    PiEvent::ToolStart { id, .. } => {
+                                        started.insert(id.clone(), Instant::now());
+                                        None
+                                    }
+                                    PiEvent::ToolEnd { id, .. } => started.remove(id).map(|at| (id.clone(), at)),
+                                    _ => None,
+                                };
                                 reader.on_event(event).await;
+                                if let (Some(web), Some((tool, since))) = (&web, ended) {
+                                    reader.show_browser(web, tool, since);
+                                }
                             }
                         }
                         _ => break,
@@ -300,6 +323,21 @@ impl Live {
             .stopped
             .clone()
             .unwrap_or_else(|| "Pi has stopped".into())
+    }
+
+    /// After a call that used the browser, the page Pi was left on, shown
+    /// on the call.
+    fn show_browser(self: &Arc<Self>, web: &Arc<Web>, tool: String, since: Instant) {
+        if !web.used_since(&self.id, since) {
+            return;
+        }
+        let (web, live) = (web.clone(), Arc::downgrade(self));
+        tokio::spawn(async move {
+            let Some(live) = live.upgrade() else { return };
+            if let Some(shot) = web.session_shot(&live.id).await {
+                live.edit(|t| t.show_browser(&tool, shot));
+            }
+        });
     }
 
     /// Changes the transcript and tells the workbench right away.

@@ -92,6 +92,18 @@ pub fn set_enabled(text: &str, name: &str, enabled: bool) -> Result<String, Erro
     Ok(json::pretty(&doc))
 }
 
+/// The file with a server added under `name`, unless one is already there.
+pub fn add(text: &str, name: &str, entry: Value) -> Result<String, Error> {
+    let mut doc = json::object(text, FILE)?;
+    let entries = doc
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Default::default()))
+        .as_object_mut()
+        .ok_or_else(|| Error::invalid(FILE, "mcpServers isn't an object"))?;
+    entries.entry(name).or_insert(entry);
+    Ok(json::pretty(&doc))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +118,26 @@ mod tests {
     "sentry": { "url": "https://mcp.sentry.dev/mcp", "description": "Errors" }
   }
 }"#;
+
+    #[test]
+    fn adds_a_server_once_keeping_the_others() {
+        let entry = serde_json::json!({ "command": "sh", "args": ["-c", "true"] });
+        let added = add(SAMPLE, "browser", entry.clone()).unwrap();
+        let names: Vec<_> = servers(&added)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, ["grafana", "azure-devops", "sentry", "browser"]);
+        assert_eq!(
+            add(&added, "browser", serde_json::json!({ "url": "x" })).unwrap(),
+            added
+        );
+        assert_eq!(
+            servers(&add("", "browser", entry).unwrap()).unwrap().len(),
+            1
+        );
+    }
 
     #[test]
     fn reads_local_and_remote_servers() {

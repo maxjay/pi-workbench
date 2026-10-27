@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use protocol::{Change, Event, FromAgent, Session, SessionSummary};
 use serde_json::json;
 
+use crate::browser::Web;
 use crate::codespaces::Codespaces;
 use crate::done::Done;
 use crate::error::Error;
@@ -33,6 +34,7 @@ pub struct Sessions {
     /// Sessions in a codespace get the terminal tool, and where it asks.
     spaces: Arc<Codespaces>,
     terminals: Option<(PathBuf, PathBuf)>,
+    web: Arc<Web>,
 }
 
 impl Sessions {
@@ -43,6 +45,7 @@ impl Sessions {
         data_dir: PathBuf,
         spaces: Arc<Codespaces>,
         terminals: Option<(PathBuf, PathBuf)>,
+        web: Arc<Web>,
     ) -> Self {
         let extension = match question::install(&data_dir.join("extensions")) {
             Ok(path) => Some(path),
@@ -62,6 +65,7 @@ impl Sessions {
             extension,
             spaces,
             terminals,
+            web,
         }
     }
 
@@ -196,6 +200,7 @@ impl Sessions {
             extension: self.extension.clone(),
             terminals,
             done,
+            web: Some(self.web.clone()),
         };
         let on_close = {
             let (live, out, id) = (self.live.clone(), self.out.clone(), id.clone());
