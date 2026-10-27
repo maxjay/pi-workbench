@@ -1,17 +1,22 @@
 // Ctrl K: type to filter the commands, move with the arrows, Enter runs
-// one, Escape closes. What the commands are lives in state/commands.
+// one, Escape closes. What the commands are lives in state/commands. On a
+// web tab it's the address bar too: it opens on the page's address, and
+// what's typed is also looked for in your history.
 
 import { createSignal, For, Show } from 'solid-js';
+import { onWeb, suggest } from '../state/browser';
 import { type Command, search } from '../state/commands';
+import { cover } from '../state/web-view';
 
 const [isOpen, setOpen] = createSignal(false);
 const [query, setQuery] = createSignal('');
 const [selected, setSelected] = createSignal(0);
 
-export function openPalette() {
-  setQuery('');
+export function openPalette(start = '') {
+  setQuery(start);
   setSelected(0);
   setOpen(true);
+  if (onWeb()) void suggest(start);
 }
 
 export function closePalette() {
@@ -19,6 +24,7 @@ export function closePalette() {
 }
 
 export function Palette() {
+  cover(isOpen);
   const results = () => search(query());
   const run = (command: Command | undefined) => {
     if (!command) return;
@@ -40,12 +46,18 @@ export function Palette() {
       <div class="palette" role="dialog" aria-label="Go to anything">
         <input
           class="palette-input"
-          ref={(el) => queueMicrotask(() => el.focus())}
-          placeholder="Go to a tab or a setting, or run an action…"
+          ref={(el) =>
+            queueMicrotask(() => {
+              el.focus();
+              el.select();
+            })
+          }
+          placeholder={onWeb() ? 'Type an address, or search' : 'Go to a tab or a setting, or run an action…'}
           value={query()}
           onInput={(e) => {
             setQuery(e.currentTarget.value);
             setSelected(0);
+            if (onWeb()) void suggest(e.currentTarget.value);
           }}
           onKeyDown={onKey}
         />

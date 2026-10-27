@@ -21,6 +21,11 @@ const paths = {
   'file-plus': 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M12 11v6M9 14h6',
   collapse: 'M7 15l5-5 5 5M7 20l5-5 5 5M5 4h14',
   terminal: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
+  globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18',
+  forward: 'M9 6l6 6-6 6',
+  reload: 'M19 12a7 7 0 1 1-2.05-4.95M19 4v4h-4',
+  download: 'M12 4v11M7 10l5 5 5-5M5 19h14',
+  panel: 'M3 5h18v14H3zM15 5v14',
 } as const;
 
 export type IconName = keyof typeof paths;

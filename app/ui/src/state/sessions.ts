@@ -110,6 +110,11 @@ export async function startIn(cwd: string, text: string) {
   return inBackground(await ask({ method: 'session.start', params: { cwd, text } }, 'session'));
 }
 
+/** Starts Pi beside a web page, in a scratchpad folder of its own but kept out of the list. */
+export async function startBeside(text: string) {
+  return inBackground(await ask({ method: 'session.start', params: { cwd: null, text } }, 'session'));
+}
+
 /** The sessions that ran in a folder or under it, live ones first. */
 export async function sessionsIn(dir: string) {
   return (await ask({ method: 'sessions.in', params: { dir } }, 'sessions')).sessions;

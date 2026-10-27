@@ -5,6 +5,7 @@ import { For, Match, Switch } from 'solid-js';
 import { health } from '../state/health';
 import { reload, section, sections, setSection } from '../state/settings';
 import { Background } from './settings/Background';
+import { BrowserSettings } from './settings/Browser';
 import { Instructions } from './settings/Instructions';
 import { Mcp } from './settings/Mcp';
 import { Models } from './settings/Models';
@@ -37,6 +38,15 @@ export function Settings() {
           <span>Background</span>
           <span class="settings-file">tray, sign-in</span>
         </button>
+        <button
+          type="button"
+          class="settings-link"
+          aria-current={section() === 'browser' ? 'page' : undefined}
+          onClick={() => setSection('browser')}
+        >
+          <span>Browser</span>
+          <span class="settings-file">Chromium</span>
+        </button>
         <div class="settings-foot">
           <p class="mono">{health()?.agentDir ?? ''}</p>
           <button type="button" class="button" onClick={reload}>
@@ -57,6 +67,9 @@ export function Settings() {
           </Match>
           <Match when={section() === 'background'}>
             <Background />
+          </Match>
+          <Match when={section() === 'browser'}>
+            <BrowserSettings />
           </Match>
         </Switch>
       </div>

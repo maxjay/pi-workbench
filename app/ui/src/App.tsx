@@ -7,11 +7,13 @@ import { closePalette, openPalette, Palette } from './components/Palette';
 import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
 import './state/app';
+import { webTab } from './state/browser';
 import { active, close, open, spaceOf, taskOf } from './state/tabs';
 import { Home } from './views/Home';
 import { Scratchpad } from './views/Scratchpad';
 import { Settings } from './views/Settings';
 import { NewTask, TaskPage } from './views/Task';
+import { WebPage } from './views/Web';
 
 // The editor and the terminals are big; they load with the first codespace.
 const SpacePage = lazy(() => import('./views/Space').then((m) => ({ default: m.SpacePage })));
@@ -58,6 +60,9 @@ export function App() {
           </Match>
           <Match when={spaceOf(active())} keyed>
             {(id) => <SpacePage id={id} />}
+          </Match>
+          <Match when={webTab(active())} keyed>
+            {(id) => <WebPage id={id} />}
           </Match>
         </Switch>
       </main>

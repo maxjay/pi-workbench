@@ -141,6 +141,10 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             list: web.history(&query),
         },
         Call::BrowserShot { tab } => Answer::Shot(web.shot(&tab).await?),
+        Call::BrowserClearData => {
+            web.clear_data().await?;
+            Answer::Done
+        }
         Call::BrowserAddServer => {
             web.add_server()?;
             Answer::Browser(web.view())

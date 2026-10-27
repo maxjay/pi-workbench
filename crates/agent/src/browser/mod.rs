@@ -705,6 +705,14 @@ impl Web {
         self.shot(&tab).await.ok()
     }
 
+    pub async fn clear_data(&self) -> Result<(), Error> {
+        self.connection()?
+            .call("Storage.clearCookies", json!({}), None)
+            .await
+            .map(drop)
+            .map_err(Error::NotFound)
+    }
+
     pub fn add_server(&self) -> Result<(), Error> {
         server::add(&self.agent_dir)?;
         self.changed();

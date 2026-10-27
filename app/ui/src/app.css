@@ -4119,3 +4119,343 @@ textarea.input {
   font-size: 11.5px;
   font-weight: 700;
 }
+
+/* Web tabs */
+
+.web {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 10px;
+}
+
+.web-page {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+/* While Pi drives, the page has an amber edge, drawn around Chromium's view. */
+.web-page[data-pi="true"] {
+  box-shadow: 0 0 0 2px rgba(224, 177, 92, 0.6);
+}
+
+.web-picture {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: top left;
+}
+
+.web-away {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+}
+
+.web-away-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.web-away-text {
+  max-width: 440px;
+  padding: 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.web-chat {
+  width: 430px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--panel-2);
+}
+
+.web-chat .log-content {
+  padding: 10px 22px 18px;
+}
+
+.web-chat .conversation-foot {
+  padding: 0 14px 12px;
+}
+
+.web-chat-head {
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+}
+
+.web-chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.web-chat-meta {
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.web-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: -6px;
+}
+
+.icon-button:disabled {
+  color: #5f656b;
+  background: none;
+}
+
+.toolbar .icon-button[data-on="true"] {
+  color: var(--accent);
+}
+
+.web-driving {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 12px;
+  border-radius: 9px;
+  background: rgba(224, 177, 92, 0.14);
+  font-size: 12.5px;
+  white-space: nowrap;
+  color: var(--amber);
+}
+
+.web-driving-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--amber);
+}
+
+.web-take-back {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* Menus hanging from the toolbar */
+
+.scrim-clear {
+  z-index: 15;
+  background: transparent;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 12px;
+  background: #33383d;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+
+.menu-group {
+  padding: 6px 10px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+.menu-empty {
+  padding: 8px 10px 10px;
+  color: var(--dim);
+}
+
+.menu-line {
+  height: 1px;
+  margin: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.menu-item {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  text-align: left;
+  color: #c9c7c2;
+}
+
+.menu-item:hover,
+.download:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.downloads {
+  position: relative;
+  display: flex;
+}
+
+.downloads .icon-button {
+  position: relative;
+}
+
+.downloads-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--blue);
+}
+
+.download {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  text-align: left;
+}
+
+.download-kind {
+  width: 26px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+  box-sizing: border-box;
+  border-radius: 5px;
+  background: #464c52;
+  font-size: 8.5px;
+  font-weight: 700;
+  color: #c9c7c2;
+}
+
+.download-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.download-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.download-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.download-bar span {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--blue);
+}
+
+.download-detail {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* A call's page: where it left Pi in the browser */
+
+.page-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--raised);
+}
+
+.page-card-shot {
+  display: block;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.page-card-shot img {
+  display: block;
+  width: 100%;
+}
+
+.page-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-card-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: #c9c7c2;
+}
+
+.page-card-open {
+  height: 28px;
+  font-family: var(--sans);
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+
+/* Settings › Browser */
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.check-mark {
+  width: 14px;
+  color: var(--accent);
+}
+
+.check[data-ok="false"] .check-mark {
+  color: var(--amber);
+}
+
+.check-dot {
+  width: 7px;
+  height: 7px;
+  margin: 0 3px 0 4px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.check-text {
+  flex: 1;
+}

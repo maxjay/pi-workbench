@@ -5,7 +5,9 @@ import { createSignal, For, Match, Show, Switch } from 'solid-js';
 import { Markdown } from '../../components/Markdown';
 import type { Entry } from '../../protocol/Entry';
 import type { Image } from '../../protocol/Image';
+import type { Shot } from '../../protocol/Shot';
 import type { Tool } from '../../protocol/Tool';
+import { showPage } from '../../state/browser';
 import { edits, summarize } from './tools';
 
 /** The entry, if it's of this kind, typed as that kind. */
@@ -137,6 +139,33 @@ function ToolCall(props: { tool: Tool; cwd: string; onOpenFile: (path: string) =
       </Show>
       {/* Screenshots show without opening the call. */}
       <Images images={props.tool.images} />
+      <Show when={props.tool.browser}>{(shot) => <PageCard shot={shot()} />}</Show>
+    </div>
+  );
+}
+
+/** Where a call left Pi in the browser: the page as it looked, and a way
+ * into it. Opened, it's a tab of yours, with this conversation beside it. */
+function PageCard(props: { shot: Shot }) {
+  const open = () => void showPage(props.shot.tab).catch(() => {});
+  const where = () => props.shot.url.replace(/^https?:\/\//, '');
+  return (
+    <div class="page-card">
+      <Show when={props.shot.image}>
+        {(image) => (
+          <button type="button" class="page-card-shot" title="Open this page in a tab" onClick={open}>
+            <img alt={props.shot.title} src={`data:${image().mimeType};base64,${image().data}`} />
+          </button>
+        )}
+      </Show>
+      <div class="page-card-foot">
+        <span class="page-card-where mono" title={props.shot.url}>
+          {where()}
+        </span>
+        <button type="button" class="button page-card-open" onClick={open}>
+          Open tab
+        </button>
+      </div>
     </div>
   );
 }

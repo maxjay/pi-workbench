@@ -1,17 +1,31 @@
 // The open tabs, as in a browser: Home is always first and can't close;
 // the rest open, focus and close. Home, the Scratchpad and Settings have a
-// tab each; every task and every codespace has one of its own, and a new
-// task one while it's being made.
+// tab each; every task, codespace and web page you have open has one of
+// its own, and a new task one while it's being made.
 
 import { createSignal } from 'solid-js';
+import { pageById, pageTitle, tabClosed } from './browser';
 import { spaceById } from './codespaces';
 import { taskById } from './tasks';
 
-export type TabId = 'home' | 'scratch' | 'settings' | 'newtask' | `task:${string}` | `space:${string}`;
-export type TabKind = 'home' | 'scratch' | 'settings' | 'task' | 'space';
+export type TabId =
+  | 'home'
+  | 'scratch'
+  | 'settings'
+  | 'newtask'
+  | `task:${string}`
+  | `space:${string}`
+  | `web:${string}`;
+export type TabKind = 'home' | 'scratch' | 'settings' | 'task' | 'space' | 'web';
 
 export const kindOf = (id: TabId): TabKind =>
-  id === 'newtask' || id.startsWith('task:') ? 'task' : id.startsWith('space:') ? 'space' : (id as TabKind);
+  id === 'newtask' || id.startsWith('task:')
+    ? 'task'
+    : id.startsWith('space:')
+      ? 'space'
+      : id.startsWith('web:')
+        ? 'web'
+        : (id as TabKind);
 
 /** The task a tab shows, if it shows one. */
 export const taskOf = (id: TabId) => (id.startsWith('task:') ? id.slice(5) : undefined);
@@ -31,6 +45,7 @@ export function title(id: TabId) {
   if (task) return taskById(task)?.task.name ?? 'Task';
   const space = spaceOf(id);
   if (space) return spaceById(space)?.space.name ?? 'Codespace';
+  if (id.startsWith('web:')) return pageTitle(pageById(id.slice(4)));
   return fixed[id];
 }
 
@@ -39,9 +54,10 @@ const [active, setActive] = createSignal<TabId>('home');
 
 export { active, tabs };
 
-export function open(id: TabId) {
+/** Opens a tab and goes to it; with `focus: false`, opens it behind the one you're on. */
+export function open(id: TabId, options: { focus?: boolean } = {}) {
   if (!tabs().includes(id)) setTabs([...tabs(), id]);
-  setActive(id);
+  if (options.focus !== false) setActive(id);
 }
 
 export function close(id: TabId) {
@@ -52,6 +68,7 @@ export function close(id: TabId) {
   const rest = list.filter((tab) => tab !== id);
   setTabs(rest);
   if (active() === id) setActive(rest[Math.max(0, at - 1)]);
+  if (id.startsWith('web:')) tabClosed(id.slice(4));
 }
 
 /** Puts one tab in another's place: a new task's, once it's made. */

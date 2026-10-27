@@ -1,4 +1,5 @@
 import { For, Show } from 'solid-js';
+import { pageById, webTab } from '../state/browser';
 import { spaceById } from '../state/codespaces';
 import { live } from '../state/sessions';
 import {
@@ -23,13 +24,17 @@ const icons: Record<TabKind, IconName> = {
   settings: 'settings',
   task: 'clock',
   space: 'folder',
+  web: 'globe',
 };
 
 /**
  * A task tab's dot: amber while Pi runs it, blue while it waits on you. A
- * codespace's: the same, for any of its sessions.
+ * codespace's: the same, for any of its sessions. A web tab's: amber while
+ * Pi drives the page.
  */
 function dot(id: TabId) {
+  const page = webTab(id);
+  if (page) return pageById(page)?.piDriving ? 'running' : undefined;
   const space = spaceOf(id);
   if (space) {
     const path = spaceById(space)?.space.path;

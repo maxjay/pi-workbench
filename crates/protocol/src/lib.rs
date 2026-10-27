@@ -237,6 +237,9 @@ pub enum Call {
     /// Put Pi's `browser` server back in `mcp.json`.
     #[serde(rename = "browser.addServer")]
     BrowserAddServer,
+    /// Forget every site's cookies, signing out of them all.
+    #[serde(rename = "browser.clearData")]
+    BrowserClearData,
 }
 
 /// Lines the app writes to wb-agent besides requests.

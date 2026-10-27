@@ -5,7 +5,7 @@
 import { createResource, createSignal } from 'solid-js';
 import { ask, status } from '../agent';
 
-export type Section = 'instructions' | 'mcp' | 'models' | 'background';
+export type Section = 'instructions' | 'mcp' | 'models' | 'background' | 'browser';
 
 export const sections: { id: Section; title: string; file: string }[] = [
   { id: 'instructions', title: 'Instructions', file: 'AGENTS.md' },
