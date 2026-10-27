@@ -1,11 +1,14 @@
-//! The app: a window for the UI, and wb-agent behind it. The app doesn't
-//! read what they say to each other; it only carries the lines. It keeps
-//! running in the tray when the window closes, so tasks run on time.
+//! The app: a window for the UI, wb-agent behind it, and the browser web
+//! tabs show. The app doesn't read what the page and wb-agent say to each
+//! other; it only carries the lines, and wb-agent's streams to the browser.
+//! It keeps running in the tray when the window closes, so tasks run on
+//! time.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
 mod background;
+mod browser;
 mod launch;
 #[cfg(windows)]
 mod wsl;
@@ -38,9 +41,11 @@ fn main() {
             Some(vec![background::HIDDEN]),
         ))
         .manage(Agent::default())
+        .manage(browser::Browser::default())
         .manage(Background::default())
         .setup(|app| {
             background::setup(app.handle())?;
+            browser::setup(app.handle());
             // Started at sign-in, it stays in the tray until you open it.
             if !std::env::args().any(|arg| arg == background::HIDDEN) {
                 background::show(app.handle());
@@ -62,6 +67,9 @@ fn main() {
             background::background_set,
             background::tray_update,
             background::notify_run,
+            browser::browser_place,
+            browser::open_downloads,
+            browser::browser_import_profile,
         ])
         .run(tauri::generate_context!())
         .expect("the window opens");

@@ -1,5 +1,6 @@
 //! wb-agent as the app sees it: one child process, lines in and lines out.
-//! Each line it prints reaches the page as an `agent-line` event; when it
+//! Each line it prints reaches the page as an `agent-line` event, but for
+//! its streams to the browser, which the app carries itself; when it
 //! stops, the page gets `agent-exit` with the last thing it said on stderr.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -8,8 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
+use crate::browser::Browser;
 use crate::launch;
 
 #[derive(Default)]
@@ -53,7 +55,11 @@ impl Agent {
             let starts = self.starts.clone();
             move || {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    let _ = app.emit("agent-line", line);
+                    if line.starts_with(r#"{"type":"tunnel""#) {
+                        app.state::<Browser>().tunnel(&app, &line);
+                    } else {
+                        let _ = app.emit("agent-line", line);
+                    }
                 }
                 if starts.load(Ordering::SeqCst) == start {
                     let last = last_error.lock().expect("not poisoned");

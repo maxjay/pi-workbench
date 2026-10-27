@@ -76,7 +76,7 @@ async fn main() {
             continue;
         }
         // The app's own lines: streams to the browser.
-        if line.starts_with(r#"{"type":"#)
+        if line.contains(r#""type":"tunnel""#)
             && let Ok(FromApp::Tunnel(tunnel)) = serde_json::from_str(&line)
         {
             if let Some(tunnels) = &tunnels {
