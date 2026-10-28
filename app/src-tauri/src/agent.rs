@@ -40,7 +40,8 @@ impl Agent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|err| format!("couldn't start wb-agent: {err}"))?;
+            .map_err(|err| format!("couldn't start wb-agent: {err}"))
+            .inspect_err(|err| crate::log::note(err))?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -69,6 +70,7 @@ impl Agent {
                         "" => "wb-agent stopped".to_string(),
                         last => format!("wb-agent stopped: {last}"),
                     };
+                    crate::log::note(&reason);
                     let _ = app.emit("agent-exit", reason);
                 }
             }
@@ -104,10 +106,10 @@ impl Running {
     }
 }
 
-/// Passes wb-agent's stderr on to the app's, keeping the last line.
+/// Passes wb-agent's stderr on to the app's log, keeping the last line.
 fn log(stderr: impl Read, last: &Mutex<String>) {
     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-        eprintln!("wb-agent: {line}");
+        crate::log::note(&format!("wb-agent: {line}"));
         *last.lock().expect("not poisoned") = line;
     }
 }

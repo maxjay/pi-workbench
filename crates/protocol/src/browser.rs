@@ -14,6 +14,8 @@ use crate::Image;
 pub struct Browser {
     /// Whether wb-agent can reach the browser at all.
     pub connected: bool,
+    /// Why it can't, when it can't and knows.
+    pub problem: Option<String>,
     /// Every page, yours and Pi's, the newest last.
     pub tabs: Vec<WebTab>,
     /// Downloads, the newest first.

@@ -52,6 +52,8 @@ pub struct Web {
 #[derive(Default)]
 struct State {
     connected: bool,
+    /// Why the browser can't be reached, while it can't.
+    problem: Option<String>,
     tabs: Vec<Tab>,
     downloads: Vec<Download>,
     /// Who a page belongs to, when that's known before the page is.
@@ -164,6 +166,7 @@ impl Web {
         let state = self.state.lock().expect("not poisoned");
         protocol::Browser {
             connected: state.connected,
+            problem: state.problem.clone(),
             tabs: state.tabs.iter().map(Tab::view).collect(),
             downloads: state.downloads.clone(),
             server: server::present(&self.agent_dir),
@@ -190,7 +193,9 @@ impl Web {
     async fn connecting(self: Arc<Self>, dialer: Dialer) {
         let mut wait = Duration::from_secs(1);
         loop {
-            if let Ok(cdp) = Cdp::connect(&dialer).await {
+            let connected = Cdp::connect(&dialer).await;
+            self.reachable(&dialer, connected.as_ref().err());
+            if let Ok(cdp) = connected {
                 wait = Duration::from_secs(1);
                 self.follow(cdp).await;
                 let mut state = self.state.lock().expect("not poisoned");
@@ -204,6 +209,23 @@ impl Web {
             tokio::time::sleep(wait).await;
             wait = (wait * 2).min(Duration::from_secs(8));
         }
+    }
+
+    /// Notes why the browser can't be reached, or that it can again: in the
+    /// log once each time it changes, and for the workbench to show.
+    fn reachable(&self, dialer: &Dialer, failed: Option<&std::io::Error>) {
+        let problem = failed.map(|err| dialer.refusal().unwrap_or_else(|| err.to_string()));
+        let mut state = self.state.lock().expect("not poisoned");
+        if state.problem == problem {
+            return;
+        }
+        match &problem {
+            Some(problem) => eprintln!("browser: can't reach it: {problem}"),
+            None => eprintln!("browser: reached"),
+        }
+        state.problem = problem;
+        drop(state);
+        self.changed();
     }
 
     /// Follows the browser until the connection ends.
@@ -462,7 +484,13 @@ impl Web {
             .lock()
             .expect("not poisoned")
             .clone()
-            .ok_or_else(|| Error::NotFound("the browser isn't running".into()))
+            .ok_or_else(|| {
+                let problem = self.state.lock().expect("not poisoned").problem.clone();
+                Error::NotFound(match problem {
+                    Some(problem) => format!("the browser isn't running: {problem}"),
+                    None => "the browser isn't running".into(),
+                })
+            })
     }
 
     /// wb-agent's session with a page.

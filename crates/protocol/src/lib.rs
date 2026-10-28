@@ -269,10 +269,13 @@ pub enum TunnelOp {
     /// wb-agent asks the app to connect to the browser.
     Open,
     /// Bytes, as base64.
-    Data {
-        data: String,
+    Data { data: String },
+    Close {
+        /// Why the app couldn't connect, when that's why it closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        reason: Option<String>,
     },
-    Close,
 }
 
 /// Everything wb-agent writes: replies to requests, and events.
@@ -504,6 +507,31 @@ mod tests {
             ready,
             FromApp::Host(HostNews {
                 news: HostSaid::Ready(true)
+            })
+        );
+    }
+
+    #[test]
+    fn tunnel_closes() {
+        let close = FromAgent::Tunnel(Tunnel {
+            stream: 2,
+            op: TunnelOp::Close { reason: None },
+        });
+        assert_eq!(
+            serde_json::to_string(&close).unwrap(),
+            r#"{"type":"tunnel","stream":2,"op":"close"}"#
+        );
+        let refused: FromApp = serde_json::from_str(
+            r#"{"type":"tunnel","stream":2,"op":"close","reason":"wb-browser stopped"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            refused,
+            FromApp::Tunnel(Tunnel {
+                stream: 2,
+                op: TunnelOp::Close {
+                    reason: Some("wb-browser stopped".into())
+                }
             })
         );
     }

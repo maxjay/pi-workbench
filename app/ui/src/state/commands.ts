@@ -4,7 +4,7 @@
 import { reconnect } from '../agent';
 import { openFolderDialog } from '../components/OpenFolder';
 import { openPalette } from '../components/Palette';
-import { activePage, addressOf, navigate, onWeb, openPage, suggestions } from './browser';
+import { activePage, addressOf, browser, navigate, onWeb, openPage, suggestions } from './browser';
 import { codespaces, openFolder } from './codespaces';
 import { scratchpads, showScratchpad } from './sessions';
 import { reload, sections, setSection } from './settings';
@@ -93,7 +93,11 @@ function address(query: string): Command[] {
     {
       group: 'Address',
       title: searching ? `Search for “${typed}”` : `Go to ${typed}`,
-      detail: page ? 'in this tab' : 'in a new web tab',
+      detail: !browser.connected
+        ? `the browser isn’t running${browser.problem ? `: ${browser.problem}` : ''}`
+        : page
+          ? 'in this tab'
+          : 'in a new web tab',
       run: () => void (page ? navigate(page.id, typed) : openPage(typed)),
     },
   ];

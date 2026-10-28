@@ -141,7 +141,7 @@ fn apply(app: &AppHandle, settings: &Settings) {
         launch.disable()
     };
     if let Err(err) = result {
-        eprintln!("pi-workbench: couldn't change starting at sign-in: {err}");
+        crate::log::note(&format!("couldn't change starting at sign-in: {err}"));
     }
 }
 

@@ -32,6 +32,9 @@ export function WebPage(props: { id: string }) {
                 ? 'It starts with the app. If it stopped, it starts again in a moment.'
                 : 'wb-agent reaches a browser at WB_BROWSER, as host:port.'}
             </p>
+            <Show when={browser.problem}>
+              <p class="web-away-text">{browser.problem}</p>
+            </Show>
           </div>
         }
       >

@@ -11,7 +11,14 @@ import type { Visit } from '../protocol/Visit';
 import type { WebTab } from '../protocol/WebTab';
 import { active, close as closeTab, kindOf, open, type TabId, tabs } from './tabs';
 
-const empty: Browser = { connected: false, tabs: [], downloads: [], server: false, connections: 0 };
+const empty: Browser = {
+  connected: false,
+  problem: null,
+  tabs: [],
+  downloads: [],
+  server: false,
+  connections: 0,
+};
 const [browser, setBrowser] = createStore<Browser>(empty);
 
 export { browser };

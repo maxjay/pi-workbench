@@ -10,6 +10,7 @@ mod agent;
 mod background;
 mod browser;
 mod launch;
+mod log;
 #[cfg(windows)]
 mod wsl;
 
@@ -44,6 +45,7 @@ fn main() {
         .manage(browser::Browser::default())
         .manage(Background::default())
         .setup(|app| {
+            log::setup(app.handle());
             background::setup(app.handle())?;
             browser::setup(app.handle());
             // Started at sign-in, it stays in the tray until you open it.

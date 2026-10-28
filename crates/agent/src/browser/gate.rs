@@ -14,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
-use super::{Claim, Web, cdp, ws};
+use super::{Claim, Dialer, Web, cdp, ws};
 
 const PORT: u16 = 9339;
 
@@ -78,12 +78,18 @@ async fn serve(web: Arc<Web>, mut client: TcpStream, port: u16) -> std::io::Resu
             .trim_end_matches('/')
         {
             "/json/version" => {
-                let mut version = cdp::get_json(&dialer, "/json/version").await?;
+                let mut version = match cdp::get_json(&dialer, "/json/version").await {
+                    Ok(version) => version,
+                    Err(err) => return unreachable(&mut client, &dialer, &err).await,
+                };
                 rebase(&mut version, &base);
                 respond(&mut client, "200 OK", &version).await
             }
             "/json" | "/json/list" => {
-                let list = cdp::get_json(&dialer, "/json/list").await?;
+                let list = match cdp::get_json(&dialer, "/json/list").await {
+                    Ok(list) => list,
+                    Err(err) => return unreachable(&mut client, &dialer, &err).await,
+                };
                 let mut mine: Vec<Value> = list
                     .as_array()
                     .into_iter()
@@ -119,7 +125,10 @@ async fn serve(web: Arc<Web>, mut client: TcpStream, port: u16) -> std::io::Resu
         let _ = web.create("about:blank", claim).await;
     }
 
-    let mut upstream = dialer.connect().await?;
+    let mut upstream = match dialer.connect().await {
+        Ok(upstream) => upstream,
+        Err(err) => return unreachable(&mut client, &dialer, &err).await,
+    };
     // Without compression, so the gate can read what passes.
     let forwarded: String = head
         .replacen(&target, &path, 1)
@@ -132,7 +141,10 @@ async fn serve(web: Arc<Web>, mut client: TcpStream, port: u16) -> std::io::Resu
         .collect();
     upstream.write_all(forwarded.as_bytes()).await?;
     upstream.write_all(&rest).await?;
-    let (answer, early) = ws::read_head(&mut upstream).await?;
+    let (answer, early) = match ws::read_head(&mut upstream).await {
+        Ok(answer) => answer,
+        Err(err) => return unreachable(&mut client, &dialer, &err).await,
+    };
     client.write_all(answer.as_bytes()).await?;
     if !answer.starts_with("HTTP/1.1 101") {
         return Ok(());
@@ -166,6 +178,24 @@ fn rebase(target: &mut Value, base: &str) {
     {
         target["webSocketDebuggerUrl"] = format!("{base}/devtools/{path}").into();
     }
+}
+
+/// Tells Pi the browser couldn't be reached, and why, rather than hanging
+/// up on it.
+async fn unreachable(
+    client: &mut TcpStream,
+    dialer: &Dialer,
+    err: &std::io::Error,
+) -> std::io::Result<()> {
+    let why = dialer
+        .refusal()
+        .unwrap_or_else(|| format!("the browser didn't answer: {err}"));
+    respond(
+        client,
+        "502 Bad Gateway",
+        &json!({ "error": format!("Pi Workbench can't reach its browser: {why}") }),
+    )
+    .await
 }
 
 async fn respond(client: &mut TcpStream, status: &str, body: &Value) -> std::io::Result<()> {

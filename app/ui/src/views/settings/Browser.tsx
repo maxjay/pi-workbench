@@ -47,6 +47,7 @@ export function BrowserSettings() {
           {inApp
             ? 'The browser isn’t running yet. It starts with the app.'
             : 'In a plain browser, web tabs use the Chromium wb-agent reaches at WB_BROWSER (host:port).'}
+          <Show when={browser.problem}> {browser.problem}</Show>
         </p>
       </Show>
 

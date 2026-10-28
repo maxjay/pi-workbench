@@ -5,4 +5,8 @@
  * app: how wb-agent and Pi, in WSL, reach the browser on Windows. Either
  * side may close a stream; the other stops using it.
  */
-export type Tunnel = { stream: number, } & ({ "op": "open" } | { "op": "data", data: string, } | { "op": "close" });
+export type Tunnel = { stream: number, } & ({ "op": "open" } | { "op": "data", data: string, } | { "op": "close", 
+/**
+ * Why the app couldn't connect, when that's why it closed.
+ */
+reason?: string, });

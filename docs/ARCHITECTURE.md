@@ -357,6 +357,11 @@ The app:
 cd app/ui && npm run tauri dev
 ```
 
+The app keeps a log of what it, wb-agent and wb-browser say:
+`pi-workbench.log` in its log folder (on Windows,
+`%LOCALAPPDATA%\dev.maxjay.pi-workbench\logs`), with the run before as
+`pi-workbench.old.log` and Chromium's own log as `wb-browser.log`.
+
 On Windows the app runs `~/.local/bin/wb-agent` in the default WSL distro,
 installing the copy it carries when that one is missing or a different
 version. Set `WB_AGENT` to a path inside WSL to run your own build instead.

@@ -31,6 +31,8 @@ pub struct Browser {
     host: Mutex<Option<Host>>,
     /// wb-browser has said it's running, for a wb-agent started later.
     ready: std::sync::atomic::AtomicBool,
+    /// Why there's no browser, when there isn't.
+    problem: Mutex<Option<String>>,
 }
 
 struct Host {
@@ -72,13 +74,14 @@ pub fn setup(app: &AppHandle) {
                 && let Ok(Some(parent)) = rx.recv()
             {
                 if let Err(err) = app.state::<Browser>().start(&app, parent) {
-                    eprintln!("pi-workbench: no browser: {err}");
+                    app.state::<Browser>().fail(err);
                 }
                 return;
             }
             thread::sleep(std::time::Duration::from_millis(500));
         }
-        eprintln!("pi-workbench: no browser: the window never came up");
+        app.state::<Browser>()
+            .fail("the window never came up to draw tabs in".into());
     });
 }
 
@@ -93,10 +96,13 @@ impl Browser {
             .arg(format!("--profile={}", profile.display()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         command.arg(format!("--parent={parent}"));
         if let Ok(extensions) = std::env::var("WB_BROWSER_EXTENSIONS") {
             command.arg(format!("--extensions={extensions}"));
+        }
+        if let Some(dir) = crate::log::dir(app) {
+            command.arg(format!("--log={}", dir.join("wb-browser.log").display()));
         }
         // CEF's library is beside it.
         #[cfg(target_os = "linux")]
@@ -105,14 +111,23 @@ impl Browser {
         }
         let mut child = command
             .spawn()
-            .map_err(|err| format!("couldn't start wb-browser: {err}"))?;
+            .map_err(|err| format!("couldn't start {}: {err}", exe.display()))?;
+        crate::log::note(&format!("wb-browser started: {}", exe.display()));
+        *self.problem.lock().expect("not poisoned") = None;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                crate::log::note(&format!("wb-browser: {line}"));
+            }
+        });
         let app = app.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 app.state::<Browser>().heard(&app, &line);
             }
+            app.state::<Browser>().exited(&app);
         });
         *self.address.lock().expect("not poisoned") = Some(format!("127.0.0.1:{port}"));
         *self.host.lock().expect("not poisoned") = Some(Host { child, stdin });
@@ -122,7 +137,7 @@ impl Browser {
     /// A line from wb-browser: a shortcut for the page, or news for wb-agent.
     fn heard(&self, app: &AppHandle, line: &str) {
         let Ok(Value::Object(mut said)) = serde_json::from_str::<Value>(line) else {
-            return eprintln!("wb-browser: {line}");
+            return crate::log::note(&format!("wb-browser: {line}"));
         };
         if let Some(key) = said.get("key") {
             let _ = app.emit("browser-key", key.clone());
@@ -135,6 +150,30 @@ impl Browser {
         news.insert("type".into(), "host".into());
         news.append(&mut said);
         let _ = app.state::<Agent>().send(&Value::Object(news).to_string());
+    }
+
+    /// There's no browser, and why: for the log, and for wb-agent when it
+    /// asks for one.
+    fn fail(&self, why: String) {
+        crate::log::note(&format!("no browser: {why}"));
+        *self.problem.lock().expect("not poisoned") = Some(why);
+    }
+
+    /// wb-browser has gone: on its own, or as the app stops it.
+    fn exited(&self, app: &AppHandle) {
+        let Some(mut host) = self.host.lock().expect("not poisoned").take() else {
+            return;
+        };
+        let status = host
+            .child
+            .wait()
+            .map_or_else(|err| err.to_string(), |status| status.to_string());
+        *self.address.lock().expect("not poisoned") = None;
+        self.ready.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = app
+            .state::<Agent>()
+            .send(r#"{"type":"host","ready":false}"#);
+        self.fail(format!("wb-browser stopped ({status})"));
     }
 
     /// Tells a newly started wb-agent that wb-browser makes the tabs.
@@ -195,10 +234,22 @@ impl Browser {
 
     fn open(&self, app: &AppHandle, stream: u32) {
         let address = self.address.lock().expect("not poisoned").clone();
-        let socket = address.and_then(|address| TcpStream::connect(address).ok());
-        let Some(socket) = socket else {
-            send(app, stream, json!({ "op": "close" }));
-            return;
+        let socket = match address {
+            Some(address) => TcpStream::connect(&address)
+                .map_err(|err| format!("couldn't reach the browser at {address}: {err}")),
+            None => Err(self
+                .problem
+                .lock()
+                .expect("not poisoned")
+                .clone()
+                .unwrap_or_else(|| "the browser hasn't started yet".into())),
+        };
+        let socket = match socket {
+            Ok(socket) => socket,
+            Err(reason) => {
+                send(app, stream, json!({ "op": "close", "reason": reason }));
+                return;
+            }
         };
         let _ = socket.set_nodelay(true);
         let Ok(mut reading) = socket.try_clone() else {

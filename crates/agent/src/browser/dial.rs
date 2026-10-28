@@ -36,6 +36,14 @@ impl Dialer {
             Dialer::Tunnel(tunnels) => Ok(Box::new(tunnels.open())),
         }
     }
+
+    /// Why the app last couldn't reach the browser, if it said.
+    pub fn refusal(&self) -> Option<String> {
+        match self {
+            Dialer::Direct(_) => None,
+            Dialer::Tunnel(tunnels) => tunnels.refusal.lock().expect("not poisoned").clone(),
+        }
+    }
 }
 
 /// The streams carried through the app, by number.
@@ -44,6 +52,8 @@ pub struct Tunnels {
     next: AtomicU32,
     /// Where bytes from the app go, for each open stream.
     open: Mutex<HashMap<u32, mpsc::UnboundedSender<Option<Vec<u8>>>>>,
+    /// Why the app last couldn't connect a stream; cleared once one does.
+    refusal: Mutex<Option<String>>,
 }
 
 impl Tunnels {
@@ -52,6 +62,7 @@ impl Tunnels {
             out,
             next: AtomicU32::new(1),
             open: Mutex::default(),
+            refusal: Mutex::default(),
         })
     }
 
@@ -80,7 +91,7 @@ impl Tunnels {
                 }
             }
             if tunnels.forget(stream) {
-                tunnels.send(stream, TunnelOp::Close);
+                tunnels.send(stream, TunnelOp::Close { reason: None });
             }
         });
         mine
@@ -94,11 +105,15 @@ impl Tunnels {
         };
         match tunnel.op {
             TunnelOp::Data { data } => {
+                *self.refusal.lock().expect("not poisoned") = None;
                 if let Ok(bytes) = STANDARD.decode(data) {
                     let _ = tx.send(Some(bytes));
                 }
             }
-            TunnelOp::Close => {
+            TunnelOp::Close { reason } => {
+                if reason.is_some() {
+                    *self.refusal.lock().expect("not poisoned") = reason;
+                }
                 let _ = tx.send(None);
                 drop(open);
                 self.forget(tunnel.stream);

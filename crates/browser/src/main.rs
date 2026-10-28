@@ -27,6 +27,8 @@ struct Options {
     profile: String,
     parent: u64,
     extensions: Option<String>,
+    /// Where Chromium keeps its log.
+    log: Option<String>,
 }
 
 fn options() -> Options {
@@ -35,6 +37,7 @@ fn options() -> Options {
         profile: String::new(),
         parent: 0,
         extensions: None,
+        log: None,
     };
     for arg in std::env::args().skip(1) {
         let Some((key, value)) = arg.split_once('=') else {
@@ -45,6 +48,7 @@ fn options() -> Options {
             "--profile" => options.profile = value.to_string(),
             "--parent" => options.parent = value.parse().unwrap_or(0),
             "--extensions" => options.extensions = Some(value.to_string()),
+            "--log" => options.log = Some(value.to_string()),
             _ => {}
         }
     }
@@ -78,6 +82,8 @@ fn main() {
         root_cache_path: CefString::from(options.profile.as_str()),
         cache_path: CefString::from(options.profile.as_str()),
         persist_session_cookies: 1,
+        log_file: CefString::from(options.log.as_deref().unwrap_or_default()),
+        log_severity: LogSeverity::WARNING,
         ..Default::default()
     };
     if initialize(

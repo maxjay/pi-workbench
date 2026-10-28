@@ -11,6 +11,10 @@ export type Browser = {
  */
 connected: boolean, 
 /**
+ * Why it can't, when it can't and knows.
+ */
+problem: string | null, 
+/**
  * Every page, yours and Pi's, the newest last.
  */
 tabs: Array<WebTab>, 
