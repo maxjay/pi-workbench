@@ -98,6 +98,10 @@ impl Browser {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command.arg(format!("--parent={parent}"));
+        // Started elevated, as the app is when run as administrator, Chromium
+        // would start itself again unelevated, apart from the app and its
+        // window, and quit (exit code 38).
+        command.arg("--do-not-de-elevate");
         if let Ok(extensions) = std::env::var("WB_BROWSER_EXTENSIONS") {
             command.arg(format!("--extensions={extensions}"));
         }
