@@ -192,6 +192,26 @@ struct Filter {
     creating: HashSet<u64>,
     listing: HashSet<u64>,
     own: AtomicU64,
+    /// Pi asked to be attached to its pages as they come. The gate does
+    /// it, once each is a page: in CEF, a popup attached to as it's made
+    /// never loads.
+    auto: bool,
+    /// Pages the gate has attached Pi to.
+    following: HashSet<String>,
+    /// Answers to Pi's `Target.createTarget`, until it's attached to the page.
+    held: HashMap<String, Value>,
+    /// Messages for Pi after the one being passed on.
+    after: Vec<Value>,
+    starting: Option<Starting>,
+}
+
+/// Pi's `Target.setAutoAttach`, until it's attached to the pages there were.
+struct Starting {
+    /// The gate's own `Target.setDiscoverTargets`.
+    discover: u64,
+    answer: Value,
+    /// Those pages, once the browser has told of them all.
+    waiting: Option<HashSet<String>>,
 }
 
 impl Filter {
@@ -210,6 +230,64 @@ impl Filter {
         };
         self.decided.insert(page.to_string(), seen);
         seen
+    }
+
+    /// Pi's browser-wide `Target.setAutoAttach`, done by the gate: the
+    /// browser only tells it of pages, and it attaches Pi to each it sees.
+    /// Pi hears back once it's attached to the pages already there, as it
+    /// would from the browser.
+    fn auto_attach(&mut self, asked: &Value) -> Value {
+        self.auto = asked["params"]["autoAttach"] == true;
+        let id = self.own.fetch_add(1, Ordering::Relaxed);
+        self.starting = Some(Starting {
+            discover: id,
+            answer: json!({ "id": asked["id"], "result": {} }),
+            waiting: None,
+        });
+        json!({ "id": id, "method": "Target.setDiscoverTargets", "params": { "discover": true } })
+    }
+
+    /// Answers Pi's `Target.setAutoAttach` once nothing it waits on is left.
+    fn started(&mut self) {
+        let done = self
+            .starting
+            .as_ref()
+            .is_some_and(|s| s.waiting.as_ref().is_some_and(HashSet::is_empty));
+        if done && let Some(starting) = self.starting.take() {
+            self.after.push(starting.answer);
+        }
+    }
+
+    /// Attaches Pi to a page it sees, if it asked to be.
+    fn follow(&mut self, page: &str, own: &mut Vec<Value>) {
+        if self.auto && self.following.insert(page.to_string()) {
+            let id = self.own.fetch_add(1, Ordering::Relaxed);
+            own.push(json!({
+                "id": id,
+                "method": "Target.attachToTarget",
+                "params": { "targetId": page, "flatten": true },
+            }));
+        }
+    }
+
+    /// A page Pi's `Target.setAutoAttach` may wait on is attached, or gone.
+    fn arrived(&mut self, page: &str) {
+        if let Some(waiting) = self.starting.as_mut().and_then(|s| s.waiting.as_mut()) {
+            waiting.remove(page);
+            self.started();
+        }
+    }
+
+    /// The answer to Pi's `Target.createTarget`. Pi takes the page to be
+    /// attached to by then, as it would be if the browser attached it, so
+    /// the answer waits until it is.
+    fn created(&mut self, page: &str, answer: Value, own: &mut Vec<Value>) -> Option<Value> {
+        if !self.auto || self.sessions.values().any(|p| p == page) {
+            return Some(answer);
+        }
+        self.follow(page, own);
+        self.held.insert(page.to_string(), answer);
+        None
     }
 
     /// A message from Pi, on its way to the browser.
@@ -239,14 +317,22 @@ impl Filter {
     fn received(&mut self, mut message: Value, own: &mut Vec<Value>) -> Option<Value> {
         if let Some(id) = message["id"].as_u64() {
             if id >= OWN_IDS {
+                // The browser has told of every page there was by now.
+                if let Some(starting) = self.starting.as_mut().filter(|s| s.discover == id) {
+                    let attached: HashSet<&String> = self.sessions.values().collect();
+                    let waiting = self.following.iter().filter(|p| !attached.contains(p));
+                    starting.waiting = Some(waiting.cloned().collect());
+                    self.started();
+                }
                 return None;
             }
             if self.creating.remove(&id)
                 && let Some(page) = message["result"]["targetId"].as_str()
             {
-                self.decided.insert(page.to_string(), true);
+                let page = page.to_string();
+                self.decided.insert(page.clone(), true);
                 self.web.claim(
-                    page,
+                    &page,
                     Claim {
                         shown: self.key == TERMINAL,
                         kept: false,
@@ -254,6 +340,7 @@ impl Filter {
                         pi: Some(self.key.clone()),
                     },
                 );
+                return self.created(&page, message, own);
             }
             if self.listing.remove(&id)
                 && let Some(infos) = message["result"]["targetInfos"].as_array_mut()
@@ -278,13 +365,20 @@ impl Filter {
         match message["method"].as_str().unwrap_or_default() {
             "Target.targetCreated" | "Target.targetInfoChanged" if info["type"] == "page" => {
                 let page = info["targetId"].as_str().unwrap_or_default().to_string();
-                self.sees(&page, info["openerId"].as_str())
-                    .then_some(message)
+                if !self.sees(&page, info["openerId"].as_str()) {
+                    return None;
+                }
+                self.follow(&page, own);
+                Some(message)
             }
             "Target.attachedToTarget" if info["type"] == "page" => {
                 let page = info["targetId"].as_str().unwrap_or_default().to_string();
                 let attached = params["sessionId"].as_str().unwrap_or_default().to_string();
                 if self.sees(&page, info["openerId"].as_str()) {
+                    if let Some(answer) = self.held.remove(&page) {
+                        self.after.push(answer);
+                    }
+                    self.arrived(&page);
                     self.sessions.insert(attached, page);
                     return Some(message);
                 }
@@ -323,6 +417,8 @@ impl Filter {
             }
             "Target.targetDestroyed" | "Target.targetCrashed" => {
                 let page = params["targetId"].as_str().unwrap_or_default();
+                self.following.remove(page);
+                self.arrived(page);
                 (self.decided.get(page) != Some(&false)).then_some(message)
             }
             _ => Some(message),
@@ -344,6 +440,11 @@ where
         creating: HashSet::new(),
         listing: HashSet::new(),
         own: AtomicU64::new(OWN_IDS),
+        auto: false,
+        following: HashSet::new(),
+        held: HashMap::new(),
+        after: Vec::new(),
+        starting: None,
     }));
     let (mut client_read, client_write) = client.into_split();
     let (mut up_read, up_write) = tokio::io::split(upstream);
@@ -351,7 +452,7 @@ where
     let to_pi = writer(client_write);
 
     let pi_side = {
-        let (filter, to_browser) = (filter.clone(), to_browser.clone());
+        let (filter, to_browser, to_pi) = (filter.clone(), to_browser.clone(), to_pi.clone());
         async move {
             let mut decoder = ws::Decoder::default();
             let mut buf = vec![0u8; 64 * 1024];
@@ -365,7 +466,30 @@ where
                     if message.opcode == ws::TEXT
                         && let Ok(value) = serde_json::from_slice::<Value>(&message.payload)
                     {
-                        filter.lock().expect("not poisoned").sent(&value);
+                        let web = {
+                            let mut filter = filter.lock().expect("not poisoned");
+                            filter.sent(&value);
+                            filter.web.clone()
+                        };
+                        // A new page, while wb-browser makes them: it makes this one.
+                        if value["method"] == "Target.createTarget" && web.hosts_tabs() {
+                            tokio::spawn(open_for_pi(
+                                web,
+                                filter.clone(),
+                                to_browser.clone(),
+                                to_pi.clone(),
+                                value,
+                            ));
+                            continue;
+                        }
+                        if value["method"] == "Target.setAutoAttach"
+                            && value.get("sessionId").is_none()
+                        {
+                            let discover = filter.lock().expect("not poisoned").auto_attach(&value);
+                            let bytes = serde_json::to_vec(&discover).expect("json serializes");
+                            let _ = to_browser.send(ws::encode(ws::TEXT, &bytes, true));
+                            continue;
+                        }
                     }
                     let closing = message.opcode == ws::CLOSE;
                     if to_browser
@@ -391,25 +515,26 @@ where
                         continue;
                     };
                     let mut own = Vec::new();
-                    let kept = filter
-                        .lock()
-                        .expect("not poisoned")
-                        .received(value, &mut own);
+                    let mut filter = filter.lock().expect("not poisoned");
+                    let kept = filter.received(value, &mut own);
+                    let after = std::mem::take(&mut filter.after);
+                    drop(filter);
                     for command in own {
                         let bytes = serde_json::to_vec(&command).expect("json serializes");
                         let _ = to_browser.send(ws::encode(ws::TEXT, &bytes, true));
                     }
-                    kept.map(|value| serde_json::to_vec(&value).expect("json serializes"))
+                    kept.into_iter()
+                        .chain(after)
+                        .map(|value| serde_json::to_vec(&value).expect("json serializes"))
+                        .collect()
                 } else {
-                    Some(message.payload)
+                    vec![message.payload]
                 };
-                if let Some(payload) = forward {
-                    let opcode = if message.opcode == ws::TEXT {
-                        ws::TEXT
-                    } else {
-                        message.opcode
-                    };
-                    if to_pi.send(ws::encode(opcode, &payload, false)).is_err() {
+                for payload in forward {
+                    if to_pi
+                        .send(ws::encode(message.opcode, &payload, false))
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -426,6 +551,50 @@ where
     tokio::select! {
         () = pi_side => {}
         () = browser_side => {}
+    }
+}
+
+/// Answers a Pi's `Target.createTarget` with a page wb-browser made, as the
+/// browser's own answer would.
+async fn open_for_pi(
+    web: Arc<Web>,
+    filter: Arc<Mutex<Filter>>,
+    to_browser: mpsc::UnboundedSender<Vec<u8>>,
+    to_pi: mpsc::UnboundedSender<Vec<u8>>,
+    asked: Value,
+) {
+    let id = asked["id"].as_u64().unwrap_or_default();
+    let url = asked["params"]["url"].as_str().unwrap_or("about:blank");
+    let key = filter.lock().expect("not poisoned").key.clone();
+    let claim = Claim {
+        shown: key == TERMINAL,
+        kept: false,
+        session: session_of(&key),
+        pi: Some(key),
+    };
+    let made = web.create(url, claim).await;
+    let mut own = Vec::new();
+    let answer = {
+        let mut filter = filter.lock().expect("not poisoned");
+        filter.creating.remove(&id);
+        match made {
+            Ok(tab) => {
+                filter.decided.insert(tab.clone(), true);
+                let answer = json!({ "id": id, "result": { "targetId": tab } });
+                filter.created(&tab, answer, &mut own)
+            }
+            Err(err) => {
+                Some(json!({ "id": id, "error": { "code": -32000, "message": err.to_string() } }))
+            }
+        }
+    };
+    for command in own {
+        let bytes = serde_json::to_vec(&command).expect("json serializes");
+        let _ = to_browser.send(ws::encode(ws::TEXT, &bytes, true));
+    }
+    if let Some(answer) = answer {
+        let bytes = serde_json::to_vec(&answer).expect("json serializes");
+        let _ = to_pi.send(ws::encode(ws::TEXT, &bytes, false));
     }
 }
 

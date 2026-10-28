@@ -248,6 +248,7 @@ pub enum Call {
 #[ts(export)]
 pub enum FromApp {
     Tunnel(Tunnel),
+    Host(HostNews),
 }
 
 /// A TCP stream to the browser carried in lines between wb-agent and the
@@ -283,6 +284,8 @@ pub enum FromAgent {
     Event(Event),
     /// For the app, not the page.
     Tunnel(Tunnel),
+    /// For the browser's host, wb-browser, through the app.
+    Host(HostCall),
 }
 
 /// The answer to the request with the same id.
@@ -471,6 +474,38 @@ mod tests {
             let request: Request = serde_json::from_str(line).unwrap();
             assert_eq!(request, Request { id: 1, call });
         }
+    }
+
+    #[test]
+    fn host_lines() {
+        let call = FromAgent::Host(HostCall {
+            call: HostAsk::Open {
+                ask: 3,
+                url: "https://example.com".into(),
+            },
+        });
+        assert_eq!(
+            serde_json::to_string(&call).unwrap(),
+            r#"{"type":"host","open":{"ask":3,"url":"https://example.com"}}"#
+        );
+        let opened: FromApp =
+            serde_json::from_str(r#"{"type":"host","opened":{"ask":3,"tab":"AB12"}}"#).unwrap();
+        assert_eq!(
+            opened,
+            FromApp::Host(HostNews {
+                news: HostSaid::Opened {
+                    ask: 3,
+                    tab: "AB12".into()
+                }
+            })
+        );
+        let ready: FromApp = serde_json::from_str(r#"{"type":"host","ready":true}"#).unwrap();
+        assert_eq!(
+            ready,
+            FromApp::Host(HostNews {
+                news: HostSaid::Ready(true)
+            })
+        );
     }
 
     #[test]

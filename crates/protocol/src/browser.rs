@@ -97,3 +97,64 @@ pub struct Shot {
     /// The page as it looked, small.
     pub image: Option<Image>,
 }
+
+/// What wb-agent asks of wb-browser, which hosts the browser's tabs in the
+/// workbench's window. A tab is made there rather than by DevTools, which in
+/// CEF would open a Chrome window of its own.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HostCall {
+    #[serde(flatten)]
+    pub call: HostAsk,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HostAsk {
+    /// A new tab, hidden until the page places it.
+    Open {
+        #[ts(type = "number")]
+        ask: u64,
+        url: String,
+    },
+}
+
+/// What wb-browser says back, through the app.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HostNews {
+    #[serde(flatten)]
+    pub news: HostSaid,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum HostSaid {
+    /// It's running and makes the tabs.
+    Ready(bool),
+    /// The tab asked for, by its DevTools target id.
+    Opened {
+        #[ts(type = "number")]
+        ask: u64,
+        tab: String,
+    },
+    Failed {
+        #[ts(type = "number")]
+        ask: u64,
+    },
+    /// A page opened a popup, this size if it said.
+    Popup {
+        tab: String,
+        width: i32,
+        height: i32,
+    },
+    /// A tab neither asked for nor a popup.
+    Created {
+        tab: String,
+    },
+    Closed {
+        tab: String,
+    },
+}

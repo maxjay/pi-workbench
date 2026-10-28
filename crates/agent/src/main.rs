@@ -60,7 +60,14 @@ async fn main() {
         (None, Ok(address)) => Some(browser::Dialer::Direct(address)),
         (None, Err(_)) => None,
     };
-    let web = browser::Web::new(out.clone(), config::agent_dir(), config::data_dir(), dialer);
+    let host = tunnels.as_ref().map(|_| browser::Host::new(out.clone()));
+    let web = browser::Web::new(
+        out.clone(),
+        config::agent_dir(),
+        config::data_dir(),
+        dialer,
+        host,
+    );
     let ctx = Arc::new(router::Ctx::from_env(out.clone(), web.clone()));
     web.start();
     ctx.sessions.stop_idle(config::idle_after());
@@ -75,14 +82,21 @@ async fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        // The app's own lines: streams to the browser.
-        if line.contains(r#""type":"tunnel""#)
-            && let Ok(FromApp::Tunnel(tunnel)) = serde_json::from_str(&line)
-        {
-            if let Some(tunnels) = &tunnels {
-                tunnels.incoming(tunnel);
+        // The app's own lines: streams to the browser, and what wb-browser said.
+        if line.contains(r#""type":"tunnel""#) || line.contains(r#""type":"host""#) {
+            match serde_json::from_str(&line) {
+                Ok(FromApp::Tunnel(tunnel)) => {
+                    if let Some(tunnels) = &tunnels {
+                        tunnels.incoming(tunnel);
+                    }
+                    continue;
+                }
+                Ok(FromApp::Host(news)) => {
+                    web.host_said(news.news);
+                    continue;
+                }
+                Err(_) => {}
             }
-            continue;
         }
         let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) => request,

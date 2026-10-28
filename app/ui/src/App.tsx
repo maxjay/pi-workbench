@@ -6,8 +6,8 @@ import { OpenFolder } from './components/OpenFolder';
 import { closePalette, openPalette, Palette } from './components/Palette';
 import { TabStrip } from './components/TabStrip';
 import { Toolbar } from './components/Toolbar';
-import './state/app';
-import { webTab } from './state/browser';
+import { inApp } from './state/app';
+import { activePage, onWeb, webTab } from './state/browser';
 import { active, close, open, spaceOf, taskOf } from './state/tabs';
 import { Home } from './views/Home';
 import { Scratchpad } from './views/Scratchpad';
@@ -21,17 +21,36 @@ const SpacePage = lazy(() => import('./views/Space').then((m) => ({ default: m.S
 /** Keys a shell needs, such as Ctrl W to delete a word, which go to a terminal rather than the app. */
 const shellKeys = new Set(['k', 'w', 't', 'n']);
 
+/** The app's own Ctrl shortcuts; false for a key that isn't one. */
+function shortcut(key: string) {
+  if (key === 'k' || key === 'l')
+    openPalette(onWeb() ? (activePage()?.url ?? '').replace(/^https?:\/\//, '') : '');
+  else if (key === 'w') close(active());
+  else if (key === 't') open('home');
+  else if (key === ',') open('settings');
+  else if (key === 'n') open('scratch');
+  else return false;
+  return true;
+}
+
 function onKey(e: KeyboardEvent) {
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && shellKeys.has(e.key) && (e.target as Element | null)?.closest?.('.xterm')) return;
-  if (ctrl && e.key === 'k') openPalette();
-  else if (ctrl && e.key === 'w') close(active());
-  else if (ctrl && e.key === 't') open('home');
-  else if (ctrl && e.key === ',') open('settings');
-  else if (ctrl && e.key === 'n') open('scratch');
-  else if (e.key === 'Escape') closePalette();
-  else return;
-  e.preventDefault();
+  if (ctrl && e.key !== 'l' && shortcut(e.key)) e.preventDefault();
+  else if (e.key === 'Escape') {
+    closePalette();
+    e.preventDefault();
+  }
+}
+
+// In the app a web page has the keyboard while it's focused; wb-browser
+// passes the app's shortcuts back here.
+if (inApp) {
+  void import('@tauri-apps/api/event').then(({ listen }) =>
+    listen<string>('browser-key', (e) => {
+      shortcut(e.payload);
+    }),
+  );
 }
 
 export function App() {

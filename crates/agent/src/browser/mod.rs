@@ -10,10 +10,11 @@ mod cdp;
 mod dial;
 mod gate;
 mod history;
+mod host;
 mod server;
 mod ws;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ use crate::session::Out;
 use cdp::Cdp;
 pub use dial::{Dialer, Tunnels};
 use history::History;
+pub use host::Host;
 
 /// How long a page shows Pi driving after Pi last acted on it.
 const DRIVING: Duration = Duration::from_secs(3);
@@ -43,6 +45,8 @@ pub struct Web {
     changed: Notify,
     /// Where Pi's `browser` server connects, once listening.
     port: Mutex<Option<u16>>,
+    /// wb-browser, when the app runs it.
+    host: Option<Host>,
 }
 
 #[derive(Default)]
@@ -52,6 +56,8 @@ struct State {
     downloads: Vec<Download>,
     /// Who a page belongs to, when that's known before the page is.
     claims: HashMap<String, Claim>,
+    /// Pages attached to, or being.
+    following: HashSet<String>,
     /// The page each session's Pi last used, and when.
     used: HashMap<String, (String, Instant)>,
     /// Pi's connections, by number, with their session.
@@ -113,6 +119,7 @@ impl Web {
         agent_dir: PathBuf,
         data_dir: PathBuf,
         dialer: Option<Dialer>,
+        host: Option<Host>,
     ) -> Arc<Web> {
         Arc::new(Web {
             history: History::load(data_dir.join("history.jsonl")),
@@ -124,6 +131,7 @@ impl Web {
             state: Mutex::default(),
             changed: Notify::new(),
             port: Mutex::default(),
+            host,
         })
     }
 
@@ -188,6 +196,7 @@ impl Web {
                 let mut state = self.state.lock().expect("not poisoned");
                 state.connected = false;
                 state.tabs.clear();
+                state.following.clear();
                 drop(state);
                 *self.cdp.lock().expect("not poisoned") = None;
                 self.changed();
@@ -205,12 +214,6 @@ impl Web {
             cdp.call(
                 "Target.setDiscoverTargets",
                 json!({ "discover": true }),
-                None,
-            )
-            .await?;
-            cdp.call(
-                "Target.setAutoAttach",
-                json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
                 None,
             )
             .await?;
@@ -298,10 +301,25 @@ impl Web {
                 if tab.shown {
                     self.history.record(&tab.url, &tab.title, now());
                 }
+                // Attached to once it's a page, not as it's made: in CEF, a
+                // popup attached to as it's made never loads.
+                if state.following.insert(id.clone()) {
+                    let cdp = cdp.clone();
+                    tokio::spawn(async move {
+                        let _ = cdp
+                            .call(
+                                "Target.attachToTarget",
+                                json!({ "targetId": id, "flatten": true }),
+                                None,
+                            )
+                            .await;
+                    });
+                }
             }
             "Target.targetDestroyed" => {
                 let id = text(params, "targetId");
                 state.tabs.retain(|tab| tab.id != id);
+                state.following.remove(&id);
             }
             "Target.attachedToTarget" => {
                 let info = &params["targetInfo"];
@@ -476,15 +494,34 @@ impl Web {
         self.changed();
     }
 
+    /// A new page, made by wb-browser when it's there, else by DevTools.
     async fn create(&self, url: &str, claim: Claim) -> Result<String, Error> {
-        let cdp = self.connection()?;
-        let created = cdp
-            .call("Target.createTarget", json!({ "url": url }), None)
-            .await
-            .map_err(Error::NotFound)?;
-        let id = text(&created, "targetId");
+        let id = match &self.host {
+            Some(host) if host.is_ready() => host.open(url).await.map_err(Error::NotFound)?,
+            _ => {
+                let cdp = self.connection()?;
+                let created = cdp
+                    .call("Target.createTarget", json!({ "url": url }), None)
+                    .await
+                    .map_err(Error::NotFound)?;
+                text(&created, "targetId")
+            }
+        };
         self.claim(&id, claim);
         Ok(id)
+    }
+
+    /// Whether new pages are made by wb-browser, so a Pi's own way of
+    /// making them has to come here.
+    fn hosts_tabs(&self) -> bool {
+        self.host.as_ref().is_some_and(Host::is_ready)
+    }
+
+    /// What wb-browser said, through the app.
+    pub fn host_said(&self, said: protocol::HostSaid) {
+        if let Some(host) = &self.host {
+            host.heard(said);
+        }
     }
 
     pub async fn open(&self, url: &str, session: Option<String>) -> Result<WebTab, Error> {

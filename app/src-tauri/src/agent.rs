@@ -57,6 +57,8 @@ impl Agent {
                 for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                     if line.starts_with(r#"{"type":"tunnel""#) {
                         app.state::<Browser>().tunnel(&app, &line);
+                    } else if line.starts_with(r#"{"type":"host""#) {
+                        app.state::<Browser>().host(&line);
                     } else {
                         let _ = app.emit("agent-line", line);
                     }
@@ -73,6 +75,8 @@ impl Agent {
         });
 
         *running = Some(Running { child, stdin });
+        drop(running);
+        app.state::<Browser>().announce(app);
         Ok(())
     }
 

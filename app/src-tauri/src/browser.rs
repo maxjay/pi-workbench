@@ -2,7 +2,9 @@
 //! port through the app: a tunnel line from wb-agent names a stream, which
 //! the app opens to the port and carries both ways as more lines. The
 //! browser is wb-browser, the CEF program beside the app, which draws each
-//! web tab's page over the window where the page says. In development any
+//! web tab's page in the window where the page says, and makes the tabs
+//! wb-agent asks for: its host lines go to wb-browser and back. Shortcuts
+//! pressed in a page come to the page as `browser-key`. In development any
 //! Chromium will do, at `WB_BROWSER_CDP` (`host:port`).
 
 use std::collections::HashMap;
@@ -17,7 +19,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::agent::Agent;
 
@@ -27,6 +29,8 @@ pub struct Browser {
     address: Mutex<Option<String>>,
     streams: Mutex<HashMap<u32, TcpStream>>,
     host: Mutex<Option<Host>>,
+    /// wb-browser has said it's running, for a wb-agent started later.
+    ready: std::sync::atomic::AtomicBool,
 }
 
 struct Host {
@@ -54,13 +58,32 @@ pub fn setup(app: &AppHandle) {
         *browser.address.lock().expect("not poisoned") = Some(address);
         return;
     }
-    if let Err(err) = browser.start(app) {
-        eprintln!("pi-workbench: no browser: {err}");
-    }
+    // It needs the window's handle, which exists once the window is up:
+    // asked for on the main thread, again until it's there.
+    let app = app.clone();
+    thread::spawn(move || {
+        for _ in 0..600 {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let on_main = app.clone();
+            let asked = app.run_on_main_thread(move || {
+                let _ = tx.send(parent(&on_main).ok());
+            });
+            if asked.is_ok()
+                && let Ok(Some(parent)) = rx.recv()
+            {
+                if let Err(err) = app.state::<Browser>().start(&app, parent) {
+                    eprintln!("pi-workbench: no browser: {err}");
+                }
+                return;
+            }
+            thread::sleep(std::time::Duration::from_millis(500));
+        }
+        eprintln!("pi-workbench: no browser: the window never came up");
+    });
 }
 
 impl Browser {
-    fn start(&self, app: &AppHandle) -> Result<(), String> {
+    fn start(&self, app: &AppHandle, parent: isize) -> Result<(), String> {
         let exe = beside("wb-browser").ok_or("wb-browser isn't installed beside the app")?;
         let profile = profile_dir(app)?;
         let port = free_port().map_err(|err| format!("no port for the browser: {err}"))?;
@@ -71,25 +94,66 @@ impl Browser {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
-        #[cfg(windows)]
-        if let Some(window) = app.get_webview_window("main")
-            && let Ok(hwnd) = window.hwnd()
-        {
-            command.arg(format!("--parent={}", hwnd.0 as isize));
+        command.arg(format!("--parent={parent}"));
+        if let Ok(extensions) = std::env::var("WB_BROWSER_EXTENSIONS") {
+            command.arg(format!("--extensions={extensions}"));
+        }
+        // CEF's library is beside it.
+        #[cfg(target_os = "linux")]
+        if let Some(dir) = beside("wb-browser").and_then(|exe| Some(exe.parent()?.to_path_buf())) {
+            command.env("LD_LIBRARY_PATH", dir);
         }
         let mut child = command
             .spawn()
             .map_err(|err| format!("couldn't start wb-browser: {err}"))?;
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
+        let app = app.clone();
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                eprintln!("wb-browser: {line}");
+                app.state::<Browser>().heard(&app, &line);
             }
         });
         *self.address.lock().expect("not poisoned") = Some(format!("127.0.0.1:{port}"));
         *self.host.lock().expect("not poisoned") = Some(Host { child, stdin });
         Ok(())
+    }
+
+    /// A line from wb-browser: a shortcut for the page, or news for wb-agent.
+    fn heard(&self, app: &AppHandle, line: &str) {
+        let Ok(Value::Object(mut said)) = serde_json::from_str::<Value>(line) else {
+            return eprintln!("wb-browser: {line}");
+        };
+        if let Some(key) = said.get("key") {
+            let _ = app.emit("browser-key", key.clone());
+            return;
+        }
+        if said.contains_key("ready") {
+            self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let mut news = serde_json::Map::new();
+        news.insert("type".into(), "host".into());
+        news.append(&mut said);
+        let _ = app.state::<Agent>().send(&Value::Object(news).to_string());
+    }
+
+    /// Tells a newly started wb-agent that wb-browser makes the tabs.
+    pub fn announce(&self, app: &AppHandle) {
+        if self.ready.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = app.state::<Agent>().send(r#"{"type":"host","ready":true}"#);
+        }
+    }
+
+    /// A host line from wb-agent, for wb-browser.
+    pub fn host(&self, line: &str) {
+        let Ok(Value::Object(mut call)) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        call.remove("type");
+        if let Some(host) = self.host.lock().expect("not poisoned").as_mut() {
+            let _ = writeln!(host.stdin, "{}", Value::Object(call));
+            let _ = host.stdin.flush();
+        }
     }
 
     fn stop(&self) {
@@ -181,6 +245,21 @@ fn send(app: &AppHandle, stream: u32, op: Value) {
     let _ = app.state::<Agent>().send(&line.to_string());
 }
 
+/// The workbench window's native handle, which wb-browser draws tabs in.
+fn parent(app: &AppHandle) -> Result<isize, String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let window = app
+        .get_webview_window("main")
+        .ok_or("no window to draw tabs in")?;
+    let handle = window.window_handle().map_err(|err| err.to_string())?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(h) => Ok(h.hwnd.get()),
+        RawWindowHandle::Xlib(h) => Ok(h.window as isize),
+        RawWindowHandle::Xcb(h) => Ok(h.window.get() as isize),
+        other => Err(format!("can't draw tabs in a {other:?} window")),
+    }
+}
+
 fn beside(name: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let path = exe
@@ -248,7 +327,7 @@ pub fn browser_import_profile(
     let to = profile_dir(&app)?;
     browser.stop();
     let copied = copy_tree(&from, &to);
-    let started = browser.start(&app);
+    let started = parent(&app).and_then(|handle| browser.start(&app, handle));
     let files = copied.map_err(|err| format!("couldn't copy the profile: {err}"))?;
     started?;
     Ok(format!("Brought in your Chromium profile: {files} files."))

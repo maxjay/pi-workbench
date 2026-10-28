@@ -76,7 +76,7 @@ function receive(line: string) {
     return;
   }
   // The app carries these to the browser; they're never the page's.
-  if (message.type === 'tunnel') return;
+  if (message.type === 'tunnel' || message.type === 'host') return;
   const waiting = pending.get(message.id);
   if (!waiting) return;
   pending.delete(message.id);

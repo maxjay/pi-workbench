@@ -204,10 +204,25 @@ keeps the list in `codespaces.json`; nothing is written into the folder.
 
 ## Web tabs
 
-Web tabs are pages in the workbench's own Chromium: wb-browser, a CEF
-program beside the app, with your profile brought in from the Chromium you
-use. The app lays each tab's page over the window where the page says
-(`browser_place`); the rest is the page's, as for every other tab.
+Web tabs are pages in the workbench's own Chromium: wb-browser
+(`crates/browser`), a CEF program beside the app, with your profile brought
+in from the Chromium you use. The app lays each tab's page over the window
+where the page says (`browser_place`); the rest is the page's, as for every
+other tab.
+
+- **wb-browser makes the tabs.** Each is a Chrome-style browser (so
+  extensions run) drawn as a child of the workbench's window, hidden until
+  placed. The app starts it with the window's handle and talks to it in
+  lines: what to open and where each tab goes, in; what opened, closed or
+  was pressed, out. DevTools' own `Target.createTarget` would open a Chrome
+  window, so wb-agent asks wb-browser for a tab instead (`browser/host.rs`,
+  through the app), and the gate does the same for Pi's. Shortcuts that are
+  the workbench's (Ctrl K, L, T, N, W and comma) come back to the page even
+  while a tab has the keys.
+- **Attached to once a page.** In CEF a popup that DevTools attaches to as
+  it's made never loads, so nothing auto-attaches: wb-agent attaches to
+  each page as it's announced, and the gate does Pi's `setAutoAttach` for
+  it the same way, answering Pi as the browser would.
 
 - **wb-agent follows the browser** (`browser/`) over the DevTools protocol:
   every page, its title, loading and back/forward, downloads, and history,
@@ -271,6 +286,7 @@ app/
     src/agent.rs     the child process
     src/background.rs  the tray, closing to it, starting at sign-in
     src/browser.rs   wb-browser, and wb-agent's streams to it
+crates/browser/      wb-browser: the CEF host for web tabs
     src/launch.rs    which wb-agent to run
     src/wsl.rs       Windows only: run in WSL, install the bundled wb-agent
   ui/
@@ -329,6 +345,10 @@ Pi files, which is handy for trying things out. Web tabs need a Chromium:
 start one with `--remote-debugging-port=9222 --user-data-dir=<a folder>`
 and set `WB_BROWSER=127.0.0.1:9222`.
 
+`cargo build -p wb-browser` fetches CEF's files, or takes them from
+`CEF_PATH`; they go next to `wb-browser`, which the app runs from beside
+itself. `WB_BROWSER_EXTENSIONS` loads unpacked extensions, comma-separated.
+
 The app:
 
 ```sh
@@ -353,5 +373,5 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
 4. **Sessions** inside codespaces (done).
 5. **Subagents.**
 
-Web tabs (in progress): everything but wb-browser itself, the CEF host,
-which is next.
+Web tabs (in progress): working, with wb-browser built by hand. Next:
+building and carrying wb-browser and CEF's files with the app on Windows.
