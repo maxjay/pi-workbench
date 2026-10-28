@@ -2845,7 +2845,7 @@ dependencies = [
 
 [[package]]
 name = "pi-workbench"
-version = "1.0.0-alpha.6"
+version = "1.0.0-alpha.7"
 dependencies = [
  "base64 0.22.1",
  "raw-window-handle",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "protocol"
-version = "1.0.0-alpha.6"
+version = "1.0.0-alpha.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -4739,7 +4739,7 @@ dependencies = [
 
 [[package]]
 name = "wb-agent"
-version = "1.0.0-alpha.6"
+version = "1.0.0-alpha.7"
 dependencies = [
  "base64 0.22.1",
  "jiff",
@@ -4754,7 +4754,7 @@ dependencies = [
 
 [[package]]
 name = "wb-browser"
-version = "1.0.0-alpha.6"
+version = "1.0.0-alpha.7"
 dependencies = [
  "cef",
  "serde",
