@@ -23,6 +23,10 @@ mod platform {
 
     use super::*;
 
+    pub fn handle(raw: u64) -> cef_window_handle_t {
+        cef::sys::HWND(raw as _)
+    }
+
     pub fn frame(parent: cef_window_handle_t) -> cef_window_handle_t {
         parent
     }
@@ -45,7 +49,7 @@ mod platform {
     ) {
         unsafe {
             SetWindowPos(
-                browser,
+                browser.0 as _,
                 HWND_TOP,
                 x,
                 y,
@@ -58,7 +62,7 @@ mod platform {
 
     pub fn hide(_frame: cef_window_handle_t, browser: cef_window_handle_t) {
         unsafe {
-            ShowWindow(browser, SW_HIDE);
+            ShowWindow(browser.0 as _, SW_HIDE);
         }
     }
 
@@ -93,6 +97,10 @@ mod platform {
             unsafe { (xlib.XFlush)(*display) };
             done
         })
+    }
+
+    pub fn handle(raw: u64) -> cef_window_handle_t {
+        raw as _
     }
 
     /// A window of the screen's default visual, unmapped until placed.
@@ -155,4 +163,4 @@ mod platform {
     }
 }
 
-pub use platform::{close, frame, hidden, hide, place};
+pub use platform::{close, frame, handle, hidden, hide, place};

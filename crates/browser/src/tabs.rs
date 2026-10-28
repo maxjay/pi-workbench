@@ -20,7 +20,7 @@ pub fn set_parent(parent: u64) {
 }
 
 pub fn parent() -> sys::cef_window_handle_t {
-    PARENT.load(Ordering::Relaxed) as _
+    window::handle(PARENT.load(Ordering::Relaxed))
 }
 
 struct Tab {

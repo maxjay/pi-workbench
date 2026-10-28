@@ -10,6 +10,9 @@
 //!
 //! The same program is also each of Chromium's helper processes.
 
+// No console window of its own on Windows; its lines go through pipes.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod handlers;
 mod tabs;
 mod window;

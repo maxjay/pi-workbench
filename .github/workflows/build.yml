@@ -2,7 +2,8 @@ name: Build
 
 # The Windows app and the wb-agent it carries, built the same way for CI and
 # for releases. The callers get two artifacts: wb-agent-linux and
-# pi-workbench-windows.
+# pi-workbench-windows (the app, its installer, and the browser folder the
+# app carries: wb-browser with CEF's files).
 
 on:
   workflow_call:
@@ -54,7 +55,24 @@ jobs:
       - run: npm run build
         working-directory: app/ui
       - run: cargo clippy -p pi-workbench --all-targets --locked -- -D warnings
-      - run: npm run tauri -- build
+      # CEF's wrapper builds with CMake and Ninja, in the MSVC environment.
+      - uses: ilammy/msvc-dev-cmd@v1
+      - run: cargo build -p wb-browser --release --locked
+      # Its build puts CEF's files beside it; the app carries both in browser/.
+      - name: Gather wb-browser and CEF's files
+        shell: pwsh
+        run: |
+          $release = 'target/release'
+          $browser = "$release/browser"
+          New-Item -ItemType Directory -Force "$browser/locales" | Out-Null
+          Copy-Item "$release/wb-browser.exe" $browser
+          Get-ChildItem $release -File |
+            Where-Object { $_.Extension -in '.dll', '.pak', '.dat', '.bin' -or $_.Name -in 'vk_swiftshader_icd.json', 'CREDITS.html' } |
+            Copy-Item -Destination $browser
+          Copy-Item "$release/locales/*" "$browser/locales"
+          if (-not (Test-Path "$browser/libcef.dll")) { throw "CEF's files aren't beside wb-browser" }
+          Get-ChildItem $browser -File | Format-Table Name, Length
+      - run: npm run tauri -- build --config src-tauri/tauri.browser.conf.json
         working-directory: app/ui
       - uses: actions/upload-artifact@v4
         with:
@@ -62,4 +80,7 @@ jobs:
           path: |
             target/release/pi-workbench.exe
             target/release/bundle/nsis/*.exe
+            target/release/browser/
           if-no-files-found: error
+          # It's large with CEF in it; a release takes it at once.
+          retention-days: 1

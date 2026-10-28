@@ -84,10 +84,10 @@ pub fn setup(app: &AppHandle) {
 
 impl Browser {
     fn start(&self, app: &AppHandle, parent: isize) -> Result<(), String> {
-        let exe = beside("wb-browser").ok_or("wb-browser isn't installed beside the app")?;
+        let exe = wb_browser().ok_or("wb-browser isn't installed beside the app")?;
         let profile = profile_dir(app)?;
         let port = free_port().map_err(|err| format!("no port for the browser: {err}"))?;
-        let mut command = Command::new(exe);
+        let mut command = Command::new(&exe);
         command
             .arg(format!("--port={port}"))
             .arg(format!("--profile={}", profile.display()))
@@ -100,7 +100,7 @@ impl Browser {
         }
         // CEF's library is beside it.
         #[cfg(target_os = "linux")]
-        if let Some(dir) = beside("wb-browser").and_then(|exe| Some(exe.parent()?.to_path_buf())) {
+        if let Some(dir) = exe.parent() {
             command.env("LD_LIBRARY_PATH", dir);
         }
         let mut child = command
@@ -260,12 +260,14 @@ fn parent(app: &AppHandle) -> Result<isize, String> {
     }
 }
 
-fn beside(name: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let path = exe
-        .parent()?
-        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    path.is_file().then_some(path)
+/// wb-browser, with CEF's files: in `browser` beside the app as installed,
+/// or beside it in a build.
+fn wb_browser() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let name = format!("wb-browser{}", std::env::consts::EXE_SUFFIX);
+    [dir.join("browser").join(&name), dir.join(name)]
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 fn profile_dir(app: &AppHandle) -> Result<PathBuf, String> {

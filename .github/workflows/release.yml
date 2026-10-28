@@ -73,7 +73,7 @@ jobs:
           version="${TAG#v}"
           mkdir assets
           cp "$(find built/pi-workbench-windows -name '*-setup.exe')" "assets/pi-workbench-$version-windows-x64-setup.exe"
-          cp built/pi-workbench-windows/pi-workbench.exe "assets/pi-workbench-$version-windows-x64-portable.exe"
+          (cd built/pi-workbench-windows && zip -qr "../../assets/pi-workbench-$version-windows-x64-portable.zip" pi-workbench.exe browser)
           cp built/wb-agent-linux/wb-agent "assets/wb-agent-$version-linux-x64"
           (cd assets && sha256sum * > SHA256SUMS)
           cat assets/SHA256SUMS
@@ -93,7 +93,7 @@ jobs:
           You need Windows 10 or 11 with WSL, a default distro, and Pi installed in it.
 
           - **Installer:** `pi-workbench-…-windows-x64-setup.exe` installs for your user only, no admin rights needed.
-          - **Portable:** `pi-workbench-…-windows-x64-portable.exe` runs from anywhere without installing.
+          - **Portable:** unzip `pi-workbench-…-windows-x64-portable.zip` anywhere and run `pi-workbench.exe`, no installing. Keep the `browser` folder beside it: it's the browser behind web tabs.
 
           On first start the app installs wb-agent into `~/.local/bin` in your default WSL distro.
           `wb-agent-…-linux-x64` is the same binary, for installing it by hand.

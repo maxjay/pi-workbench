@@ -347,7 +347,9 @@ and set `WB_BROWSER=127.0.0.1:9222`.
 
 `cargo build -p wb-browser` fetches CEF's files, or takes them from
 `CEF_PATH`; they go next to `wb-browser`, which the app runs from beside
-itself. `WB_BROWSER_EXTENSIONS` loads unpacked extensions, comma-separated.
+itself (installed, from the `browser` folder beside it: CI gathers it, and
+`tauri.browser.conf.json` has the installer carry it).
+`WB_BROWSER_EXTENSIONS` loads unpacked extensions, comma-separated.
 
 The app:
 
@@ -373,5 +375,6 @@ Elsewhere it runs the `wb-agent` next to the app, or the one on `PATH`.
 4. **Sessions** inside codespaces (done).
 5. **Subagents.**
 
-Web tabs (in progress): working, with wb-browser built by hand. Next:
-building and carrying wb-browser and CEF's files with the app on Windows.
+Web tabs (in progress): working, and carried by the Windows app. A page's
+popup is a tab in the background for now (`Web::popup` is where that's
+decided).

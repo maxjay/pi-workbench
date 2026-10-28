@@ -519,10 +519,21 @@ impl Web {
 
     /// What wb-browser said, through the app.
     pub fn host_said(&self, said: protocol::HostSaid) {
+        if let protocol::HostSaid::Popup { tab, width, height } = &said {
+            self.popup(tab, *width, *height);
+        }
         if let Some(host) = &self.host {
             host.heard(said);
         }
     }
+
+    /// Where what a page's popup becomes is decided. For now it's a tab like
+    /// any other the page opens: in your strip if the page is, out of sight
+    /// if it's Pi's, and left in the background either way. That much the
+    /// page's claim does as the browser announces it; the size the popup
+    /// asked for (0 when it didn't say) is here for when popups become more,
+    /// such as a sign-in window over its page.
+    fn popup(&self, _tab: &str, _width: i32, _height: i32) {}
 
     pub async fn open(&self, url: &str, session: Option<String>) -> Result<WebTab, Error> {
         let id = self
