@@ -4,6 +4,10 @@ Pi Workbench is a Windows app for working with [Pi](https://pi.dev), where
 Pi, your code and your terminals live in WSL. It has three parts, and each
 does one job.
 
+The design it's built to is the
+[Pi Workbench redesign](https://claude.ai/artifact/3zC5kuPGw58d6GzjWZCXgW)
+canvas.
+
 ```
  Windows                                    WSL
 ┌──────────────────────────────┐          ┌─────────────────────────────┐
