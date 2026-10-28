@@ -29,6 +29,7 @@ jobs:
           name: wb-agent-linux
           path: target/x86_64-unknown-linux-musl/release/wb-agent
           if-no-files-found: error
+          retention-days: 30
 
   windows:
     name: Windows app
@@ -82,5 +83,5 @@ jobs:
             target/release/bundle/nsis/*.exe
             target/release/browser/
           if-no-files-found: error
-          # It's large with CEF in it; a release takes it at once.
-          retention-days: 1
+          # A release reuses CI's build of its commit, while it's kept.
+          retention-days: 30

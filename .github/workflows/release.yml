@@ -6,6 +6,10 @@ name: Release
 # on. A version with a pre-release part (1.0.0-alpha.1) is a pre-release.
 # A run by hand can also delete every other release once this one is up;
 # their tags stay.
+#
+# The files are CI's build of the same commit, waited for if it's still
+# going; only when CI has none (it failed, or its files have expired) does
+# the release build them itself.
 
 on:
   push:
@@ -49,18 +53,57 @@ jobs:
           fi
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: Build
+  ci:
+    name: CI's build
     needs: version
     if: needs.version.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - id: find
+        run: |
+          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [[ -z "$run" ]]; then
+            echo "No CI run for $GITHUB_SHA; the release builds it"
+            exit 0
+          fi
+          # Waits for it, if it's still going.
+          if ! gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status > /dev/null; then
+            echo "CI run $run didn't pass; the release builds it"
+            exit 0
+          fi
+          have=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts" \
+            --jq '[.artifacts[] | select(.expired | not) | .name] | sort | join(" ")')
+          if [[ "$have" != "pi-workbench-windows wb-agent-linux" ]]; then
+            echo "CI run $run's files are gone; the release builds them"
+            exit 0
+          fi
+          echo "Using CI run $run's build"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: [version, ci]
+    if: needs.version.outputs.tag != '' && needs.ci.outputs.run == ''
     uses: ./.github/workflows/build.yml
 
   publish:
     name: Publish
-    needs: [version, build]
+    needs: [version, ci, build]
+    # Runs with the build skipped, when CI's is used.
+    if: >-
+      always() && needs.version.outputs.tag != '' && needs.ci.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     env:
       TAG: ${{ needs.version.outputs.tag }}
       GH_TOKEN: ${{ github.token }}
@@ -68,6 +111,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: built
+          run-id: ${{ needs.ci.outputs.run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Name the files
         run: |
           version="${TAG#v}"
