@@ -33,7 +33,7 @@ impl Daemon {
         }
         let start = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
 
-        let mut child = launch::command()
+        let mut child = launch::command()?
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

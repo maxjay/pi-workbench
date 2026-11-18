@@ -5,6 +5,8 @@
 
 mod daemon;
 mod launch;
+#[cfg(windows)]
+mod wsl;
 
 use daemon::Daemon;
 use tauri::{AppHandle, State};
