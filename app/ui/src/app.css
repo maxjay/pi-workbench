@@ -6,8 +6,8 @@
   padding: 0;
 }
 
-html {
-  /* Scrollbars in the app's own colours, thin. */
+/* Scrollbars in the app's own colours, thin, wherever something scrolls. */
+* {
   scrollbar-color: var(--line) transparent;
   scrollbar-width: thin;
 }
@@ -137,6 +137,7 @@ svg.glyph {
   height: 32px;
   padding: 0 12px;
   border: 1px solid var(--line);
+  white-space: nowrap;
 }
 
 .button:hover {
@@ -438,6 +439,11 @@ svg.glyph {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* A tab that isn't a file has the middle to itself. */
+.editor[hidden] {
+  display: none;
 }
 
 .editor-host {
@@ -858,6 +864,7 @@ svg.glyph {
 
 .composer-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 0 10px 10px 6px;
@@ -1067,4 +1074,119 @@ svg.glyph {
   background: none;
   border-color: var(--line);
   color: var(--dim);
+}
+
+/* The pull request, on the left */
+
+.pull-view {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 12px 20px;
+}
+
+.pull-part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pull-name {
+  font-size: 20px;
+}
+
+.pull-note {
+  color: var(--working);
+  font-size: 12px;
+}
+
+.pull-label {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  padding-bottom: 2px;
+}
+
+.pull-line,
+.pull-thread-row {
+  width: auto;
+  margin: 0 -10px;
+  padding: 5px 10px;
+}
+
+.pull-thread-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.pull-thread-row > * {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A thread, and a run's log, in the middle */
+
+.thread,
+.log-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+}
+
+.thread > * {
+  width: min(760px, 100%);
+}
+
+.thread-head {
+  display: flex;
+  gap: 12px;
+}
+
+.thread-head > :first-child {
+  white-space: nowrap;
+}
+
+.thread-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* What happened takes its own line when the buttons don't fit beside it. */
+.log-head > :first-child {
+  flex: 1 1 260px;
+}
+
+.log-pad {
+  padding: 24px;
+}
+
+.log-text {
+  font: inherit;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

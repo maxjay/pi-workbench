@@ -9,6 +9,7 @@ import type { PullRow } from '../../protocol/PullRow';
 import { health, recheck } from '../../state/health';
 import { pulls, refreshPulls } from '../../state/pulls';
 import { open } from '../../state/tabs';
+import { showPull } from '../workspace/ui';
 
 const INSTALL = 'curl -LO https://dova.maxjay.dev/dova.deb && sudo apt install ./dova.deb';
 
@@ -41,7 +42,12 @@ function Row(props: { row: PullRow }) {
         type="button"
         class="row pull-row"
         disabled={!row().workspace}
-        onClick={() => open(`ws:${row().workspace}`)}
+        onClick={() => {
+          const workspace = row().workspace;
+          if (!workspace) return;
+          showPull(workspace, row().id);
+          open(`ws:${workspace}`);
+        }}
       >
         <span class="dim">#{row().id}</span>
         <span class="pull-title">{row().title}</span>

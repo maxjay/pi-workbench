@@ -6,14 +6,18 @@ import { createMemo, For, onCleanup, onMount, Show } from 'solid-js';
 import { openPalette } from '../components/Palette';
 import type { GitMark } from '../protocol/GitMark';
 import type { WorkspaceView } from '../protocol/WorkspaceView';
+import { defaultAgent, send, start } from '../state/conversations';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { refreshRepo, repos } from '../state/repo';
 import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
 import { createEditor } from './workspace/Editor';
+import { LogView } from './workspace/LogView';
+import { Pull } from './workspace/Pull';
 import { Terminals } from './workspace/Terminals';
+import { ThreadView } from './workspace/ThreadView';
 import { marks, Tree } from './workspace/Tree';
-import { closeTab, isFile, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
+import { closeTab, isFile, labelOf, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
 
 export function WorkspacePage(props: { id: string }) {
   return (
@@ -62,6 +66,21 @@ function Page(props: { view: WorkspaceView }) {
     gitKey: () => JSON.stringify(repo()?.git?.summary ?? null),
     onSaved: () => void refreshRepo(root),
   });
+
+  /** Opens a file of this workspace at a line. */
+  const openAt = (path: string, line: number | null) => {
+    const full = absolute(path.replace(/^\//, ''));
+    if (line) editor.goToLine(full, line);
+    openTab(id, full);
+  };
+  /** Says something to the agent here: in the conversation shown, or a new one. */
+  const tell = async (text: string) => {
+    const shown = ui().conversation;
+    if (shown) await send(shown, text);
+    else setConversation(id, await start(defaultAgent(), root, text));
+  };
+  /** The ids in a tab that isn't a file: `log:6` is [6], `thread:1:4` is [1, 4]. */
+  const ids = (tab: string) => tab.split(':').slice(1).map(Number);
 
   const close = (tab: string) => {
     closeTab(id, tab);
@@ -124,6 +143,16 @@ function Page(props: { view: WorkspaceView }) {
             Changes
             <Show when={repo()?.git?.summary.files}>{(n) => <span class="dim">{n()}</span>}</Show>
           </button>
+          <Show when={repo()?.git}>
+            <button
+              type="button"
+              class="strip-tab"
+              aria-pressed={ui().left === 'pull'}
+              onClick={() => setLeft(id, 'pull')}
+            >
+              Pull request
+            </button>
+          </Show>
         </div>
         <div class="left-body">
           <Show when={ui().left === 'files'}>
@@ -174,6 +203,15 @@ function Page(props: { view: WorkspaceView }) {
               )}
             </Show>
           </Show>
+          <Show when={ui().left === 'pull'}>
+            <Pull
+              dir={root}
+              pr={ui().pull}
+              current={ui().current}
+              onLog={(run) => openTab(id, `log:${run}`)}
+              onThread={(pr, thread) => openTab(id, `thread:${pr}:${thread}`)}
+            />
+          </Show>
         </div>
       </aside>
 
@@ -184,7 +222,7 @@ function Page(props: { view: WorkspaceView }) {
               {(tab) => (
                 <span class="strip-tab strip-tab-closable" data-current={ui().current === tab}>
                   <button type="button" class="strip-open" title={tab} onClick={() => openTab(id, tab)}>
-                    {nameOf(tab)}
+                    {labelOf(tab)}
                     <Show when={buffers[tab]?.dirty}>
                       <span role="img" aria-label="Not saved">
                         {' '}
@@ -195,7 +233,7 @@ function Page(props: { view: WorkspaceView }) {
                   <button
                     type="button"
                     class="strip-close"
-                    aria-label={`Close ${nameOf(tab)}`}
+                    aria-label={`Close ${labelOf(tab)}`}
                     onClick={() => close(tab)}
                   >
                     ×
@@ -204,6 +242,20 @@ function Page(props: { view: WorkspaceView }) {
               )}
             </For>
           </div>
+        </Show>
+        <Show when={ui().current?.startsWith('log:') && ui().current} keyed>
+          {(tab) => (
+            <LogView
+              dir={root}
+              run={ids(tab)[0]}
+              files={repo()?.files ?? []}
+              onOpenAt={openAt}
+              onAsk={(text) => void tell(text)}
+            />
+          )}
+        </Show>
+        <Show when={ui().current?.startsWith('thread:') && ui().current} keyed>
+          {(tab) => <ThreadView dir={root} pr={ids(tab)[0]} thread={ids(tab)[1]} onOpenAt={openAt} />}
         </Show>
         {editor.view}
       </section>

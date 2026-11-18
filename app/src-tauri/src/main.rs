@@ -23,10 +23,33 @@ fn daemon_send(daemon: State<Daemon>, line: String) -> Result<(), String> {
     daemon.send(&line)
 }
 
+/// Opens a link in your own browser. Only https links: the page shows
+/// what agents and reviewers wrote, and nothing else they name is run.
+#[tauri::command(async)]
+fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("only https links are opened".into());
+    }
+    let opener = if cfg!(windows) {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("couldn't open the link: {err}"))
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Daemon::default())
-        .invoke_handler(tauri::generate_handler![daemon_start, daemon_send])
+        .invoke_handler(tauri::generate_handler![
+            daemon_start,
+            daemon_send,
+            open_url
+        ])
         .run(tauri::generate_context!())
         .expect("the window opens");
 }

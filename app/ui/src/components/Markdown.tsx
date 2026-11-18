@@ -3,11 +3,15 @@
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
+import { openUrl } from './open';
 
-/** A link must not take the window away from the app. Opening links comes in a later step. */
+/** A link must not take the window away from the app: it opens in your own browser. */
 function keepLinksHere(box: HTMLDivElement) {
   box.addEventListener('click', (e) => {
-    if ((e.target as Element).closest('a')) e.preventDefault();
+    const link = (e.target as Element).closest('a');
+    if (!link) return;
+    e.preventDefault();
+    openUrl(link.href);
   });
 }
 

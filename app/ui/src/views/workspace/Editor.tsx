@@ -121,6 +121,14 @@ export function createEditor(props: {
   const [loading, setLoading] = createSignal(false);
   const saving = createAction((path: string, text: string) => save(path, text));
   let shown: string | undefined;
+  /** A line to go to in a file, once that file is on screen. */
+  let wanted: { path: string; line: number } | undefined;
+
+  const goTo = (line: number) => {
+    if (!view) return;
+    const at = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)));
+    view.dispatch({ selection: { anchor: at.from }, scrollIntoView: true });
+  };
 
   /** Changes a file's editor: the one on screen, or the state kept for later. */
   const apply = (path: string, spec: TransactionSpec) => {
@@ -216,6 +224,8 @@ export function createEditor(props: {
     if (!view) return;
     shown = path;
     view.setState(states.get(path) ?? state);
+    if (wanted?.path === path) goTo(wanted.line);
+    wanted = undefined;
     view.focus();
   };
 
@@ -269,13 +279,18 @@ export function createEditor(props: {
 
   return {
     replace,
+    /** Goes to a line of a file: now if it is the one shown, else when it opens. */
+    goToLine: (path: string, line: number) => {
+      if (shown === path) goTo(line);
+      else wanted = { path, line };
+    },
     /** A closed file lets go of its editor. */
     drop: (path: string) => {
       states.delete(path);
       parts.delete(path);
     },
     view: (
-      <div class="editor">
+      <div class="editor" hidden={props.path() === undefined}>
         <Show when={buffer()?.changedOnDisk != null}>
           <div class="editor-note" role="alert">
             <span>This file changed on disk while yours had unsaved changes.</span>
