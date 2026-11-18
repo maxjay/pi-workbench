@@ -1,5 +1,5 @@
-// Home: the ask line, which starts a scratchpad, and your workspaces. Pull
-// requests arrive with the step that makes them work.
+// Home: the ask line, which starts a scratchpad, then your pull requests,
+// then your workspaces.
 
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../components/action';
@@ -10,6 +10,7 @@ import type { WorkspaceView } from '../protocol/WorkspaceView';
 import { agentName, defaultAgent, start } from '../state/conversations';
 import { open } from '../state/tabs';
 import { refreshWorkspaces, workspaces } from '../state/workspaces';
+import { Pulls } from './home/Pulls';
 import { setConversation } from './workspace/ui';
 
 /** Where a workspace's git stands, in a few words. */
@@ -71,6 +72,8 @@ export function Home() {
           {(error) => <p class="note-failed">{error()}</p>}
         </Show>
       </form>
+
+      <Pulls />
 
       <section class="section" aria-labelledby="workspaces">
         <div class="section-head">
