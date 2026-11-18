@@ -363,14 +363,27 @@ svg.glyph {
 
 /* A workspace: lists on the left, the thing you picked in the middle */
 
+/* Left: lists. Middle: what you picked, terminals under it. Right: the agent.
+   While nothing is open in the middle, the agent has it. */
 .columns {
   height: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 400px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "left middle chat"
+    "left terms chat";
+}
+
+.columns[data-chat="middle"] {
+  grid-template-areas:
+    "left chat chat"
+    "left terms terms";
 }
 
 .left {
-  width: 320px;
-  flex-shrink: 0;
+  grid-area: left;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
@@ -409,10 +422,15 @@ svg.glyph {
 }
 
 .middle {
-  flex: 1;
+  grid-area: middle;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.columns[data-chat="middle"] .middle {
+  display: none;
 }
 
 .editor {
@@ -555,7 +573,8 @@ svg.glyph {
 /* Terminals, under the editor */
 
 .terminals {
-  flex-shrink: 0;
+  grid-area: terms;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--line);
@@ -604,4 +623,292 @@ svg.glyph {
 
 .dot[data-state="asking"] {
   background: var(--asking);
+}
+
+/* The agent */
+
+.chat {
+  grid-area: chat;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.columns[data-chat="right"] .chat {
+  border-left: 1px solid var(--line);
+}
+
+.chat-head {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 0 12px 0 20px;
+}
+
+.chat-agent {
+  display: flex;
+  align-items: center;
+}
+
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-title:hover {
+  color: var(--ink);
+}
+
+.chat-list {
+  max-height: 240px;
+  overflow: auto;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.chat-list-row {
+  height: 30px;
+  padding: 0 20px;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+/* In the middle the conversation keeps a width that reads well. */
+.chat-entries,
+.chat-foot > * {
+  width: min(760px, 100%);
+  margin: 0 auto;
+}
+
+.chat-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.entry-who {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.entry-you {
+  white-space: pre-wrap;
+}
+
+.entry-thinking,
+.tool {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.entry-thinking summary,
+.tool summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.entry-thinking p {
+  padding-top: 6px;
+  white-space: pre-wrap;
+}
+
+.tool summary {
+  display: flex;
+  gap: 8px;
+}
+
+.tool-title {
+  min-width: 0;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-count [data-state="ok"] {
+  color: var(--ok);
+}
+
+.tool-count [data-state="failed"],
+.tool[data-status="failed"] .tool-status {
+  color: var(--failed);
+}
+
+.tool[data-status="running"] .tool-status {
+  color: var(--working);
+}
+
+.tool-body {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  overflow: auto;
+  max-height: 320px;
+}
+
+.tool pre {
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-old {
+  text-decoration: line-through;
+  padding-bottom: 8px;
+}
+
+.tool-new {
+  color: var(--ink);
+}
+
+.tool-open {
+  display: block;
+  padding-bottom: 8px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.entry-notice[data-tone="failed"] {
+  color: var(--failed);
+}
+
+.entry-notice[data-tone="warning"] {
+  color: var(--working);
+}
+
+.entry-notice[data-tone="info"] {
+  color: var(--dim);
+}
+
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-wrap: anywhere;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-size: 16px;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 22px;
+}
+
+.markdown pre {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  overflow: auto;
+}
+
+.markdown code {
+  font: inherit;
+}
+
+.markdown :not(pre) > code {
+  color: var(--syn-string);
+}
+
+.markdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chat-foot {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 20px 20px;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+}
+
+.composer:focus-within {
+  border-color: var(--dim);
+}
+
+.composer-text {
+  resize: none;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  font: inherit;
+  padding: 12px 14px;
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 10px 6px;
+}
+
+.composer-agents {
+  display: flex;
+  border: 0;
+  height: 28px;
+}
+
+.hidden-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--asking);
+}
+
+.ask-label {
+  color: var(--asking);
+  font-size: 12px;
+}
+
+.ask-message {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.ask-input {
+  height: 32px;
+  padding: 0 10px;
+  background: none;
+  border: 1px solid var(--line);
+  outline: 0;
+  color: var(--ink);
+  font: inherit;
+}
+
+.ask-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }

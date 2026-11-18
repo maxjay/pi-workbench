@@ -1,0 +1,347 @@
+// The agent, beside a workspace: the conversation, and where you write.
+// When the agent asks something, its question takes the place of the box
+// you write in. The same parts whichever agent it is.
+
+import { createEffect, createSignal, For, Match, on, onMount, Show, Switch } from 'solid-js';
+import { createAction } from '../../components/action';
+import { Markdown } from '../../components/Markdown';
+import type { Agent } from '../../protocol/Agent';
+import type { Ask } from '../../protocol/Ask';
+import type { Entry } from '../../protocol/Entry';
+import type { Tool } from '../../protocol/Tool';
+import {
+  agentName,
+  answer,
+  lists,
+  open,
+  refreshList,
+  send,
+  show,
+  start,
+  stop,
+} from '../../state/conversations';
+
+/** The agent a new conversation starts with: the one you used last. */
+const lastAgent = (): Agent => (localStorage.getItem('agent') === 'claude' ? 'claude' : 'pi');
+
+export function Chat(props: {
+  cwd: string;
+  /** The conversation shown, or undefined for a new one. */
+  shown: string | undefined;
+  onShow: (id: string | undefined) => void;
+  /** Opens a file the agent touched. */
+  onOpenFile: (path: string) => void;
+}) {
+  const conversation = () => (props.shown ? open[props.shown] : undefined);
+  const [agent, setAgent] = createSignal<Agent>(lastAgent());
+  const [listing, setListing] = createSignal(false);
+  const reading = createAction(show);
+
+  onMount(async () => {
+    await refreshList(props.cwd).catch(() => {});
+    // Something is shown from the start: the latest conversation here, if there is one.
+    const latest = lists[props.cwd]?.[0];
+    if (!props.shown && latest) props.onShow(latest.id);
+  });
+  createEffect(
+    on(
+      () => props.shown,
+      (id) => id && void reading.run(id),
+    ),
+  );
+
+  const say = createAction(async (text: string) => {
+    const id = props.shown;
+    if (id) return send(id, text);
+    localStorage.setItem('agent', agent());
+    props.onShow(await start(agent(), props.cwd, text));
+  });
+
+  return (
+    <section class="chat" aria-label="The agent">
+      <div class="bar chat-head">
+        <span class="chat-agent">{agentName[conversation()?.state.agent ?? agent()]}</span>
+        <button
+          type="button"
+          class="chat-title"
+          aria-expanded={listing()}
+          onClick={() => setListing(!listing())}
+        >
+          {conversation()?.state.title ?? 'New conversation'}
+        </button>
+        <button type="button" class="strip-tab" onClick={() => props.onShow(undefined)}>
+          New
+        </button>
+      </div>
+      <Show when={listing()}>
+        <div class="chat-list">
+          <For each={lists[props.cwd]} fallback={<p class="left-note dim">No conversations here yet.</p>}>
+            {(c) => (
+              <button
+                type="button"
+                class="row chat-list-row"
+                aria-current={props.shown === c.id ? 'true' : undefined}
+                onClick={() => {
+                  props.onShow(c.id);
+                  setListing(false);
+                }}
+              >
+                <span class="tree-name">{c.title}</span>
+                <span class="dim">{agentName[c.agent]}</span>
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+
+      <Log entries={conversation()?.entries ?? []} cwd={props.cwd} onOpenFile={props.onOpenFile} />
+
+      <div class="chat-foot">
+        <Show when={reading.error() ?? say.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
+        <Show when={conversation()?.state.stopped}>{(why) => <p class="note-failed">{why()}</p>}</Show>
+        <Show
+          when={conversation()?.state.ask}
+          fallback={
+            <Composer
+              busy={conversation()?.state.busy ?? false}
+              sending={say.busy()}
+              agent={props.shown ? undefined : agent()}
+              onAgent={setAgent}
+              onSend={(text) => void say.run(text)}
+              onStop={() => props.shown && void stop(props.shown)}
+            />
+          }
+        >
+          {(asked) => (
+            <AskCard ask={asked()} onAnswer={(a) => props.shown && void answer(props.shown, asked().id, a)} />
+          )}
+        </Show>
+      </div>
+    </section>
+  );
+}
+
+/** The conversation, kept at its end while the agent writes unless you scroll up. */
+function Log(props: { entries: Entry[]; cwd: string; onOpenFile: (path: string) => void }) {
+  let box!: HTMLDivElement;
+  let following = true;
+  createEffect(() => {
+    // Read every entry's text, so this runs as the reply grows.
+    for (const entry of props.entries) void ('text' in entry ? entry.text : entry.output);
+    if (following) requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight }));
+  });
+  return (
+    <div
+      class="chat-log"
+      ref={box}
+      onScroll={() => {
+        following = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+      }}
+    >
+      <div class="chat-entries">
+        <For each={props.entries} fallback={<p class="dim">Nothing asked yet.</p>}>
+          {(entry) => (
+            <Switch>
+              <Match when={entry.kind === 'you' && entry}>
+                {(e) => (
+                  <div class="entry">
+                    <span class="entry-who">You</span>
+                    <p class="entry-you">{e().text}</p>
+                  </div>
+                )}
+              </Match>
+              <Match when={entry.kind === 'text' && entry}>{(e) => <Markdown text={e().text} />}</Match>
+              <Match when={entry.kind === 'thinking' && entry}>
+                {(e) => (
+                  <details class="entry-thinking">
+                    <summary>Thought</summary>
+                    <p>{e().text}</p>
+                  </details>
+                )}
+              </Match>
+              <Match when={entry.kind === 'tool' && entry}>
+                {(e) => <ToolRow tool={e()} cwd={props.cwd} onOpenFile={props.onOpenFile} />}
+              </Match>
+              <Match when={entry.kind === 'notice' && entry}>
+                {(e) => (
+                  <p class="entry-notice" data-tone={e().tone}>
+                    {e().text}
+                  </p>
+                )}
+              </Match>
+            </Switch>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
+/** Something the agent did: one line, which opens to what it changed or printed. */
+function ToolRow(props: { tool: Tool; cwd: string; onOpenFile: (path: string) => void }) {
+  const lines = (text: string) => text.split('\n').length;
+  /** The file an edit changed, as an absolute path. */
+  const file = () => {
+    const path = props.tool.diff?.path;
+    return path && (path.startsWith('/') ? path : `${props.cwd}/${path}`);
+  };
+  return (
+    <details class="tool" data-status={props.tool.status}>
+      <summary>
+        <span class="tool-name">{props.tool.name}</span>
+        <span class="tool-title">{props.tool.title}</span>
+        <Show when={props.tool.diff}>
+          {(diff) => (
+            <span class="tool-count">
+              <span data-state="ok">+{lines(diff().new)}</span>
+              <Show when={diff().old}>{(old) => <span data-state="failed"> -{lines(old())}</span>}</Show>
+            </span>
+          )}
+        </Show>
+        <Show when={props.tool.status !== 'done'}>
+          <span class="tool-status">{props.tool.status === 'running' ? 'running' : 'failed'}</span>
+        </Show>
+      </summary>
+      <Show when={props.tool.diff}>
+        {(diff) => (
+          <div class="tool-body">
+            <Show when={file()}>
+              {(path) => (
+                <button type="button" class="tool-open" onClick={() => props.onOpenFile(path())}>
+                  Open {diff().path}
+                </button>
+              )}
+            </Show>
+            <Show when={diff().old}>{(old) => <pre class="tool-old">{old()}</pre>}</Show>
+            <pre class="tool-new">{diff().new}</pre>
+          </div>
+        )}
+      </Show>
+      <Show when={!props.tool.diff && props.tool.output}>
+        <pre class="tool-body">{props.tool.output}</pre>
+      </Show>
+    </details>
+  );
+}
+
+/** The agent's question, where the box you write in was. */
+function AskCard(props: { ask: Ask; onAnswer: (answer: string | null) => void }) {
+  const [text, setText] = createSignal('');
+  return (
+    <form
+      class="ask"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (text().trim()) props.onAnswer(text().trim());
+      }}
+    >
+      <span class="ask-label">The agent asks</span>
+      <span>{props.ask.title}</span>
+      <Show when={props.ask.message}>{(message) => <span class="ask-message">{message()}</span>}</Show>
+      <Show when={props.ask.input}>
+        <input
+          class="ask-input"
+          aria-label="Your answer"
+          value={text()}
+          onInput={(e) => setText(e.currentTarget.value)}
+          ref={(el) => requestAnimationFrame(() => el.focus())}
+        />
+      </Show>
+      <div class="ask-buttons">
+        <For each={props.ask.options}>
+          {(option, i) => (
+            <button
+              type="button"
+              class="button"
+              classList={{ 'button-primary': i() === 0 }}
+              onClick={() => props.onAnswer(option)}
+            >
+              {option}
+            </button>
+          )}
+        </For>
+        <Show when={props.ask.input}>
+          <button type="submit" class="button button-primary" disabled={!text().trim()}>
+            Answer
+          </button>
+        </Show>
+        <Show when={props.ask.input || props.ask.options.length === 0}>
+          <button type="button" class="button" onClick={() => props.onAnswer(null)}>
+            Dismiss
+          </button>
+        </Show>
+      </div>
+    </form>
+  );
+}
+
+/** Where you write. Enter sends, Shift Enter makes a new line. */
+function Composer(props: {
+  busy: boolean;
+  sending: boolean;
+  /** The agent picked for a new conversation. Undefined once it has started. */
+  agent: Agent | undefined;
+  onAgent: (agent: Agent) => void;
+  onSend: (text: string) => void;
+  onStop: () => void;
+}) {
+  const [text, setText] = createSignal('');
+  const ready = () => !props.busy && !props.sending && text().trim() !== '';
+  const sendIt = () => {
+    if (!ready()) return;
+    props.onSend(text().trim());
+    setText('');
+  };
+  return (
+    <div class="composer">
+      <textarea
+        class="composer-text"
+        rows={2}
+        placeholder={props.agent ? `Ask ${agentName[props.agent]}` : 'Write to the agent'}
+        aria-label="Write to the agent"
+        value={text()}
+        onInput={(e) => setText(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.shiftKey) return;
+          e.preventDefault();
+          sendIt();
+        }}
+      />
+      <div class="composer-foot">
+        <Show when={props.agent}>
+          {(picked) => (
+            <fieldset class="composer-agents">
+              <legend class="hidden-label">Which agent</legend>
+              <For each={['pi', 'claude'] as Agent[]}>
+                {(each) => (
+                  <button
+                    type="button"
+                    class="strip-tab"
+                    aria-pressed={picked() === each}
+                    onClick={() => props.onAgent(each)}
+                  >
+                    {agentName[each]}
+                  </button>
+                )}
+              </For>
+            </fieldset>
+          )}
+        </Show>
+        <span class="top-gap" />
+        <Show
+          when={props.busy}
+          fallback={
+            <button type="button" class="button" disabled={!ready()} onClick={sendIt}>
+              Send
+            </button>
+          }
+        >
+          <span class="dim">Working</span>
+          <button type="button" class="button" onClick={props.onStop}>
+            Stop
+          </button>
+        </Show>
+      </div>
+    </div>
+  );
+}

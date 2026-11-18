@@ -1,6 +1,6 @@
 // A workspace's tab. On the left a list: Files or Changes. In the middle the
-// one thing you picked: for now, a file in the editor. The agent takes the
-// right in a later step.
+// one thing you picked, with the terminals under it. On the right the agent.
+// While nothing is open in the middle, the agent has the middle.
 
 import { createMemo, For, onCleanup, onMount, Show } from 'solid-js';
 import { openPalette } from '../components/Palette';
@@ -9,10 +9,11 @@ import type { WorkspaceView } from '../protocol/WorkspaceView';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { refreshRepo, repos } from '../state/repo';
 import { forget, workspaceById } from '../state/workspaces';
+import { Chat } from './workspace/Chat';
 import { createEditor } from './workspace/Editor';
 import { Terminals } from './workspace/Terminals';
 import { marks, Tree } from './workspace/Tree';
-import { closeTab, isFile, nameOf, openTab, setLeft, uiOf } from './workspace/ui';
+import { closeTab, isFile, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
 
 export function WorkspacePage(props: { id: string }) {
   return (
@@ -103,7 +104,7 @@ function Page(props: { view: WorkspaceView }) {
   });
 
   return (
-    <div class="columns">
+    <div class="columns" data-chat={ui().tabs.length === 0 ? 'middle' : 'right'}>
       <aside class="left" aria-label="Lists">
         <div class="bar strip">
           <button
@@ -204,12 +205,15 @@ function Page(props: { view: WorkspaceView }) {
             </For>
           </div>
         </Show>
-        <Show when={!file()}>
-          <p class="editor-empty">No file open. Pick one on the left, or press Ctrl P.</p>
-        </Show>
         {editor.view}
-        <Terminals dir={root} />
       </section>
+      <Terminals dir={root} />
+      <Chat
+        cwd={root}
+        shown={ui().conversation}
+        onShow={(conversation) => setConversation(id, conversation)}
+        onOpenFile={(path) => openTab(id, path)}
+      />
     </div>
   );
 }

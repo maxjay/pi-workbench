@@ -3,6 +3,7 @@
 
 import { For, Show } from 'solid-js';
 import { status, stopReason } from '../daemon';
+import { standing } from '../state/conversations';
 import { health } from '../state/health';
 import { active, close, open, type TabId, tabs, workspaceOf } from '../state/tabs';
 import { workspaceById } from '../state/workspaces';
@@ -21,6 +22,13 @@ function words() {
 export function titleOf(tab: TabId) {
   const id = workspaceOf(tab);
   return id ? (workspaceById(id)?.workspace.name ?? 'Workspace') : 'Home';
+}
+
+/** Where a workspace tab's conversations stand: waiting on you, or working. */
+function dotOf(tab: TabId) {
+  const id = workspaceOf(tab);
+  const view = id ? workspaceById(id) : undefined;
+  return view ? standing(view.workspace.path) : undefined;
 }
 
 export function TopBar(props: { onGo: () => void }) {
@@ -43,6 +51,16 @@ export function TopBar(props: { onGo: () => void }) {
                   <Glyph name={titleOf(tab)} size={10} />
                 </Show>
                 {titleOf(tab)}
+                <Show when={dotOf(tab)}>
+                  {(state) => (
+                    <span
+                      class="dot"
+                      data-state={state()}
+                      role="img"
+                      aria-label={state() === 'asking' ? 'Waiting for your answer' : 'The agent is working'}
+                    />
+                  )}
+                </Show>
               </button>
               <Show when={tab !== 'home'}>
                 <button

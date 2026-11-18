@@ -16,12 +16,15 @@ export interface WorkspaceUi {
   tabs: string[];
   /** The tab shown, if any is open. */
   current: string | undefined;
+  /** The conversation with the agent that is shown. Undefined for a new one. */
+  conversation: string | undefined;
 }
 
 const [uis, setUis] = createStore<Record<string, WorkspaceUi>>({});
 
 export function uiOf(id: string): WorkspaceUi {
-  if (!uis[id]) setUis(id, { left: 'files', expanded: [], tabs: [], current: undefined });
+  if (!uis[id])
+    setUis(id, { left: 'files', expanded: [], tabs: [], current: undefined, conversation: undefined });
   return uis[id];
 }
 
@@ -53,4 +56,8 @@ export function closeTab(id: string, tab: string) {
   const rest = ui.tabs.filter((t) => t !== tab);
   setUis(id, 'tabs', rest);
   if (ui.current === tab) setUis(id, 'current', rest[Math.min(at, rest.length - 1)]);
+}
+
+export function setConversation(id: string, conversation: string | undefined) {
+  setUis(id, 'conversation', conversation);
 }
