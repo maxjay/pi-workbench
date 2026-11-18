@@ -10,6 +10,7 @@ import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { refreshRepo, repos } from '../state/repo';
 import { forget, workspaceById } from '../state/workspaces';
 import { createEditor } from './workspace/Editor';
+import { Terminals } from './workspace/Terminals';
 import { marks, Tree } from './workspace/Tree';
 import { closeTab, isFile, nameOf, openTab, setLeft, uiOf } from './workspace/ui';
 
@@ -207,6 +208,7 @@ function Page(props: { view: WorkspaceView }) {
           <p class="editor-empty">No file open. Pick one on the left, or press Ctrl P.</p>
         </Show>
         {editor.view}
+        <Terminals dir={root} />
       </section>
     </div>
   );

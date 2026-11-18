@@ -24,6 +24,15 @@
   --syn-type: oklch(0.8 0.1 200);
   --syn-function: oklch(0.8 0.1 255);
 
+  /* The terminal's colours. Plain values, because xterm can't read the forms above. */
+  --term-red: #f08c80;
+  --term-green: #7fd39a;
+  --term-yellow: #e2c36f;
+  --term-blue: #8db5ee;
+  --term-magenta: #cba6e6;
+  --term-cyan: #72cfd0;
+  --term-selection: #3a3b36;
+
   --display: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
 

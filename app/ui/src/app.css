@@ -551,3 +551,57 @@ svg.glyph {
   padding: 10px 16px;
   border-top: 1px solid var(--line);
 }
+
+/* Terminals, under the editor */
+
+.terminals {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.terminals-bar {
+  border-bottom: 0;
+}
+
+.terminals-body {
+  height: 220px;
+  padding: 0 0 8px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.terminals-body[hidden],
+.terminal[hidden] {
+  display: none;
+}
+
+.terminal {
+  height: 100%;
+}
+
+.strip-note {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+}
+
+.strip-tab:disabled {
+  cursor: default;
+}
+
+/* A square that says a state */
+.dot {
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  display: inline-block;
+}
+
+.dot[data-state="working"] {
+  background: var(--working);
+}
+
+.dot[data-state="asking"] {
+  background: var(--asking);
+}
