@@ -4,7 +4,7 @@
   "identifier": "dev.maxjay.workbench",
   "build": {
     "frontendDist": "../ui/dist",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": {
       "script": "npm run dev",
       "cwd": "../ui"

@@ -17,6 +17,13 @@
   --working: oklch(0.82 0.14 85);
   --asking: oklch(0.78 0.12 250);
 
+  /* Code, in the editor: one lightness and strength, only the hue differs. */
+  --syn-keyword: oklch(0.8 0.1 310);
+  --syn-string: oklch(0.8 0.1 150);
+  --syn-number: oklch(0.8 0.1 70);
+  --syn-type: oklch(0.8 0.1 200);
+  --syn-function: oklch(0.8 0.1 255);
+
   --display: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
 

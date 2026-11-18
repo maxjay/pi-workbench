@@ -6,7 +6,7 @@ A window on Claude Code or Pi, on Windows, with the agent, your code and your te
 - **Workspaces**: a folder in WSL with its files, an editor, terminals, and the agent beside them.
 - **Pull requests**: yours on Home, and each one inside its workspace, through [dova](https://dova.maxjay.dev).
 
-**Status:** version 2, written from nothing. Step 1 of 8 is done: the window, `wbd` in WSL, and the look. The design is the canvas [Workbench: pull requests first](https://claude.ai/artifact/MZ8HA4JYAe6RkNRzP4NKni).
+**Status:** version 2, written from nothing. Steps 1 and 2 of 8 are done: the window, `wbd` in WSL, the look, and workspaces with their files and an editor. The design is the canvas [Workbench: pull requests first](https://claude.ai/artifact/MZ8HA4JYAe6RkNRzP4NKni).
 
 ## How it's built
 
@@ -35,7 +35,7 @@ A window on Claude Code or Pi, on Windows, with the agent, your code and your te
 ```sh
 wsl -e sh -l scripts/wbd.sh        # build wbd and put it in ~/.local/bin, in WSL
 cd app/ui && npm install
-npm run dev                        # the page in a browser, at localhost:5173
+npm run dev                        # the page in a browser, at 127.0.0.1:5173
 npm run tauri dev                  # the app
 npm run check                      # Biome and TypeScript
 ```
