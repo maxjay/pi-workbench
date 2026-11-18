@@ -223,9 +223,21 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::ConversationsList { cwd } => Answer::Conversations {
             list: ctx.conversations.list(&cwd),
         },
-        Call::ConversationStart { agent, cwd, text } => {
-            Answer::Conversation(ctx.conversations.start(agent, &cwd, &text).await?)
+        Call::ConversationStart {
+            agent,
+            cwd,
+            text,
+            model,
+            effort,
+        } => {
+            let started = ctx.conversations.start(agent, &cwd, &text, model, effort);
+            Answer::Conversation(started.await?)
         }
+        Call::ConversationSet { id, model, effort } => {
+            ctx.conversations.set(&id, model, effort).await?;
+            Answer::Done
+        }
+        Call::AgentOffer { agent } => Answer::Offer(agent::offer(agent).await?),
         Call::ConversationOpen { id } => Answer::Conversation(ctx.conversations.open(&id)?),
         Call::ConversationSend { id, text } => {
             ctx.conversations.send(&id, &text).await?;

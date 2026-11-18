@@ -99,7 +99,19 @@ pub enum Call {
         agent: Agent,
         cwd: String,
         text: String,
+        model: Option<String>,
+        effort: Option<String>,
     },
+    /// Picks a conversation's model and effort. None leaves the agent's own.
+    #[serde(rename = "conversation.set")]
+    ConversationSet {
+        id: String,
+        model: Option<String>,
+        effort: Option<String>,
+    },
+    /// What an agent offers: its models, their effort levels, whether it is signed in.
+    #[serde(rename = "agent.offer")]
+    AgentOffer { agent: Agent },
     /// A whole conversation, running or saved.
     #[serde(rename = "conversation.open")]
     ConversationOpen { id: String },
@@ -246,6 +258,7 @@ pub enum Answer {
         list: Vec<Conversation>,
     },
     Conversation(ConversationView),
+    Offer(Offer),
     Pulls {
         rows: Vec<PullRow>,
     },

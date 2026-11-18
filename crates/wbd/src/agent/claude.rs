@@ -2,7 +2,7 @@
 //! object per line each way, the interface Anthropic's SDK speaks. Its
 //! permission prompts come over the same lines as control requests.
 
-use protocol::Ask;
+use protocol::{Ask, Model, Offer, Tone};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
@@ -11,7 +11,19 @@ use crate::fold::Update;
 
 /// `WB_CLAUDE` names another binary. A new conversation is given its id,
 /// and one Claude Code already has is resumed by it.
-pub fn command(id: &str, resume: bool) -> Command {
+pub fn command(id: &str, resume: bool, model: Option<&str>, effort: Option<&str>) -> Command {
+    let mut command = program();
+    command.args([if resume { "--resume" } else { "--session-id" }, id]);
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
+    if let Some(effort) = effort {
+        command.args(["--effort", effort]);
+    }
+    command
+}
+
+fn program() -> Command {
     let mut command = Command::new(std::env::var("WB_CLAUDE").unwrap_or_else(|_| "claude".into()));
     command.args([
         "-p",
@@ -24,8 +36,78 @@ pub fn command(id: &str, resume: bool) -> Command {
         "--permission-prompt-tool",
         "stdio",
     ]);
-    command.args([if resume { "--resume" } else { "--session-id" }, id]);
     command
+}
+
+/// A request to Claude Code itself, not to the model.
+fn control(id: &str, request: Value) -> String {
+    json!({ "type": "control_request", "request_id": id, "request": request }).to_string()
+}
+
+/// The lines that change a running Claude Code's model and effort.
+pub fn set(model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    let model = model.map(|model| {
+        control(
+            "wb-set-model",
+            json!({ "subtype": "set_model", "model": model }),
+        )
+    });
+    let effort = effort.map(|level| {
+        let settings = json!({ "effortLevel": level });
+        control(
+            "wb-set-effort",
+            json!({ "subtype": "apply_flag_settings", "settings": settings }),
+        )
+    });
+    model.into_iter().chain(effort).collect()
+}
+
+/// A Claude Code with no conversation, and what to ask it to learn what it offers.
+pub fn offer_asks() -> (Command, Vec<String>) {
+    let asks = vec![
+        control("wb-init", json!({ "subtype": "initialize" })),
+        control("wb-settings", json!({ "subtype": "get_settings" })),
+    ];
+    (program(), asks)
+}
+
+pub fn is_offer_answer(value: &Value) -> bool {
+    value["type"] == "control_response"
+}
+
+pub fn offer(answers: &[Value]) -> Offer {
+    let body = |id: &str| {
+        answers
+            .iter()
+            .map(|answer| &answer["response"])
+            .find(|response| response["request_id"] == id)
+            .map_or(&Value::Null, |response| &response["response"])
+    };
+    let (init, applied) = (body("wb-init"), &body("wb-settings")["applied"]);
+    let listed = || init["models"].as_array().into_iter().flatten();
+    let account = &init["account"];
+    Offer {
+        signed_in: ["email", "subscriptionType", "apiKeySource", "tokenSource"]
+            .iter()
+            .any(|key| account[*key].is_string()),
+        models: listed()
+            .map(|model| Model {
+                id: text(model, "value"),
+                name: text(model, "displayName"),
+                efforts: model["supportedEffortLevels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|level| level.as_str().map(str::to_string))
+                    .collect(),
+            })
+            .collect(),
+        // What it runs is a model's full name. Its list knows it by a short one.
+        model: listed()
+            .find(|model| model["resolvedModel"] == applied["model"])
+            .map(|model| text(model, "value")),
+        effort: applied["effort"].as_str().map(str::to_string),
+    }
 }
 
 pub fn prompt(text: &str) -> String {
@@ -38,12 +120,7 @@ pub fn prompt(text: &str) -> String {
 }
 
 pub fn stop() -> String {
-    json!({
-        "type": "control_request",
-        "request_id": "wb-stop",
-        "request": { "subtype": "interrupt" },
-    })
-    .to_string()
+    control("wb-stop", json!({ "subtype": "interrupt" }))
 }
 
 /// Answers a permission prompt. `detail` is the tool's input as it was
@@ -121,6 +198,19 @@ pub fn decode(value: &Value) -> Vec<Update> {
             }]
         }
         "control_cancel_request" => vec![Update::AskGone],
+        // A model or effort it wouldn't change to.
+        "control_response"
+            if value["response"]["subtype"] == "error"
+                && text(&value["response"], "request_id").starts_with("wb-set") =>
+        {
+            vec![Update::Notice {
+                tone: Tone::Failed,
+                text: format!(
+                    "Claude Code didn't change it: {}",
+                    text(&value["response"], "error")
+                ),
+            }]
+        }
         _ => Vec::new(),
     }
 }
@@ -157,6 +247,43 @@ mod tests {
         );
         let deny: Value = serde_json::from_str(&answer(ask, None, detail)).unwrap();
         assert_eq!(deny["response"]["response"]["behavior"], "deny");
+    }
+
+    #[test]
+    fn says_what_it_offers_from_its_first_answer_and_its_settings() {
+        let answers = [
+            json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "wb-init", "response": {
+                "account": { "subscriptionType": "max" },
+                "models": [
+                    { "value": "default", "resolvedModel": "claude-opus-5-5", "displayName": "Default (recommended)",
+                      "supportedEffortLevels": ["low", "medium", "high"] },
+                    { "value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5" },
+                ],
+            }}}),
+            json!({ "type": "control_response", "response": { "subtype": "success", "request_id": "wb-settings", "response": {
+                "applied": { "model": "claude-opus-5-5", "effort": "high" },
+            }}}),
+        ];
+        assert!(answers.iter().all(is_offer_answer));
+        let offer = offer(&answers);
+        assert!(offer.signed_in);
+        assert_eq!(offer.model.as_deref(), Some("default"));
+        assert_eq!(offer.effort.as_deref(), Some("high"));
+        assert_eq!(offer.models[0].efforts, ["low", "medium", "high"]);
+        assert!(offer.models[1].efforts.is_empty());
+    }
+
+    #[test]
+    fn a_change_it_refuses_is_said() {
+        let line = r#"{"type":"control_response","response":{"subtype":"error","request_id":"wb-set-model","error":"Unknown model"}}"#;
+        let updates = decode(&serde_json::from_str(line).unwrap());
+        let [Update::Notice { text, .. }] = updates.as_slice() else {
+            panic!("a notice");
+        };
+        assert!(text.ends_with("Unknown model"));
+        let lines = set(Some("haiku"), Some("low"));
+        assert!(lines[0].contains(r#""model":"haiku""#));
+        assert!(lines[1].contains(r#""effortLevel":"low""#));
     }
 
     #[test]

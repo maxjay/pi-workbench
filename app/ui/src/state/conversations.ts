@@ -7,6 +7,7 @@ import { ask, onEvent } from '../daemon';
 import type { Agent } from '../protocol/Agent';
 import type { Conversation } from '../protocol/Conversation';
 import type { Entry } from '../protocol/Entry';
+import type { Offer } from '../protocol/Offer';
 
 export interface Open {
   state: Conversation;
@@ -45,9 +46,10 @@ export async function refreshList(cwd: string) {
   setLists(cwd, list);
 }
 
-/** Starts a conversation with what you wrote. Returns its id. */
+/** Starts a conversation with what you wrote, on the model and effort last picked. Returns its id. */
 export async function start(agent: Agent, cwd: string, text: string) {
-  const view = await ask({ method: 'conversation.start', params: { agent, cwd, text } }, 'conversation');
+  const params = { agent, cwd, text, ...picks[agent] };
+  const view = await ask({ method: 'conversation.start', params }, 'conversation');
   setOpen(view.state.id, { state: view.state, entries: view.entries });
   setLists(cwd, [view.state, ...(lists[cwd] ?? [])]);
   return view.state.id;
@@ -90,4 +92,49 @@ export function standing(cwd: string): 'asking' | 'working' | undefined {
   );
   if (here.some((c) => c.ask)) return 'asking';
   return here.some((c) => c.busy) ? 'working' : undefined;
+}
+
+/** A model and an effort. Null is the agent's own. */
+export interface Picked {
+  model: string | null;
+  effort: string | null;
+}
+
+/** What each agent offers, as last asked. */
+const [offers, setOffers] = createStore<Partial<Record<Agent, Offer>>>({});
+
+export { offers };
+
+/** Asks an agent what it offers: its models, their efforts, whether it is signed in. */
+export async function askOffer(agent: Agent) {
+  const offer = await ask({ method: 'agent.offer', params: { agent } }, 'offer');
+  setOffers(agent, offer);
+  return offer;
+}
+
+/** What a new conversation with each agent starts on: what you last picked. Kept in the window's own storage. */
+const [picks, setPicks] = createStore<Record<Agent, Picked>>(storedPicks());
+
+export { picks };
+
+function storedPicks(): Record<Agent, Picked> {
+  const none = { model: null, effort: null };
+  try {
+    const stored = JSON.parse(localStorage.getItem('picks') ?? '{}');
+    return { pi: { ...none, ...stored.pi }, claude: { ...none, ...stored.claude } };
+  } catch {
+    return { pi: none, claude: { ...none } };
+  }
+}
+
+export function pick(agent: Agent, picked: Picked) {
+  setPicks(agent, picked);
+  localStorage.setItem('picks', JSON.stringify(picks));
+}
+
+/** Changes a conversation's model and effort. New conversations with its agent start on them too. */
+export async function setPicked(id: string, agent: Agent, picked: Picked) {
+  await ask({ method: 'conversation.set', params: { id, ...picked } }, 'done');
+  if (open[id]) setOpen(id, 'state', picked);
+  pick(agent, picked);
 }

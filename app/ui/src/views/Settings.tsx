@@ -1,10 +1,11 @@
 // Settings: the agents wbd found and which one a new conversation starts
 // with, and the other programs the workbench works with.
 
-import { For, Show } from 'solid-js';
+import { createResource, For, Show } from 'solid-js';
 import type { Agent } from '../protocol/Agent';
-import { agentName, defaultAgent, setDefaultAgent } from '../state/conversations';
+import { agentName, askOffer, defaultAgent, setDefaultAgent } from '../state/conversations';
 import { health } from '../state/health';
+import { active } from '../state/tabs';
 
 export function Settings() {
   const version = (agent: Agent) => (agent === 'pi' ? health()?.pi : health()?.claude);
@@ -15,15 +16,20 @@ export function Settings() {
           <h2 id="agents">Agents</h2>
         </div>
         <p class="dim">
-          A new conversation starts with the default. You can pick the other one for any conversation, where
-          you write.
+          A new conversation starts with the default, on the model and effort you last picked for it. You can
+          pick the other agent, model or effort for any conversation, where you write.
         </p>
         <div class="rows">
           <For each={['pi', 'claude'] as Agent[]}>
             {(agent) => (
               <div class="row setting-row">
                 <span class="workspace-name">{agentName[agent]}</span>
-                <span classList={{ dim: !version(agent) }}>{version(agent) ?? 'not found in WSL'}</span>
+                <span classList={{ dim: !version(agent) }}>
+                  {version(agent) ?? 'not found in WSL'}
+                  <Show when={version(agent)}>
+                    <SignedIn agent={agent} />
+                  </Show>
+                </span>
                 <Show
                   when={defaultAgent() === agent}
                   fallback={
@@ -63,5 +69,32 @@ export function Settings() {
         )}
       </Show>
     </div>
+  );
+}
+
+/** Whether an agent is signed in, asked from the agent each time Settings is shown. */
+function SignedIn(props: { agent: Agent }) {
+  const [offer] = createResource(
+    () => active() === 'settings' && props.agent,
+    (agent) => askOffer(agent),
+  );
+  return (
+    <Show when={!offer.error} fallback={<span class="note-failed"> · {String(offer.error?.message)}</span>}>
+      <Show when={offer.latest} fallback={<span class="dim"> · asking it</span>}>
+        {(o) => (
+          <Show
+            when={o().signedIn}
+            fallback={
+              <span class="note-failed">
+                {' '}
+                · not signed in. Run {props.agent === 'pi' ? 'pi' : 'claude'} in a terminal to sign in.
+              </span>
+            }
+          >
+            <span class="dim"> · signed in</span>
+          </Show>
+        )}
+      </Show>
+    </Show>
   );
 }

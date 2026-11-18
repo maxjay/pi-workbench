@@ -155,6 +155,13 @@ impl Folded {
         }
     }
 
+    /// You picked its model and effort.
+    pub fn picked(&mut self, model: Option<String>, effort: Option<String>) {
+        self.state.model = model;
+        self.state.effort = effort;
+        self.state_changed = true;
+    }
+
     /// The agent's process ended. That is only worth saying if it was working.
     pub fn stopped(&mut self, reason: String) {
         if self.state.busy || self.state.ask.is_some() {
@@ -283,6 +290,8 @@ mod tests {
                 busy: false,
                 ask: None,
                 stopped: None,
+                model: None,
+                effort: None,
             },
             Vec::new(),
         )

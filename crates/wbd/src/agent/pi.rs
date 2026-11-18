@@ -1,7 +1,7 @@
 //! Pi, through `pi --mode rpc`: one JSON object per line each way.
 //! See Pi's docs/rpc.md. Only what the workbench uses is read.
 
-use protocol::{Ask, Tone};
+use protocol::{Ask, Model, Offer, Tone};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
@@ -10,10 +10,112 @@ use crate::fold::Update;
 
 /// `WB_PI` names another binary. The session id makes Pi open this
 /// conversation's own session, or start it.
-pub fn command(id: &str) -> Command {
-    let mut command = Command::new(std::env::var("WB_PI").unwrap_or_else(|_| "pi".into()));
-    command.args(["--mode", "rpc", "--session-id", id]);
+pub fn command(id: &str, model: Option<&str>, effort: Option<&str>) -> Command {
+    let mut command = program();
+    command.args(["--session-id", id]);
+    if let Some(model) = model {
+        command.args(["--model", model]);
+    }
+    if let Some(effort) = effort {
+        command.args(["--thinking", effort]);
+    }
     command
+}
+
+fn program() -> Command {
+    let mut command = Command::new(std::env::var("WB_PI").unwrap_or_else(|_| "pi".into()));
+    command.args(["--mode", "rpc"]);
+    command
+}
+
+/// The lines that change a running Pi's model and thinking level. A model
+/// is known here as `provider/id`.
+pub fn set(model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    let model = model
+        .and_then(|model| model.split_once('/'))
+        .map(|(provider, id)| {
+            json!({ "type": "set_model", "provider": provider, "modelId": id }).to_string()
+        });
+    let effort =
+        effort.map(|level| json!({ "type": "set_thinking_level", "level": level }).to_string());
+    model.into_iter().chain(effort).collect()
+}
+
+/// A Pi that keeps no session, and what to ask it to learn what it offers.
+pub fn offer_asks() -> (Command, Vec<String>) {
+    let mut command = program();
+    command.arg("--no-session");
+    let asks = ["get_state", "get_available_models"];
+    (
+        command,
+        asks.map(|ask| json!({ "type": ask }).to_string()).into(),
+    )
+}
+
+pub fn is_offer_answer(value: &Value) -> bool {
+    value["type"] == "response"
+        && matches!(
+            value["command"].as_str(),
+            Some("get_state" | "get_available_models")
+        )
+}
+
+/// Pi lists the models it has a sign-in for, so none means not signed in.
+pub fn offer(answers: &[Value]) -> Offer {
+    let data = |command: &str| {
+        answers
+            .iter()
+            .find(|answer| answer["command"] == command)
+            .map_or(&Value::Null, |answer| &answer["data"])
+    };
+    let id = |model: &Value| {
+        Some(format!(
+            "{}/{}",
+            model["provider"].as_str()?,
+            model["id"].as_str()?
+        ))
+    };
+    let models: Vec<Model> = data("get_available_models")["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            Some(Model {
+                id: id(model)?,
+                name: model["name"].as_str().or(model["id"].as_str())?.to_string(),
+                efforts: efforts(model),
+            })
+        })
+        .collect();
+    let state = data("get_state");
+    Offer {
+        signed_in: !models.is_empty(),
+        model: id(&state["model"]),
+        effort: state["thinkingLevel"].as_str().map(str::to_string),
+        models,
+    }
+}
+
+/// The thinking levels a model takes. Its `thinkingLevelMap` says which: a
+/// level set to null is one it doesn't have, and the two highest count
+/// only where they are named.
+fn efforts(model: &Value) -> Vec<String> {
+    if model["reasoning"] != true {
+        return Vec::new();
+    }
+    let level = |name: &str| model["thinkingLevelMap"].get(name);
+    let usual = ["minimal", "low", "medium", "high"]
+        .into_iter()
+        .filter(|name| !level(name).is_some_and(Value::is_null));
+    let highest = ["xhigh", "max"]
+        .into_iter()
+        .filter(|name| level(name).is_some_and(|to| !to.is_null()));
+    ["off"]
+        .into_iter()
+        .chain(usual)
+        .chain(highest)
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn prompt(text: &str) -> String {
@@ -157,6 +259,42 @@ mod tests {
         assert_eq!(reply(None)["cancelled"], true);
         let picked = answer(ask, Some("staging"), &json!({ "method": "select" }));
         assert!(picked.contains(r#""value":"staging""#));
+    }
+
+    #[test]
+    fn says_what_it_offers_from_its_state_and_its_models() {
+        let answers = [
+            json!({ "type": "response", "command": "get_state", "data": {
+                "model": { "provider": "anthropic", "id": "claude-haiku-5-5" },
+                "thinkingLevel": "medium",
+            }}),
+            json!({ "type": "response", "command": "get_available_models", "data": { "models": [
+                { "provider": "anthropic", "id": "claude-haiku-5-5", "name": "Claude Haiku 5.5",
+                  "reasoning": true, "thinkingLevelMap": { "minimal": null, "xhigh": "xhigh" } },
+                { "provider": "local", "id": "plain", "name": "Plain", "reasoning": false },
+            ]}}),
+        ];
+        assert!(answers.iter().all(is_offer_answer));
+        let offer = offer(&answers);
+        assert!(offer.signed_in);
+        assert_eq!(offer.model.as_deref(), Some("anthropic/claude-haiku-5-5"));
+        assert_eq!(offer.effort.as_deref(), Some("medium"));
+        assert_eq!(
+            offer.models[0].efforts,
+            ["off", "low", "medium", "high", "xhigh"]
+        );
+        assert!(offer.models[1].efforts.is_empty());
+        assert!(!super::offer(&[]).signed_in);
+    }
+
+    #[test]
+    fn changes_the_model_and_the_level_with_a_line_each() {
+        let lines = set(Some("anthropic/claude-sonnet-5-5"), Some("high"));
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains(r#""modelId":"claude-sonnet-5-5""#));
+        assert!(lines[0].contains(r#""provider":"anthropic""#));
+        assert!(lines[1].contains(r#""level":"high""#));
+        assert!(set(None, None).is_empty());
     }
 
     #[test]

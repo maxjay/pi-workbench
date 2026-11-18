@@ -15,7 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::agent;
+use crate::agent::{self, name};
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
@@ -86,6 +86,8 @@ impl Conversations {
         agent: Agent,
         cwd: &str,
         text: &str,
+        model: Option<String>,
+        effort: Option<String>,
     ) -> Result<ConversationView, Error> {
         if !Path::new(cwd).is_dir() {
             return Err(Error::NotFound(format!("no folder at {cwd}")));
@@ -99,6 +101,8 @@ impl Conversations {
             busy: false,
             ask: None,
             stopped: None,
+            model,
+            effort,
         };
         let id = state.id.clone();
         let live = self.run(Folded::new(state, Vec::new()), false)?;
@@ -128,6 +132,33 @@ impl Conversations {
             }
         };
         self.say(id, &live, text).await
+    }
+
+    /// Picks a conversation's model and effort. A running agent changes
+    /// now. One that isn't running starts with them the next time.
+    pub async fn set(
+        &self,
+        id: &str,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<(), Error> {
+        let Some(live) = self.get(id) else {
+            let mut saved = self.saved(id)?;
+            (saved.state.model, saved.state.effort) = (model, effort);
+            self.store(&saved);
+            return Ok(());
+        };
+        let lines = agent::set(live.agent, model.as_deref(), effort.as_deref());
+        live.folded
+            .lock()
+            .expect("not poisoned")
+            .picked(model, effort);
+        self.tell(id, &live);
+        self.save(&live);
+        for line in lines {
+            write(&live, line).await?;
+        }
+        Ok(())
     }
 
     /// Stops what the agent is doing now.
@@ -185,12 +216,10 @@ impl Conversations {
 
     /// Starts the agent's process for a conversation, and hears it until it ends.
     fn run(&self, folded: Folded, resume: bool) -> Result<Arc<Live>, Error> {
-        let (id, agent, cwd) = (
-            folded.state.id.clone(),
-            folded.state.agent,
-            folded.state.cwd.clone(),
-        );
-        let mut child = agent::command(agent, &id, Path::new(&cwd), resume)
+        let state = &folded.state;
+        let (id, agent) = (state.id.clone(), state.agent);
+        let (model, effort) = (state.model.as_deref(), state.effort.as_deref());
+        let mut child = agent::command(agent, &id, Path::new(&state.cwd), resume, model, effort)
             .spawn()
             .map_err(|err| Error::Agent(format!("couldn't start {}: {err}", name(agent))))?;
         let live = Arc::new(Live {
@@ -281,20 +310,22 @@ impl Conversations {
     }
 
     fn save(&self, live: &Live) {
-        let (id, text) = {
+        let saved = {
             let folded = live.folded.lock().expect("not poisoned");
-            let saved = Saved {
+            Saved {
                 state: folded.state.clone(),
                 entries: folded.entries.clone(),
-            };
-            (
-                folded.state.id.clone(),
-                serde_json::to_string(&saved).expect("a conversation serializes"),
-            )
+            }
         };
+        self.store(&saved);
+    }
+
+    fn store(&self, saved: &Saved) {
+        let text = serde_json::to_string(saved).expect("a conversation serializes");
+        let path = self.dir.join(format!("{}.json", saved.state.id));
         // A conversation that can't be saved still runs. It just can't be opened again.
         if std::fs::create_dir_all(&self.dir).is_ok() {
-            let _ = files::write_whole(&self.dir.join(format!("{id}.json")), &text, None);
+            let _ = files::write_whole(&path, &text, None);
         }
     }
 
@@ -317,13 +348,6 @@ async fn write(live: &Live, mut line: String) -> Result<(), Error> {
 
 fn read(path: &Path) -> Option<Saved> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
-}
-
-fn name(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "Pi",
-        Agent::Claude => "Claude Code",
-    }
 }
 
 fn now() -> u64 {

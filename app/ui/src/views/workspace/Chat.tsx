@@ -8,15 +8,22 @@ import { Markdown } from '../../components/Markdown';
 import type { Agent } from '../../protocol/Agent';
 import type { Ask } from '../../protocol/Ask';
 import type { Entry } from '../../protocol/Entry';
+import type { Offer } from '../../protocol/Offer';
 import type { Tool } from '../../protocol/Tool';
 import {
   agentName,
   answer,
+  askOffer,
   defaultAgent,
   lists,
+  offers,
   open,
+  type Picked,
+  pick,
+  picks,
   refreshList,
   send,
+  setPicked,
   show,
   start,
   stop,
@@ -47,6 +54,21 @@ export function Chat(props: {
       (id) => id && void reading.run(id),
     ),
   );
+
+  // The agent talked to: this conversation's, or the one picked for a new one.
+  const talkingTo = () => conversation()?.state.agent ?? agent();
+  createEffect(() => {
+    const to = talkingTo();
+    if (!offers[to]) void askOffer(to).catch(() => {});
+  });
+  const picked = (): Picked => {
+    const state = conversation()?.state;
+    return state ? { model: state.model, effort: state.effort } : picks[agent()];
+  };
+  const picking = createAction(async (next: Picked) => {
+    if (props.shown) return setPicked(props.shown, talkingTo(), next);
+    pick(agent(), next);
+  });
 
   const say = createAction(async (text: string) => {
     const id = props.shown;
@@ -94,7 +116,9 @@ export function Chat(props: {
       <Log entries={conversation()?.entries ?? []} cwd={props.cwd} onOpenFile={props.onOpenFile} />
 
       <div class="chat-foot">
-        <Show when={reading.error() ?? say.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
+        <Show when={reading.error() ?? say.error() ?? picking.error()}>
+          {(error) => <p class="note-failed">{error()}</p>}
+        </Show>
         <Show when={conversation()?.state.stopped}>{(why) => <p class="note-failed">{why()}</p>}</Show>
         <Show
           when={conversation()?.state.ask}
@@ -104,6 +128,9 @@ export function Chat(props: {
               sending={say.busy()}
               agent={props.shown ? undefined : agent()}
               onAgent={setAgent}
+              offer={offers[talkingTo()]}
+              picked={picked()}
+              onPick={(next) => void picking.run(next)}
               onSend={(text) => void say.run(text)}
               onStop={() => props.shown && void stop(props.shown)}
             />
@@ -279,6 +306,10 @@ function Composer(props: {
   /** The agent picked for a new conversation. Undefined once it has started. */
   agent: Agent | undefined;
   onAgent: (agent: Agent) => void;
+  /** What the agent talked to offers, once it has said. */
+  offer: Offer | undefined;
+  picked: Picked;
+  onPick: (picked: Picked) => void;
   onSend: (text: string) => void;
   onStop: () => void;
 }) {
@@ -324,6 +355,7 @@ function Composer(props: {
             </fieldset>
           )}
         </Show>
+        <Picks offer={props.offer} picked={props.picked} disabled={props.busy} onPick={props.onPick} />
         <span class="top-gap" />
         <Show
           when={props.busy}
@@ -340,5 +372,69 @@ function Composer(props: {
         </Show>
       </div>
     </div>
+  );
+}
+
+/** The model and the effort, from what the agent offers. Shown as the agent's own until you pick. */
+function Picks(props: {
+  offer: Offer | undefined;
+  picked: Picked;
+  disabled: boolean;
+  onPick: (picked: Picked) => void;
+}) {
+  const models = () => props.offer?.models ?? [];
+  const model = () => props.picked.model ?? props.offer?.model ?? null;
+  const efforts = () => models().find((m) => m.id === model())?.efforts ?? [];
+  const effort = () => props.picked.effort ?? props.offer?.effort ?? null;
+  return (
+    <Show when={models().length > 0}>
+      <select
+        class="pick"
+        aria-label="Model"
+        disabled={props.disabled}
+        onChange={(e) => {
+          const next = e.currentTarget.value;
+          // An effort the new model doesn't take goes back to the agent's own.
+          const takes = models().find((m) => m.id === next)?.efforts ?? [];
+          const kept =
+            props.picked.effort && takes.includes(props.picked.effort) ? props.picked.effort : null;
+          props.onPick({ model: next, effort: kept });
+        }}
+      >
+        <Show when={!models().some((m) => m.id === model())}>
+          <option selected disabled>
+            Model
+          </option>
+        </Show>
+        <For each={models()}>
+          {(m) => (
+            <option value={m.id} selected={m.id === model()}>
+              {m.name}
+            </option>
+          )}
+        </For>
+      </select>
+      <Show when={efforts().length > 0}>
+        <select
+          class="pick"
+          aria-label="Effort"
+          disabled={props.disabled}
+          onChange={(e) => props.onPick({ model: props.picked.model, effort: e.currentTarget.value })}
+        >
+          <Show when={!efforts().includes(effort() ?? '')}>
+            <option selected disabled>
+              Effort
+            </option>
+          </Show>
+          <For each={efforts()}>
+            {(level) => (
+              <option value={level} selected={level === effort()}>
+                {level}
+              </option>
+            )}
+          </For>
+        </select>
+      </Show>
+    </Show>
   );
 }

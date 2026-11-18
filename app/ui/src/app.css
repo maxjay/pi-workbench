@@ -1267,3 +1267,35 @@ svg.glyph {
   align-items: center;
   gap: 12px;
 }
+
+/* The model and effort where you write */
+
+.pick {
+  appearance: none;
+  max-width: 24ch;
+  height: 28px;
+  padding: 0 6px;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.pick:hover:enabled,
+.pick:focus-visible {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.pick:disabled {
+  cursor: default;
+}
+
+.pick option {
+  background: var(--paper);
+  color: var(--ink);
+}

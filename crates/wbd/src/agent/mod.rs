@@ -9,17 +9,39 @@ mod pi;
 use std::path::Path;
 use std::process::Stdio;
 
-use protocol::{Agent, Ask};
+use std::time::Duration;
+
+use protocol::{Agent, Ask, Offer};
 use serde_json::Value;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
+use crate::error::Error;
 use crate::fold::Update;
 
+/// How long an agent gets to say what it offers.
+const OFFER_PATIENCE: Duration = Duration::from_secs(30);
+
+pub fn name(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Pi => "Pi",
+        Agent::Claude => "Claude Code",
+    }
+}
+
 /// The process for a conversation. `resume` when the agent has it already.
-pub fn command(agent: Agent, id: &str, cwd: &Path, resume: bool) -> Command {
+/// `model` and `effort` are what you picked for it, where you picked.
+pub fn command(
+    agent: Agent,
+    id: &str,
+    cwd: &Path,
+    resume: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Command {
     let mut command = match agent {
-        Agent::Pi => pi::command(id),
-        Agent::Claude => claude::command(id, resume),
+        Agent::Pi => pi::command(id, model, effort),
+        Agent::Claude => claude::command(id, resume, model, effort),
     };
     command
         .current_dir(cwd)
@@ -47,6 +69,62 @@ pub fn prompt(agent: Agent, text: &str) -> String {
         Agent::Pi => pi::prompt(text),
         Agent::Claude => claude::prompt(text),
     }
+}
+
+/// The lines that change a running agent's model and effort.
+pub fn set(agent: Agent, model: Option<&str>, effort: Option<&str>) -> Vec<String> {
+    match agent {
+        Agent::Pi => pi::set(model, effort),
+        Agent::Claude => claude::set(model, effort),
+    }
+}
+
+/// What an agent offers: its models, their effort levels, and whether it
+/// is signed in. The agent is started to be asked, and ended.
+pub async fn offer(agent: Agent) -> Result<Offer, Error> {
+    let failed = |why: String| Error::Agent(format!("couldn't ask {}: {why}", name(agent)));
+    let (mut command, asks) = match agent {
+        Agent::Pi => pi::offer_asks(),
+        Agent::Claude => claude::offer_asks(),
+    };
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|err| failed(err.to_string()))?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    for ask in &asks {
+        stdin
+            .write_all(format!("{ask}\n").as_bytes())
+            .await
+            .map_err(|err| failed(err.to_string()))?;
+    }
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout is piped")).lines();
+    let mut answers = Vec::new();
+    let hear = async {
+        while answers.len() < asks.len() {
+            let Ok(Some(line)) = lines.next_line().await else {
+                break;
+            };
+            let answer = serde_json::from_str::<Value>(&line)
+                .ok()
+                .filter(|value| match agent {
+                    Agent::Pi => pi::is_offer_answer(value),
+                    Agent::Claude => claude::is_offer_answer(value),
+                });
+            answers.extend(answer);
+        }
+    };
+    let in_time = tokio::time::timeout(OFFER_PATIENCE, hear).await.is_ok();
+    if !in_time || answers.len() < asks.len() {
+        return Err(failed("it didn't answer".into()));
+    }
+    Ok(match agent {
+        Agent::Pi => pi::offer(&answers),
+        Agent::Claude => claude::offer(&answers),
+    })
 }
 
 /// The line that stops what the agent is doing.

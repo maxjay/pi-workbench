@@ -33,6 +33,34 @@ pub struct Conversation {
     pub ask: Option<Ask>,
     /// Why the agent's process ended, when it ended while working.
     pub stopped: Option<String>,
+    /// The model you picked for it. None while it uses the agent's own.
+    pub model: Option<String>,
+    /// The effort you picked for it. None while it uses the agent's own.
+    pub effort: Option<String>,
+}
+
+/// What an agent offers, as the agent itself says.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Offer {
+    pub signed_in: bool,
+    pub models: Vec<Model>,
+    /// The model it uses when you pick none.
+    pub model: Option<String>,
+    /// The effort it uses when you pick none.
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Model {
+    /// What the agent knows it by.
+    pub id: String,
+    pub name: String,
+    /// The effort levels it takes, the lowest first. Empty when it has none.
+    pub efforts: Vec<String>,
 }
 
 /// A question from the agent: a permission, a choice, or something to write.

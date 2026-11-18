@@ -29,4 +29,12 @@ ask: Ask | null,
 /**
  * Why the agent's process ended, when it ended while working.
  */
-stopped: string | null, };
+stopped: string | null, 
+/**
+ * The model you picked for it. None while it uses the agent's own.
+ */
+model: string | null, 
+/**
+ * The effort you picked for it. None while it uses the agent's own.
+ */
+effort: string | null, };
