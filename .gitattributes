@@ -1,0 +1,4 @@
+# One line ending everywhere: the same files are read on Windows and inside WSL.
+* text=auto eol=lf
+*.png binary
+*.ico binary

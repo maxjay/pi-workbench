@@ -1,0 +1,64 @@
+# Every push to v2 and every pull request: the Rust side on Linux, the page,
+# and the Windows app.
+name: ci
+
+on:
+  push:
+    branches: [v2]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch replaces the run in progress.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: protocol and wbd
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - run: cargo fmt -p protocol -p wbd -- --check
+      - run: cargo clippy -p protocol -p wbd --all-targets --locked -- -D warnings
+      - run: cargo test -p protocol -p wbd --locked
+      # The tests write the page's TypeScript types. They must match what is committed.
+      - run: git diff --exit-code app/ui/src/protocol
+
+  ui:
+    name: the page
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/ui/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  app:
+    name: the Windows app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/ui/package-lock.json
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy; rustup default stable
+      - run: npm ci
+        working-directory: app/ui
+      - run: npm run build
+        working-directory: app/ui
+      - run: cargo fmt -p workbench -- --check
+      - run: cargo clippy -p workbench --locked -- -D warnings

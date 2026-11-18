@@ -1,0 +1,28 @@
+/* The design's tokens. Everything else refers to these by name.
+   The surfaces are the same four maxjay.dev uses. Colour is only ever a state. */
+
+:root {
+  --paper: #0e0f0d;
+  --ink: #ecebe4;
+  --dim: #8b897e;
+  --line: #2a2b27;
+
+  /* A row under the pointer, and the row that is picked. */
+  --hover: rgb(236 235 228 / 0.05);
+  --picked: rgb(236 235 228 / 0.07);
+
+  /* States, and nothing else. */
+  --failed: oklch(0.74 0.16 25);
+  --ok: oklch(0.8 0.15 150);
+  --working: oklch(0.82 0.14 85);
+  --asking: oklch(0.78 0.12 250);
+
+  --display: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* The height of the top row, and of every bar under it. */
+  --top: 44px;
+  --bar: 40px;
+
+  color-scheme: dark;
+}

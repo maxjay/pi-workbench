@@ -1,0 +1,13 @@
+[package]
+name = "workbench"
+description = "A window on Claude Code or Pi: the scratchpad, workspaces and pull requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
