@@ -13,6 +13,7 @@ fn say(lines: &[&str]) -> Vec<Value> {
         .env("WB_CLAUDE", "/nowhere/claude")
         .env("WB_DOVA", "/nowhere/dova")
         .env("WSL_DISTRO_NAME", "Ubuntu")
+        .env("WB_DATA_DIR", std::env::temp_dir().join("wbd-test-data"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

@@ -12,9 +12,13 @@
 //! These Rust types are the source. `cargo test -p protocol` writes the
 //! TypeScript ones into app/ui/src/protocol.
 
+mod workspace;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ts_rs::TS;
+
+pub use workspace::*;
 
 /// What the page can ask.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
@@ -24,6 +28,42 @@ pub enum Call {
     /// What wbd is, and what it found beside it.
     #[serde(rename = "health")]
     Health,
+
+    /// The workspaces, the last opened first.
+    #[serde(rename = "workspaces.list")]
+    WorkspacesList,
+    /// Opens a folder as a workspace, or opens it again.
+    #[serde(rename = "workspaces.open")]
+    WorkspacesOpen { path: String },
+    /// Takes a workspace off the list. The folder is not touched.
+    #[serde(rename = "workspaces.forget")]
+    WorkspacesForget { id: String },
+    /// The folders in `dir`, to pick one to open. `~` is your home folder.
+    #[serde(rename = "folders.list")]
+    FoldersList { dir: String },
+
+    /// The files under `dir`, relative to it.
+    #[serde(rename = "files.list")]
+    FilesList { dir: String },
+    #[serde(rename = "file.read")]
+    FileRead { path: String },
+    /// Saves a file. With `expected`, only if the file still holds that text.
+    #[serde(rename = "file.write")]
+    FileWrite {
+        path: String,
+        text: String,
+        expected: Option<String>,
+    },
+    /// When each file last changed.
+    #[serde(rename = "files.stat")]
+    FilesStat { paths: Vec<String> },
+
+    /// Where the repository `dir` is in stands.
+    #[serde(rename = "git.status")]
+    GitStatus { dir: String },
+    /// A file as the last commit has it.
+    #[serde(rename = "git.original")]
+    GitOriginal { path: String },
 }
 
 /// A call, with the id its answer will carry.
@@ -40,7 +80,42 @@ pub struct Request {
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[ts(export)]
 pub enum Answer {
+    /// The call did what it was asked and has nothing to say.
+    Done,
     Health(Health),
+    Workspaces {
+        list: Vec<WorkspaceView>,
+    },
+    Workspace(WorkspaceView),
+    Folders {
+        /// The folder listed, with `~` resolved.
+        dir: String,
+        folders: Vec<Folder>,
+    },
+    Files {
+        files: Vec<String>,
+        /// True when there were more files than are listed.
+        truncated: bool,
+    },
+    File(FileView),
+    Saved {
+        /// When the saved file last changed, in milliseconds since 1970.
+        #[ts(type = "number")]
+        modified: u64,
+    },
+    Stat {
+        /// One per path asked, in order. 0 for a file that is gone.
+        #[ts(type = "Array<number>")]
+        modified: Vec<u64>,
+    },
+    Git {
+        /// None outside git.
+        status: Option<GitStatus>,
+    },
+    Original {
+        /// None when the file isn't in the last commit, or isn't text.
+        text: Option<String>,
+    },
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.
@@ -87,12 +162,19 @@ pub struct FailureData {
 pub enum FailureKind {
     /// The line wasn't a call wbd knows.
     BadRequest,
+    /// The thing asked about isn't there.
+    NotFound,
+    /// Reading or writing failed.
+    Io,
+    /// A save was refused: the file changed since the editor read it.
+    Conflict,
 }
 
 impl Failure {
     pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
         let code = match kind {
             FailureKind::BadRequest => -32600,
+            FailureKind::NotFound | FailureKind::Io | FailureKind::Conflict => -32000,
         };
         Self {
             code,

@@ -3,4 +3,4 @@
 /**
  * What the page can ask.
  */
-export type Call = { "method": "health" };
+export type Call = { "method": "health" } | { "method": "workspaces.list" } | { "method": "workspaces.open", "params": { path: string, } } | { "method": "workspaces.forget", "params": { id: string, } } | { "method": "folders.list", "params": { dir: string, } } | { "method": "files.list", "params": { dir: string, } } | { "method": "file.read", "params": { path: string, } } | { "method": "file.write", "params": { path: string, text: string, expected: string | null, } } | { "method": "files.stat", "params": { paths: Array<string>, } } | { "method": "git.status", "params": { dir: string, } } | { "method": "git.original", "params": { path: string, } };
