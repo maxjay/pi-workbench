@@ -40,6 +40,9 @@ pub enum Call {
     /// Takes a workspace off the list. The folder is not touched.
     #[serde(rename = "workspaces.forget")]
     WorkspacesForget { id: String },
+    /// Makes an empty folder for what you asked and opens it as a workspace.
+    #[serde(rename = "scratch.new")]
+    ScratchNew { text: String },
     /// The folders in `dir`, to pick one to open. `~` is your home folder.
     #[serde(rename = "folders.list")]
     FoldersList { dir: String },

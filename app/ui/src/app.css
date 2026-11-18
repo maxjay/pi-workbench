@@ -912,3 +912,63 @@ svg.glyph {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+/* Home's ask line: one line under an ink rule, as on maxjay.dev */
+
+.ask-line {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ask-line-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ink);
+}
+
+.ask-line-box label {
+  font-family: var(--display);
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--dim);
+}
+
+.ask-line-box input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+
+/* Settings */
+
+.setting-row {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) auto;
+  column-gap: 14px;
+  height: 52px;
+  border-bottom: 1px solid var(--line);
+}
+
+.top-settings {
+  width: 44px;
+  margin: 0 -14px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+}
+
+.top-settings:hover,
+.top-settings[aria-pressed="true"] {
+  color: var(--ink);
+}

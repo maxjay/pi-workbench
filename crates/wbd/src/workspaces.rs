@@ -13,6 +13,8 @@ use crate::files;
 
 pub struct Workspaces {
     file: PathBuf,
+    /// Where scratchpads' folders are made.
+    scratch: PathBuf,
     list: Mutex<Vec<Workspace>>,
 }
 
@@ -25,6 +27,7 @@ impl Workspaces {
             .unwrap_or_default();
         Workspaces {
             file,
+            scratch: data_dir.join("scratch"),
             list: Mutex::new(list),
         }
     }
@@ -36,8 +39,27 @@ impl Workspaces {
         list
     }
 
+    /// Makes an empty folder named after what you asked, and opens it as a
+    /// workspace marked as a scratchpad.
+    pub fn scratch(&self, text: &str) -> Result<Workspace, Error> {
+        let name = slug(text);
+        let folder = (1..)
+            .map(|n| match n {
+                1 => self.scratch.join(&name),
+                n => self.scratch.join(format!("{name}-{n}")),
+            })
+            .find(|folder| !folder.exists())
+            .expect("some number is free");
+        std::fs::create_dir_all(&folder).map_err(|err| Error::io(&folder, err))?;
+        self.add(&folder.display().to_string(), true)
+    }
+
     /// Opens a folder as a workspace, or opens it again.
     pub fn open(&self, path: &str) -> Result<Workspace, Error> {
+        self.add(path, false)
+    }
+
+    fn add(&self, path: &str, scratch: bool) -> Result<Workspace, Error> {
         let path = expand(path);
         if !path.is_dir() {
             return Err(Error::NotFound(format!("no folder at {}", path.display())));
@@ -57,6 +79,7 @@ impl Workspaces {
                 name: name_of(Path::new(&path)),
                 path,
                 opened: now,
+                scratch,
             };
             list.push(workspace.clone());
             workspace
@@ -128,6 +151,21 @@ fn branch(dir: &Path) -> Option<String> {
         Some(branch) => branch.to_string(),
         None => "detached".to_string(),
     })
+}
+
+/// A folder name from what you asked: its first few words, in letters,
+/// digits and dashes.
+fn slug(text: &str) -> String {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(5)
+        .map(str::to_ascii_lowercase)
+        .collect();
+    match words.is_empty() {
+        true => "scratch".to_string(),
+        false => words.join("-"),
+    }
 }
 
 /// A short id no workspace has yet: the time it was made, in base 36.
@@ -213,6 +251,23 @@ mod tests {
     }
 
     #[test]
+    fn a_scratchpad_gets_a_folder_named_after_what_you_asked() {
+        let data = tempfile::tempdir().unwrap();
+        let workspaces = Workspaces::new(data.path());
+        let first = workspaces
+            .scratch("Why does checkout crash on run?")
+            .unwrap();
+        assert_eq!(first.name, "why-does-checkout-crash-on");
+        assert!(first.scratch && Path::new(&first.path).is_dir());
+        // The same question again gets a folder of its own.
+        let second = workspaces
+            .scratch("Why does checkout crash on run?")
+            .unwrap();
+        assert_eq!(second.name, "why-does-checkout-crash-on-2");
+        assert_eq!(slug("¿?"), "scratch");
+    }
+
+    #[test]
     fn ids_are_short_and_differ() {
         assert_eq!(base36(0), "0");
         assert_eq!(base36(36), "10");
@@ -221,6 +276,7 @@ mod tests {
             path: String::new(),
             name: String::new(),
             opened: 0,
+            scratch: false,
         }];
         assert_eq!(new_id(&taken, 5), base36(6));
     }

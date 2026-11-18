@@ -15,4 +15,9 @@ name: string,
 /**
  * When it was last opened, in milliseconds since 1970.
  */
-opened: number, };
+opened: number, 
+/**
+ * True for a scratchpad: a folder the workbench made, for something
+ * you asked that is not about a repo.
+ */
+scratch: boolean, };

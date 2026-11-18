@@ -20,6 +20,7 @@ function words() {
 
 /** What a tab is called: Home, or its workspace's name. */
 export function titleOf(tab: TabId) {
+  if (tab === 'settings') return 'Settings';
   const id = workspaceOf(tab);
   return id ? (workspaceById(id)?.workspace.name ?? 'Workspace') : 'Home';
 }
@@ -84,6 +85,22 @@ export function TopBar(props: { onGo: () => void }) {
       <span class="top-status" data-status={status()}>
         {words()}
       </span>
+      <button
+        type="button"
+        class="top-settings"
+        aria-label="Settings"
+        aria-pressed={active() === 'settings'}
+        onClick={() => open('settings')}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <title>Settings</title>
+          <circle cx="12" cy="12" r="3" stroke-width="1.8" />
+          <path
+            stroke-width="1.8"
+            d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"
+          />
+        </svg>
+      </button>
     </header>
   );
 }

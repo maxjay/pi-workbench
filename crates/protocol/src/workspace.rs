@@ -17,6 +17,10 @@ pub struct Workspace {
     /// When it was last opened, in milliseconds since 1970.
     #[ts(type = "number")]
     pub opened: u64,
+    /// True for a scratchpad: a folder the workbench made, for something
+    /// you asked that is not about a repo.
+    #[serde(default)]
+    pub scratch: bool,
 }
 
 /// A workspace as Home lists it.

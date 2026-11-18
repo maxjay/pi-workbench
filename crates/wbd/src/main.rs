@@ -150,6 +150,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.workspaces.forget(&id)?;
             Answer::Done
         }
+        Call::ScratchNew { text } => Answer::Workspace(view(ctx.workspaces.scratch(&text)?).await),
         Call::FoldersList { dir } => {
             let (dir, folders) = workspaces::folders(&dir)?;
             Answer::Folders { dir, folders }

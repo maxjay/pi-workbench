@@ -1,5 +1,5 @@
 // The window: one row on top, and the page of the tab you are on. Ctrl K
-// goes anywhere. Ctrl W closes the tab.
+// goes anywhere. Ctrl W closes the tab. Ctrl comma opens Settings.
 
 import { For, onCleanup, onMount, Show } from 'solid-js';
 import { OpenFolder, openFolderDialog } from './components/OpenFolder';
@@ -8,6 +8,7 @@ import { TopBar, titleOf } from './components/TopBar';
 import { active, close, open, tabs, workspaceOf } from './state/tabs';
 import { workspaces } from './state/workspaces';
 import { Home } from './views/Home';
+import { Settings } from './views/Settings';
 import { WorkspacePage } from './views/Workspace';
 
 /** Ctrl K's list: the open tabs, every workspace, and what you can do. */
@@ -21,6 +22,7 @@ function go() {
       run: () => open(`ws:${view.workspace.id}`),
     })),
     { group: 'Do', title: 'Open folder', detail: 'as a workspace', run: openFolderDialog },
+    { group: 'Do', title: 'Settings', detail: 'agents, this machine', run: () => open('settings') },
   ];
   openPalette(items, 'Go to anything');
 }
@@ -29,6 +31,7 @@ function onKey(e: KeyboardEvent) {
   if (!(e.ctrlKey || e.metaKey)) return;
   if (e.key === 'k') go();
   else if (e.key === 'w') close(active());
+  else if (e.key === ',') open('settings');
   else return;
   e.preventDefault();
 }
@@ -42,6 +45,9 @@ export function App() {
       <main class="content">
         <Show when={active() === 'home'}>
           <Home />
+        </Show>
+        <Show when={active() === 'settings'}>
+          <Settings />
         </Show>
         {/* A workspace's page stays mounted while its tab is open, so its editor keeps its place. */}
         <For each={tabs().filter((tab) => workspaceOf(tab))}>

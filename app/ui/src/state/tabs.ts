@@ -1,9 +1,9 @@
-// The open tabs. Home is always first and can't close. Every workspace you
-// have open has a tab of its own.
+// The open tabs. Home is always first and can't close. Settings, and every
+// workspace you have open, has a tab of its own.
 
 import { createSignal } from 'solid-js';
 
-export type TabId = 'home' | `ws:${string}`;
+export type TabId = 'home' | 'settings' | `ws:${string}`;
 
 const [tabs, setTabs] = createSignal<TabId[]>(['home']);
 const [active, setActive] = createSignal<TabId>('home');

@@ -59,5 +59,7 @@ export function closeTab(id: string, tab: string) {
 }
 
 export function setConversation(id: string, conversation: string | undefined) {
+  // Home sets this for a scratchpad before its tab has ever been shown.
+  uiOf(id);
   setUis(id, 'conversation', conversation);
 }

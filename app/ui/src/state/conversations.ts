@@ -1,6 +1,7 @@
 // Conversations with an agent: the ones open in the page, kept up to date
 // from wbd's events, and each folder's list of them.
 
+import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { ask, onEvent } from '../daemon';
 import type { Agent } from '../protocol/Agent';
@@ -69,6 +70,18 @@ export const answer = (id: string, question: string, answer: string | null) =>
   ask({ method: 'conversation.answer', params: { id, ask: question, answer } }, 'done');
 
 export const agentName: Record<Agent, string> = { pi: 'Pi', claude: 'Claude Code' };
+
+/** The agent a new conversation starts with. Kept in the window's own storage. */
+const [defaultAgent, pickDefault] = createSignal<Agent>(
+  localStorage.getItem('agent') === 'claude' ? 'claude' : 'pi',
+);
+
+export { defaultAgent };
+
+export function setDefaultAgent(agent: Agent) {
+  localStorage.setItem('agent', agent);
+  pickDefault(agent);
+}
 
 /** Where a folder's conversations stand, for its tab: asking beats working. */
 export function standing(cwd: string): 'asking' | 'working' | undefined {

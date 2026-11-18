@@ -12,6 +12,7 @@ import type { Tool } from '../../protocol/Tool';
 import {
   agentName,
   answer,
+  defaultAgent,
   lists,
   open,
   refreshList,
@@ -20,9 +21,6 @@ import {
   start,
   stop,
 } from '../../state/conversations';
-
-/** The agent a new conversation starts with: the one you used last. */
-const lastAgent = (): Agent => (localStorage.getItem('agent') === 'claude' ? 'claude' : 'pi');
 
 export function Chat(props: {
   cwd: string;
@@ -33,7 +31,7 @@ export function Chat(props: {
   onOpenFile: (path: string) => void;
 }) {
   const conversation = () => (props.shown ? open[props.shown] : undefined);
-  const [agent, setAgent] = createSignal<Agent>(lastAgent());
+  const [agent, setAgent] = createSignal<Agent>(defaultAgent());
   const [listing, setListing] = createSignal(false);
   const reading = createAction(show);
 
@@ -53,7 +51,6 @@ export function Chat(props: {
   const say = createAction(async (text: string) => {
     const id = props.shown;
     if (id) return send(id, text);
-    localStorage.setItem('agent', agent());
     props.onShow(await start(agent(), props.cwd, text));
   });
 
