@@ -120,6 +120,50 @@ pub enum Call {
     /// The pull requests you opened, in every project your workspaces are in.
     #[serde(rename = "pulls.list")]
     PullsList,
+    /// A folder's branch and its pull request. With `pr`, that pull request
+    /// whatever branch the folder is on.
+    #[serde(rename = "pull.status")]
+    PullStatus {
+        dir: String,
+        #[ts(type = "number | null")]
+        pr: Option<u64>,
+    },
+    /// A review thread, with everything said in it.
+    #[serde(rename = "pull.thread")]
+    PullThread {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        #[ts(type = "number")]
+        thread: u64,
+    },
+    /// Answers a thread, and resolves it too with `resolve`.
+    #[serde(rename = "pull.reply")]
+    PullReply {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        #[ts(type = "number")]
+        thread: u64,
+        text: String,
+        resolve: bool,
+    },
+    /// Resolves a thread without saying anything.
+    #[serde(rename = "pull.resolve")]
+    PullResolve {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        #[ts(type = "number")]
+        thread: u64,
+    },
+    /// Why a run failed.
+    #[serde(rename = "pull.log")]
+    PullLog {
+        dir: String,
+        #[ts(type = "number")]
+        run: u64,
+    },
 }
 
 /// A call, with the id its answer will carry.
@@ -187,6 +231,9 @@ pub enum Answer {
     Pulls {
         rows: Vec<PullRow>,
     },
+    Pull(PullView),
+    Thread(Thread),
+    Log(RunLog),
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.

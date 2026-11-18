@@ -235,6 +235,25 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.conversations.stop(&id).await?;
             Answer::Done
         }
+        Call::PullStatus { dir, pr } => Answer::Pull(pulls::status(&ctx.dova, &dir, pr).await?),
+        Call::PullThread { dir, pr, thread } => {
+            Answer::Thread(pulls::thread(&ctx.dova, &dir, pr, thread).await?)
+        }
+        Call::PullReply {
+            dir,
+            pr,
+            thread,
+            text,
+            resolve,
+        } => {
+            pulls::reply(&ctx.dova, &dir, pr, thread, &text, resolve).await?;
+            Answer::Done
+        }
+        Call::PullResolve { dir, pr, thread } => {
+            pulls::resolve(&ctx.dova, &dir, pr, thread).await?;
+            Answer::Done
+        }
+        Call::PullLog { dir, run } => Answer::Log(pulls::log(&ctx.dova, &dir, run).await?),
         Call::PullsList => Answer::Pulls {
             rows: ctx.pulls.list(&ctx.dova, ctx.workspaces.all()).await?,
         },

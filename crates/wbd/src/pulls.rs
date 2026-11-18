@@ -5,7 +5,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-use protocol::{PullRow, ThreadSummary, Workspace};
+use protocol::{
+    PipelineRun, PullRequest, PullRow, PullView, RunLog, Thread, ThreadSummary, WorkItemRef,
+    Workspace,
+};
 use serde_json::{Value, json};
 
 use crate::dova::Dova;
@@ -95,6 +98,87 @@ impl Pulls {
             .insert(run, reason.clone());
         Some(reason)
     }
+}
+
+/// A folder's branch and its pull request: dova's `status`. With `pr`, that
+/// pull request and the runs on its branch, whatever the folder is on.
+pub async fn status(dova: &Dova, dir: &str, pr: Option<u64>) -> Result<PullView, Error> {
+    let Some(pr) = pr else {
+        return shape(dova.call("status", dir, json!({})).await?);
+    };
+    let view = dova
+        .call("pr.view", dir, json!({ "idOrUrl": pr.to_string() }))
+        .await?;
+    let request: PullRequest = shape(view.clone())?;
+    let runs = dova
+        .call(
+            "pipeline.list",
+            dir,
+            json!({ "branch": request.source_branch }),
+        )
+        .await?;
+    Ok(PullView {
+        branch: git::status(std::path::Path::new(dir))
+            .await
+            .map(|status| status.summary.branch),
+        work_items: shape::<Vec<WorkItemRef>>(view["workItems"].clone())?,
+        threads: shape::<Vec<ThreadSummary>>(view["threads"].clone())?,
+        runs: shape::<Vec<PipelineRun>>(runs["runs"].clone())?,
+        pr: Some(request),
+    })
+}
+
+pub async fn thread(dova: &Dova, dir: &str, pr: u64, thread: u64) -> Result<Thread, Error> {
+    let params = json!({ "pr": pr.to_string(), "thread": thread.to_string() });
+    shape(dova.call("pr.thread", dir, params).await?)
+}
+
+/// Answers a thread. With `resolve`, the same call resolves it.
+pub async fn reply(
+    dova: &Dova,
+    dir: &str,
+    pr: u64,
+    thread: u64,
+    text: &str,
+    resolve: bool,
+) -> Result<(), Error> {
+    let mut params = json!({ "pr": pr.to_string(), "thread": thread.to_string(), "text": text });
+    if resolve {
+        params["resolve"] = json!("resolved");
+    }
+    dova.call("pr.reply", dir, params).await.map(|_| ())
+}
+
+pub async fn resolve(dova: &Dova, dir: &str, pr: u64, thread: u64) -> Result<(), Error> {
+    let params =
+        json!({ "pr": pr.to_string(), "thread": thread.to_string(), "status": "resolved" });
+    dova.call("pr.resolve", dir, params).await.map(|_| ())
+}
+
+/// No more of a task's log than this is sent: the end of it, where it failed.
+const LOG_LIMIT: usize = 200_000;
+
+pub async fn log(dova: &Dova, dir: &str, run: u64) -> Result<RunLog, Error> {
+    let mut log: RunLog = shape(
+        dova.call("pipeline.log", dir, json!({ "run": run.to_string() }))
+            .await?,
+    )?;
+    for task in &mut log.logs {
+        if task.text.len() > LOG_LIMIT {
+            let mut cut = task.text.len() - LOG_LIMIT;
+            while !task.text.is_char_boundary(cut) {
+                cut += 1;
+            }
+            task.text.drain(..cut);
+        }
+    }
+    Ok(log)
+}
+
+/// What dova returned, read as the shape the page is sent.
+fn shape<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
+    serde_json::from_value(value)
+        .map_err(|err| Error::Dova(format!("couldn't read what dova said: {err}")))
 }
 
 /// The first thread on a pull request that still wants an answer.

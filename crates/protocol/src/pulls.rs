@@ -81,3 +81,75 @@ pub struct PullRow {
     #[serde(default)]
     pub workspace: Option<String>,
 }
+
+/// A work item a pull request is for.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct WorkItemRef {
+    #[ts(type = "number")]
+    pub id: u64,
+    pub title: Option<String>,
+    /// `Bug`, `Product Backlog Item` and so on.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub state: Option<String>,
+}
+
+/// A branch and its pull request, as the workspace shows them: what dova's
+/// `status` says. `pr` is None for a branch that has none yet.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PullView {
+    /// The branch the folder has checked out. None on a detached HEAD.
+    pub branch: Option<String>,
+    pub pr: Option<PullRequest>,
+    pub work_items: Vec<WorkItemRef>,
+    /// The latest runs, the newest first.
+    pub runs: Vec<PipelineRun>,
+    /// Open threads first.
+    pub threads: Vec<ThreadSummary>,
+}
+
+/// A review thread, with everything said in it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Thread {
+    #[ts(type = "number")]
+    pub id: u64,
+    pub status: String,
+    pub unresolved: bool,
+    pub location: Option<Location>,
+    pub comments: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Comment {
+    #[ts(type = "number")]
+    pub id: u64,
+    pub author: Option<String>,
+    pub published_at: Option<String>,
+    pub text: String,
+}
+
+/// Why a run failed: what the pipeline itself said, which tasks failed, and
+/// the log of the first one that did.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct RunLog {
+    pub run: PipelineRun,
+    pub errors: Vec<String>,
+    pub failed_tasks: Vec<String>,
+    pub logs: Vec<TaskLog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct TaskLog {
+    pub task: String,
+    pub text: String,
+}
