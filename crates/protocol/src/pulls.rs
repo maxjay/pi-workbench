@@ -153,3 +153,20 @@ pub struct TaskLog {
     pub task: String,
     pub text: String,
 }
+
+/// What a pull request from a branch would hold: the commits it is ahead
+/// of its base by, the newest first.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct PullBefore {
+    /// The branch it would go into, such as `origin/main`.
+    pub base: String,
+    pub commits: Vec<Commit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+}

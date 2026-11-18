@@ -3,6 +3,7 @@
 
 import { createSignal } from 'solid-js';
 import { ask } from '../daemon';
+import { refreshPulls } from './pulls';
 
 /** A folder's branch and its pull request. With `pr`, that pull request whatever the branch. */
 export const pullStatus = (dir: string, pr: number | null) =>
@@ -25,5 +26,22 @@ export async function reply(dir: string, pr: number, thread: number, text: strin
 
 export async function resolve(dir: string, pr: number, thread: number) {
   await ask({ method: 'pull.resolve', params: { dir, pr, thread } }, 'done');
+  setWritten(written() + 1);
+}
+
+/** What a pull request from a folder's branch would hold. */
+export const pullBefore = (dir: string) => ask({ method: 'pull.before', params: { dir } }, 'before');
+
+/** Opens a pull request from a folder's branch. */
+export async function createPull(dir: string, title: string, body: string, draft: boolean) {
+  const created = await ask({ method: 'pull.create', params: { dir, title, body, draft } }, 'created');
+  setWritten(written() + 1);
+  void refreshPulls();
+  return created;
+}
+
+/** Links work items to a folder's branch. */
+export async function linkItems(dir: string, ids: number[]) {
+  await ask({ method: 'pull.link', params: { dir, ids } }, 'done');
   setWritten(written() + 1);
 }

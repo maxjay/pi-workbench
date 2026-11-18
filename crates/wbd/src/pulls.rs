@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    PipelineRun, PullRequest, PullRow, PullView, RunLog, Thread, ThreadSummary, WorkItemRef,
-    Workspace,
+    PipelineRun, PullBefore, PullRequest, PullRow, PullView, RunLog, Thread, ThreadSummary,
+    WorkItemRef, Workspace,
 };
 use serde_json::{Value, json};
 
@@ -153,6 +153,31 @@ pub async fn resolve(dova: &Dova, dir: &str, pr: u64, thread: u64) -> Result<(),
     let params =
         json!({ "pr": pr.to_string(), "thread": thread.to_string(), "status": "resolved" });
     dova.call("pr.resolve", dir, params).await.map(|_| ())
+}
+
+/// What a pull request from the folder's branch would hold: dova's `summarize`.
+pub async fn before(dova: &Dova, dir: &str) -> Result<PullBefore, Error> {
+    shape(dova.call("summarize", dir, json!({})).await?)
+}
+
+/// Opens a pull request from the folder's branch. dova attaches the work
+/// items linked to the branch, and uploads pictures the description names.
+pub async fn create(
+    dova: &Dova,
+    dir: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> Result<PullRequest, Error> {
+    let params = json!({ "title": title, "body": body, "draft": draft });
+    shape(dova.call("pr.create", dir, params).await?)
+}
+
+pub async fn link(dova: &Dova, dir: &str, ids: &[u64]) -> Result<(), Error> {
+    let ids: Vec<String> = ids.iter().map(u64::to_string).collect();
+    dova.call("link", dir, json!({ "ids": ids }))
+        .await
+        .map(|_| ())
 }
 
 /// No more of a task's log than this is sent: the end of it, where it failed.

@@ -253,6 +253,17 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::resolve(&ctx.dova, &dir, pr, thread).await?;
             Answer::Done
         }
+        Call::PullBefore { dir } => Answer::Before(pulls::before(&ctx.dova, &dir).await?),
+        Call::PullCreate {
+            dir,
+            title,
+            body,
+            draft,
+        } => Answer::Created(pulls::create(&ctx.dova, &dir, &title, &body, draft).await?),
+        Call::PullLink { dir, ids } => {
+            pulls::link(&ctx.dova, &dir, &ids).await?;
+            Answer::Done
+        }
         Call::PullLog { dir, run } => Answer::Log(pulls::log(&ctx.dova, &dir, run).await?),
         Call::PullsList => Answer::Pulls {
             rows: ctx.pulls.list(&ctx.dova, ctx.workspaces.all()).await?,

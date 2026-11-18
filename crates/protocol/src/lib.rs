@@ -157,6 +157,24 @@ pub enum Call {
         #[ts(type = "number")]
         thread: u64,
     },
+    /// What a pull request from a folder's branch would hold.
+    #[serde(rename = "pull.before")]
+    PullBefore { dir: String },
+    /// Opens a pull request from a folder's branch, with the work items linked to it.
+    #[serde(rename = "pull.create")]
+    PullCreate {
+        dir: String,
+        title: String,
+        body: String,
+        draft: bool,
+    },
+    /// Links work items to a folder's branch, so its pull request carries them.
+    #[serde(rename = "pull.link")]
+    PullLink {
+        dir: String,
+        #[ts(type = "Array<number>")]
+        ids: Vec<u64>,
+    },
     /// Why a run failed.
     #[serde(rename = "pull.log")]
     PullLog {
@@ -234,6 +252,8 @@ pub enum Answer {
     Pull(PullView),
     Thread(Thread),
     Log(RunLog),
+    Before(PullBefore),
+    Created(PullRequest),
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.

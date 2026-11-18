@@ -4,7 +4,8 @@
 //
 // A middle tab is a string. A file's tab is its absolute path, which always
 // starts with `/`. The other kinds have a prefix: `log:<run>` is a pipeline
-// run's log, and `thread:<pull request>:<thread>` is a review thread.
+// run's log, `thread:<pull request>:<thread>` is a review thread, and
+// `newpr` is the form for a new pull request.
 
 import { createStore } from 'solid-js/store';
 
@@ -46,6 +47,7 @@ export const nameOf = (path: string) => path.split('/').pop() ?? path;
 /** What a middle tab is called on its tab. */
 export function labelOf(tab: string) {
   if (isFile(tab)) return nameOf(tab);
+  if (tab === 'newpr') return 'New pull request';
   const [kind, ...ids] = tab.split(':');
   return kind === 'log' ? `Run ${ids[0]}` : `Thread #${ids[1]}`;
 }

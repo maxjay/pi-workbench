@@ -13,6 +13,7 @@ import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
 import { createEditor } from './workspace/Editor';
 import { LogView } from './workspace/LogView';
+import { NewPull } from './workspace/NewPull';
 import { Pull } from './workspace/Pull';
 import { Terminals } from './workspace/Terminals';
 import { ThreadView } from './workspace/ThreadView';
@@ -208,6 +209,7 @@ function Page(props: { view: WorkspaceView }) {
               dir={root}
               pr={ui().pull}
               current={ui().current}
+              onNew={() => openTab(id, 'newpr')}
               onLog={(run) => openTab(id, `log:${run}`)}
               onThread={(pr, thread) => openTab(id, `thread:${pr}:${thread}`)}
             />
@@ -256,6 +258,9 @@ function Page(props: { view: WorkspaceView }) {
         </Show>
         <Show when={ui().current?.startsWith('thread:') && ui().current} keyed>
           {(tab) => <ThreadView dir={root} pr={ids(tab)[0]} thread={ids(tab)[1]} onOpenAt={openAt} />}
+        </Show>
+        <Show when={ui().current === 'newpr'}>
+          <NewPull dir={root} onDone={() => close('newpr')} />
         </Show>
         {editor.view}
       </section>

@@ -5,6 +5,8 @@ import type { FileView } from "./FileView";
 import type { Folder } from "./Folder";
 import type { GitStatus } from "./GitStatus";
 import type { Health } from "./Health";
+import type { PullBefore } from "./PullBefore";
+import type { PullRequest } from "./PullRequest";
 import type { PullRow } from "./PullRow";
 import type { PullView } from "./PullView";
 import type { RunLog } from "./RunLog";
@@ -40,4 +42,4 @@ status: GitStatus | null, } | { "kind": "original",
 /**
  * None when the file isn't in the last commit, or isn't text.
  */
-text: string | null, } | { "kind": "terminals", list: Array<Terminal>, } | { "kind": "terminal" } & Terminal | { "kind": "printed", text: string, } | { "kind": "conversations", list: Array<Conversation>, } | { "kind": "conversation" } & ConversationView | { "kind": "pulls", rows: Array<PullRow>, } | { "kind": "pull" } & PullView | { "kind": "thread" } & Thread | { "kind": "log" } & RunLog;
+text: string | null, } | { "kind": "terminals", list: Array<Terminal>, } | { "kind": "terminal" } & Terminal | { "kind": "printed", text: string, } | { "kind": "conversations", list: Array<Conversation>, } | { "kind": "conversation" } & ConversationView | { "kind": "pulls", rows: Array<PullRow>, } | { "kind": "pull" } & PullView | { "kind": "thread" } & Thread | { "kind": "log" } & RunLog | { "kind": "before" } & PullBefore | { "kind": "created" } & PullRequest;

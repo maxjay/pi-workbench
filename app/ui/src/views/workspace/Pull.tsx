@@ -2,9 +2,10 @@
 // Its work items, its pipeline runs, its review threads. Picking a run
 // opens its log in the middle, and picking a thread opens the thread.
 
-import { createResource, For, onCleanup, onMount, Show } from 'solid-js';
+import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createAction } from '../../components/action';
 import { openUrl } from '../../components/open';
-import { pullStatus, written } from '../../state/pull';
+import { linkItems, pullBefore, pullStatus, written } from '../../state/pull';
 
 export function Pull(props: {
   dir: string;
@@ -12,6 +13,8 @@ export function Pull(props: {
   pr: number | undefined;
   /** The middle tab shown, to mark the row it came from. */
   current: string | undefined;
+  /** Opens the form for a new pull request. */
+  onNew: () => void;
   onLog: (run: number) => void;
   onThread: (pr: number, thread: number) => void;
 }) {
@@ -43,10 +46,7 @@ export function Pull(props: {
           <Show
             when={v().pr}
             fallback={
-              <div class="pull-part">
-                <span class="dim">{v().branch ?? 'no branch'}</span>
-                <h1 class="pull-name">No pull request yet</h1>
-              </div>
+              <Before dir={props.dir} branch={v().branch} items={v().workItems} onNew={props.onNew} />
             }
           >
             {(pr) => (
@@ -143,5 +143,98 @@ export function Pull(props: {
         )}
       </Show>
     </div>
+  );
+}
+
+/** A branch with no pull request yet: what one would hold, and the way to open it. */
+function Before(props: {
+  dir: string;
+  branch: string | null;
+  items: { id: number; title: string | null; state: string | null }[];
+  onNew: () => void;
+}) {
+  const [before] = createResource(
+    () => [props.dir, props.branch, written()] as const,
+    ([dir]) => pullBefore(dir),
+  );
+  const [ids, setIds] = createSignal('');
+  const linking = createAction(async () => {
+    const numbers = ids()
+      .split(/[^0-9]+/)
+      .filter(Boolean)
+      .map(Number);
+    if (numbers.length === 0) return;
+    await linkItems(props.dir, numbers);
+    setIds('');
+  });
+  const commits = () => before.latest?.commits ?? [];
+
+  return (
+    <>
+      <div class="pull-part">
+        <span class="dim">
+          {props.branch ?? 'no branch'}
+          <Show when={before.latest}>{(b) => <> · into {b().base.replace(/^origin\//, '')}</>}</Show>
+        </span>
+        <h1 class="pull-name">No pull request yet</h1>
+      </div>
+
+      <section class="pull-part" aria-labelledby="before-items">
+        <h2 id="before-items" class="pull-label">
+          Work items
+        </h2>
+        <For each={props.items} fallback={<span class="dim">None linked to this branch.</span>}>
+          {(item) => (
+            <div class="row pull-line">
+              <span class="dim">#{item.id}</span>
+              <span class="tree-name">{item.title}</span>
+              <span class="dim">{item.state}</span>
+            </div>
+          )}
+        </For>
+        <form
+          class="pull-link"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void linking.run();
+          }}
+        >
+          <input
+            class="ask-input"
+            placeholder="Link a work item by its number"
+            aria-label="Work item numbers to link"
+            value={ids()}
+            onInput={(e) => setIds(e.currentTarget.value)}
+          />
+          <button type="submit" class="button" disabled={linking.busy() || !/[0-9]/.test(ids())}>
+            Link
+          </button>
+        </form>
+        <Show when={linking.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
+      </section>
+
+      <section class="pull-part" aria-labelledby="before-commits">
+        <h2 id="before-commits" class="pull-label">
+          Commits · {commits().length} ahead
+        </h2>
+        <Show when={before.error}>
+          <p class="note-failed">{String(before.error?.message ?? before.error)}</p>
+        </Show>
+        <For each={commits()} fallback={<span class="dim">Nothing to open a pull request for yet.</span>}>
+          {(commit) => (
+            <div class="row pull-line">
+              <span class="dim">{commit.sha.slice(0, 7)}</span>
+              <span class="tree-name">{commit.subject}</span>
+            </div>
+          )}
+        </For>
+      </section>
+
+      <Show when={commits().length > 0}>
+        <button type="button" class="button button-primary pull-new" onClick={props.onNew}>
+          New pull request
+        </button>
+      </Show>
+    </>
   );
 }
