@@ -10,6 +10,8 @@ pub enum Error {
     Io(String),
     /// A save refused because the file changed since it was read.
     Conflict(String),
+    /// The agent couldn't be started, or went away.
+    Agent(String),
 }
 
 impl Error {
@@ -25,6 +27,7 @@ impl From<Error> for Failure {
             Error::NotFound(message) => Failure::new(FailureKind::NotFound, message),
             Error::Io(message) => Failure::new(FailureKind::Io, message),
             Error::Conflict(message) => Failure::new(FailureKind::Conflict, message),
+            Error::Agent(message) => Failure::new(FailureKind::Agent, message),
         }
     }
 }

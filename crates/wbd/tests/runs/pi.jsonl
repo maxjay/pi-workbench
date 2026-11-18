@@ -1,0 +1,16 @@
+{"type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"id":"toolu_01GRDbrfax2tkQbSxk4ZdgdZ","toolName":"read"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":""}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"{\"path\": \"note.txt"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"\", \"offset\": null"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":", \"limit\": null"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"}"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":0}}
+{"type":"tool_execution_start","toolCallId":"toolu_01GRDbrfax2tkQbSxk4ZdgdZ","toolName":"read","args":{"path":"note.txt","offset":null,"limit":null}}
+{"type":"tool_execution_end","toolCallId":"toolu_01GRDbrfax2tkQbSxk4ZdgdZ","toolName":"read","result":{"content":[{"type":"text","text":"kiwi\n"}],"structuredContent":"kiwi\n"},"isError":false,"durationMs":3}
+{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"k"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"iwi"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"kiwi"}}
+{"type":"agent_settled","aborted":false}

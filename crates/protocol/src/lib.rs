@@ -12,12 +12,14 @@
 //! These Rust types are the source. `cargo test -p protocol` writes the
 //! TypeScript ones into app/ui/src/protocol.
 
+mod conversation;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ts_rs::TS;
 
+pub use conversation::*;
 pub use workspace::*;
 
 /// What the page can ask.
@@ -82,6 +84,33 @@ pub enum Call {
     /// Hangs up on the shell and everything it started.
     #[serde(rename = "terminal.close")]
     TerminalClose { id: String },
+
+    /// The conversations in a folder, the latest first.
+    #[serde(rename = "conversations.list")]
+    ConversationsList { cwd: String },
+    /// Starts a conversation with an agent in a folder, with what you wrote.
+    #[serde(rename = "conversation.start")]
+    ConversationStart {
+        agent: Agent,
+        cwd: String,
+        text: String,
+    },
+    /// A whole conversation, running or saved.
+    #[serde(rename = "conversation.open")]
+    ConversationOpen { id: String },
+    /// Says something in a conversation. Starts the agent again if it isn't running.
+    #[serde(rename = "conversation.send")]
+    ConversationSend { id: String, text: String },
+    /// Stops what the agent is doing now.
+    #[serde(rename = "conversation.stop")]
+    ConversationStop { id: String },
+    /// Answers what the agent asked: one of its options, or what you wrote.
+    #[serde(rename = "conversation.answer")]
+    ConversationAnswer {
+        id: String,
+        ask: String,
+        answer: Option<String>,
+    },
 }
 
 /// A call, with the id its answer will carry.
@@ -142,6 +171,10 @@ pub enum Answer {
     Printed {
         text: String,
     },
+    Conversations {
+        list: Vec<Conversation>,
+    },
+    Conversation(ConversationView),
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.
@@ -169,6 +202,8 @@ pub enum Event {
     Terminal { id: String, data: String },
     /// Every terminal, whenever one opens, closes, or starts or finishes running something.
     Terminals { list: Vec<Terminal> },
+    /// What changed in a conversation.
+    Conversation { id: String, changes: Vec<Change> },
 }
 
 /// Why a call wasn't answered: a JSON-RPC error.
@@ -198,13 +233,18 @@ pub enum FailureKind {
     Io,
     /// A save was refused: the file changed since the editor read it.
     Conflict,
+    /// The agent couldn't be started, or refused.
+    Agent,
 }
 
 impl Failure {
     pub fn new(kind: FailureKind, message: impl Into<String>) -> Self {
         let code = match kind {
             FailureKind::BadRequest => -32600,
-            FailureKind::NotFound | FailureKind::Io | FailureKind::Conflict => -32000,
+            FailureKind::NotFound
+            | FailureKind::Io
+            | FailureKind::Conflict
+            | FailureKind::Agent => -32000,
         };
         Self {
             code,

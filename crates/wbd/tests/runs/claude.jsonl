@@ -1,0 +1,26 @@
+{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000000","cwd":"/tmp/wb-record"}
+{"type":"stream_event","event":{"type":"message_start"}}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01J5NKw2XZNgaLBXa744cd6k","name":"Read","input":{},"caller":{"type":"direct"}}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"file_path\": \"/tmp"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"/wb-record/note."}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"txt"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"}"}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01J5NKw2XZNgaLBXa744cd6k","name":"Read","input":{"file_path":"/tmp/wb-record/note.txt"},"caller":{"type":"direct"}}]}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0}}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_01J5NKw2XZNgaLBXa744cd6k","type":"tool_result","content":"1\tkiwi\n2\t"}]}}
+{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"tool_use"}}}
+{"type":"stream_event","event":{"type":"message_stop"}}
+{"type":"stream_event","event":{"type":"message_start"}}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":null}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":""}]}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0}}
+{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"k"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"iwi"}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"kiwi"}]}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":1}}
+{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}
+{"type":"stream_event","event":{"type":"message_stop"}}
+{"type":"result","subtype":"success","is_error":false,"result":"kiwi","stop_reason":"end_turn"}

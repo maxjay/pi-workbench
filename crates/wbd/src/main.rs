@@ -2,8 +2,11 @@
 //! It reads the page's calls from stdin, one JSON object per line, and
 //! writes answers and events to stdout through one writer.
 
+mod agent;
+mod conversations;
 mod error;
 mod files;
+mod fold;
 mod git;
 mod health;
 mod terminals;
@@ -12,6 +15,7 @@ mod workspaces;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use conversations::Conversations;
 use error::Error;
 use protocol::{Answer, Call, Event, Failure, FailureKind, Request, WorkspaceView};
 use terminals::Terminals;
@@ -26,6 +30,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Ctx {
     workspaces: Workspaces,
     terminals: Terminals,
+    conversations: Conversations,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -62,6 +67,7 @@ async fn main() {
     let ctx = Arc::new(Ctx {
         workspaces: Workspaces::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
+        conversations: Conversations::new(&data_dir(), out.clone()),
     });
     ctx.terminals.start();
 
@@ -89,8 +95,9 @@ async fn main() {
         });
     }
 
-    // The page hung up. Finish what was asked, hang up on the shells, then stop.
+    // The page hung up. Finish what was asked, end the agents and the shells, then stop.
     while answering.join_next().await.is_some() {}
+    ctx.conversations.shutdown();
     ctx.terminals.shutdown();
     let _ = stop.send(());
     let _ = writer.await;
@@ -203,6 +210,28 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         }
         Call::TerminalClose { id } => {
             ctx.terminals.close(&id)?;
+            Answer::Done
+        }
+
+        Call::ConversationsList { cwd } => Answer::Conversations {
+            list: ctx.conversations.list(&cwd),
+        },
+        Call::ConversationStart { agent, cwd, text } => {
+            Answer::Conversation(ctx.conversations.start(agent, &cwd, &text).await?)
+        }
+        Call::ConversationOpen { id } => Answer::Conversation(ctx.conversations.open(&id)?),
+        Call::ConversationSend { id, text } => {
+            ctx.conversations.send(&id, &text).await?;
+            Answer::Done
+        }
+        Call::ConversationStop { id } => {
+            ctx.conversations.stop(&id).await?;
+            Answer::Done
+        }
+        Call::ConversationAnswer { id, ask, answer } => {
+            ctx.conversations
+                .answer(&id, &ask, answer.as_deref())
+                .await?;
             Answer::Done
         }
     })
