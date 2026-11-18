@@ -4,11 +4,13 @@
 
 mod agent;
 mod conversations;
+mod dova;
 mod error;
 mod files;
 mod fold;
 mod git;
 mod health;
+mod pulls;
 mod terminals;
 mod workspaces;
 
@@ -31,6 +33,8 @@ struct Ctx {
     workspaces: Workspaces,
     terminals: Terminals,
     conversations: Conversations,
+    dova: dova::Dova,
+    pulls: pulls::Pulls,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -68,6 +72,8 @@ async fn main() {
         workspaces: Workspaces::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
         conversations: Conversations::new(&data_dir(), out.clone()),
+        dova: dova::Dova::default(),
+        pulls: pulls::Pulls::default(),
     });
     ctx.terminals.start();
 
@@ -229,6 +235,9 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.conversations.stop(&id).await?;
             Answer::Done
         }
+        Call::PullsList => Answer::Pulls {
+            rows: ctx.pulls.list(&ctx.dova, ctx.workspaces.all()).await?,
+        },
         Call::ConversationAnswer { id, ask, answer } => {
             ctx.conversations
                 .answer(&id, &ask, answer.as_deref())

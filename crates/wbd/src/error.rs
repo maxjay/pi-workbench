@@ -12,6 +12,10 @@ pub enum Error {
     Conflict(String),
     /// The agent couldn't be started, or went away.
     Agent(String),
+    /// dova has no sign-in to Azure DevOps.
+    NotSignedIn(String),
+    /// dova couldn't be started, or failed.
+    Dova(String),
 }
 
 impl Error {
@@ -28,6 +32,8 @@ impl From<Error> for Failure {
             Error::Io(message) => Failure::new(FailureKind::Io, message),
             Error::Conflict(message) => Failure::new(FailureKind::Conflict, message),
             Error::Agent(message) => Failure::new(FailureKind::Agent, message),
+            Error::NotSignedIn(message) => Failure::new(FailureKind::NotSignedIn, message),
+            Error::Dova(message) => Failure::new(FailureKind::Dova, message),
         }
     }
 }

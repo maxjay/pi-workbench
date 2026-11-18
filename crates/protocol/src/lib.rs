@@ -13,6 +13,7 @@
 //! TypeScript ones into app/ui/src/protocol.
 
 mod conversation;
+mod pulls;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ use serde_json::json;
 use ts_rs::TS;
 
 pub use conversation::*;
+pub use pulls::*;
 pub use workspace::*;
 
 /// What the page can ask.
@@ -114,6 +116,10 @@ pub enum Call {
         ask: String,
         answer: Option<String>,
     },
+
+    /// The pull requests you opened, in every project your workspaces are in.
+    #[serde(rename = "pulls.list")]
+    PullsList,
 }
 
 /// A call, with the id its answer will carry.
@@ -178,6 +184,9 @@ pub enum Answer {
         list: Vec<Conversation>,
     },
     Conversation(ConversationView),
+    Pulls {
+        rows: Vec<PullRow>,
+    },
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.
@@ -238,6 +247,10 @@ pub enum FailureKind {
     Conflict,
     /// The agent couldn't be started, or refused.
     Agent,
+    /// dova has no sign-in to Azure DevOps.
+    NotSignedIn,
+    /// dova failed some other way.
+    Dova,
 }
 
 impl Failure {
@@ -247,7 +260,9 @@ impl Failure {
             FailureKind::NotFound
             | FailureKind::Io
             | FailureKind::Conflict
-            | FailureKind::Agent => -32000,
+            | FailureKind::Agent
+            | FailureKind::NotSignedIn
+            | FailureKind::Dova => -32000,
         };
         Self {
             code,

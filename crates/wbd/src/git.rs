@@ -79,6 +79,12 @@ pub async fn status(dir: &Path) -> Option<GitStatus> {
     })
 }
 
+/// Where the folder's repository was cloned from. None outside git, or with no `origin`.
+pub async fn origin(dir: &Path) -> Option<String> {
+    let url = git(dir, &["remote", "get-url", "origin"]).await?;
+    Some(String::from_utf8_lossy(&url).trim().to_string())
+}
+
 /// A file as the last commit has it. None when it isn't in it, or isn't text.
 pub async fn original(path: &Path) -> Option<String> {
     let dir = path.parent()?;
