@@ -6,6 +6,12 @@
   padding: 0;
 }
 
+html {
+  /* Scrollbars in the app's own colours, thin. */
+  scrollbar-color: var(--line) transparent;
+  scrollbar-width: thin;
+}
+
 html,
 body,
 #root {
@@ -278,6 +284,7 @@ svg.glyph {
 .strip-tab {
   display: flex;
   align-items: center;
+  gap: 6px;
   padding: 0 8px;
   color: var(--dim);
   white-space: nowrap;

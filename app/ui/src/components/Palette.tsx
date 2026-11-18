@@ -2,7 +2,7 @@
 // row picked. Ctrl K opens it with places to go, Ctrl P with a workspace's
 // files. Whoever opens it says what is in it.
 
-import { createEffect, createSignal, For, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 
 export interface Item {
   group: string;
@@ -12,8 +12,12 @@ export interface Item {
 }
 
 const [shown, setShown] = createSignal<{ items: Item[]; hint: string }>();
+const [query, setQuery] = createSignal('');
+const [picked, setPicked] = createSignal(0);
 
 export function openPalette(items: Item[], hint: string) {
+  setQuery('');
+  setPicked(0);
   setShown({ items, hint });
 }
 
@@ -23,10 +27,6 @@ export const closePalette = () => setShown();
 const MOST = 50;
 
 export function Palette() {
-  const [query, setQuery] = createSignal('');
-  const [picked, setPicked] = createSignal(0);
-  let input!: HTMLInputElement;
-
   const rows = () => {
     const words = query().toLowerCase().split(/\s+/).filter(Boolean);
     const all = shown()?.items ?? [];
@@ -36,13 +36,6 @@ export function Palette() {
     });
     return matching.slice(0, MOST);
   };
-
-  createEffect(() => {
-    if (!shown()) return;
-    setQuery('');
-    setPicked(0);
-    input.focus();
-  });
 
   const run = (item: Item | undefined) => {
     if (!item) return;
@@ -66,7 +59,8 @@ export function Palette() {
           <button type="button" class="scrim-close" aria-label="Close" onClick={() => closePalette()} />
           <div class="palette" role="dialog" aria-label={palette().hint}>
             <input
-              ref={input}
+              // Typing goes here from the moment it opens, not to whatever is behind it.
+              ref={(el) => requestAnimationFrame(() => el.focus())}
               class="palette-input"
               placeholder={palette().hint}
               aria-label={palette().hint}

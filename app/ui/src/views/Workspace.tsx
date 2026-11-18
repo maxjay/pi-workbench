@@ -120,7 +120,7 @@ function Page(props: { view: WorkspaceView }) {
             onClick={() => setLeft(id, 'changes')}
           >
             Changes
-            <Show when={repo()?.git?.summary.files}>{(n) => <span class="dim"> {n()}</span>}</Show>
+            <Show when={repo()?.git?.summary.files}>{(n) => <span class="dim">{n()}</span>}</Show>
           </button>
         </div>
         <div class="left-body">
