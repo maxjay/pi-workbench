@@ -114,3 +114,17 @@ pub enum GitMark {
     Untracked,
     Conflicted,
 }
+
+/// A terminal in a workspace's folder: a shell of its own.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Terminal {
+    pub id: String,
+    /// Where it started, absolute.
+    pub cwd: String,
+    /// What runs in it now, or the shell's name when nothing does.
+    pub title: String,
+    /// Something other than the shell is running.
+    pub running: bool,
+}

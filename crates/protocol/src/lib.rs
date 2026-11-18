@@ -64,6 +64,24 @@ pub enum Call {
     /// A file as the last commit has it.
     #[serde(rename = "git.original")]
     GitOriginal { path: String },
+
+    /// The terminals that started in `dir` or under it.
+    #[serde(rename = "terminals.list")]
+    TerminalsList { dir: String },
+    /// Starts your shell in `cwd`.
+    #[serde(rename = "terminal.open")]
+    TerminalOpen { cwd: String, cols: u16, rows: u16 },
+    /// The last of what a terminal printed, to draw it again.
+    #[serde(rename = "terminal.read")]
+    TerminalRead { id: String },
+    /// What you typed. Answered in the order sent.
+    #[serde(rename = "terminal.input")]
+    TerminalInput { id: String, data: String },
+    #[serde(rename = "terminal.resize")]
+    TerminalResize { id: String, cols: u16, rows: u16 },
+    /// Hangs up on the shell and everything it started.
+    #[serde(rename = "terminal.close")]
+    TerminalClose { id: String },
 }
 
 /// A call, with the id its answer will carry.
@@ -116,6 +134,14 @@ pub enum Answer {
         /// None when the file isn't in the last commit, or isn't text.
         text: Option<String>,
     },
+    Terminals {
+        list: Vec<Terminal>,
+    },
+    Terminal(Terminal),
+    /// What a terminal printed lately.
+    Printed {
+        text: String,
+    },
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.
@@ -139,6 +165,10 @@ pub struct Health {
 pub enum Event {
     /// Sent once, first: wbd is up and reading.
     Ready { version: String },
+    /// What a terminal just printed.
+    Terminal { id: String, data: String },
+    /// Every terminal, whenever one opens, closes, or starts or finishes running something.
+    Terminals { list: Vec<Terminal> },
 }
 
 /// Why a call wasn't answered: a JSON-RPC error.

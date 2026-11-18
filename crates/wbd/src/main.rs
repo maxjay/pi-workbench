@@ -6,6 +6,7 @@ mod error;
 mod files;
 mod git;
 mod health;
+mod terminals;
 mod workspaces;
 
 use std::path::{Path, PathBuf};
@@ -13,8 +14,10 @@ use std::sync::Arc;
 
 use error::Error;
 use protocol::{Answer, Call, Event, Failure, FailureKind, Request, WorkspaceView};
+use terminals::Terminals;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use workspaces::Workspaces;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -22,6 +25,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What wbd keeps between calls.
 struct Ctx {
     workspaces: Workspaces,
+    terminals: Terminals,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -30,41 +34,72 @@ async fn main() {
         println!("{VERSION}");
         return;
     }
-    let ctx = Arc::new(Ctx {
-        workspaces: Workspaces::new(&data_dir()),
-    });
-
     // Everything wbd says goes through this one writer, a line at a time.
+    // It stops when told to, after writing what was already said: the
+    // terminals keep a sender for as long as wbd runs, so the channel
+    // never closes by itself.
     let (out, mut lines) = mpsc::unbounded_channel::<String>();
+    let (stop, mut stopped) = oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
-        while let Some(mut line) = lines.recv().await {
-            line.push('\n');
-            if stdout.write_all(line.as_bytes()).await.is_err() || stdout.flush().await.is_err() {
-                break;
+        loop {
+            let line = tokio::select! {
+                line = lines.recv() => line,
+                _ = &mut stopped => None,
+            };
+            let Some(line) = line else { break };
+            if write(&mut stdout, line).await.is_err() {
+                return;
+            }
+        }
+        while let Ok(line) = lines.try_recv() {
+            if write(&mut stdout, line).await.is_err() {
+                return;
             }
         }
     });
+
+    let ctx = Arc::new(Ctx {
+        workspaces: Workspaces::new(&data_dir()),
+        terminals: Terminals::new(out.clone()),
+    });
+    ctx.terminals.start();
 
     let _ = out.send(protocol::event(&Event::Ready {
         version: VERSION.into(),
     }));
 
     // Each call is answered on its own, so a slow one doesn't hold up the rest.
+    let mut answering = JoinSet::new();
     let mut calls = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = calls.next_line().await {
         if line.trim().is_empty() {
             continue;
         }
+        // What you type in a terminal is handled here, in the order it came.
+        if line.contains(r#""method":"terminal.input""#)
+            || line.contains(r#""method":"terminal.resize""#)
+        {
+            let _ = out.send(respond(&ctx, &line).await);
+            continue;
+        }
         let (out, ctx) = (out.clone(), ctx.clone());
-        tokio::spawn(async move {
+        answering.spawn(async move {
             let _ = out.send(respond(&ctx, &line).await);
         });
     }
 
-    // The page hung up. Finish what was asked, then stop.
-    drop(out);
+    // The page hung up. Finish what was asked, hang up on the shells, then stop.
+    while answering.join_next().await.is_some() {}
+    ctx.terminals.shutdown();
+    let _ = stop.send(());
     let _ = writer.await;
+}
+
+async fn write(stdout: &mut tokio::io::Stdout, mut line: String) -> std::io::Result<()> {
+    line.push('\n');
+    stdout.write_all(line.as_bytes()).await?;
+    stdout.flush().await
 }
 
 /// Where wbd keeps its own files: `WB_DATA_DIR`, or `workbench` in your data folder.
@@ -148,6 +183,28 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::GitOriginal { path } => Answer::Original {
             text: git::original(Path::new(&path)).await,
         },
+
+        Call::TerminalsList { dir } => Answer::Terminals {
+            list: ctx.terminals.list(Path::new(&dir)),
+        },
+        Call::TerminalOpen { cwd, cols, rows } => {
+            Answer::Terminal(ctx.terminals.open(Path::new(&cwd), cols, rows)?)
+        }
+        Call::TerminalRead { id } => Answer::Printed {
+            text: ctx.terminals.read(&id)?,
+        },
+        Call::TerminalInput { id, data } => {
+            ctx.terminals.input(&id, &data)?;
+            Answer::Done
+        }
+        Call::TerminalResize { id, cols, rows } => {
+            ctx.terminals.resize(&id, cols, rows)?;
+            Answer::Done
+        }
+        Call::TerminalClose { id } => {
+            ctx.terminals.close(&id)?;
+            Answer::Done
+        }
     })
 }
 
