@@ -21,6 +21,10 @@ pub struct Review {
     pub auto_complete: bool,
     /// Every policy on it is met, the optional ones too. There is nothing left to wait for.
     pub ready: bool,
+    /// You opened it.
+    pub mine: bool,
+    /// What Azure DevOps checks before it lets the pull request complete.
+    pub policies: Vec<Policy>,
     pub reviewers: Vec<Reviewer>,
     /// Your own vote. See [`Reviewer::vote`].
     pub vote: i8,
@@ -32,6 +36,19 @@ pub struct Review {
     pub base: String,
     /// The branch's last commit. The diff ends here.
     pub head: String,
+}
+
+/// One thing Azure DevOps checks before a pull request can complete.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Policy {
+    /// What it checks, in Azure DevOps' own words: `Build`, `Minimum number of reviewers`.
+    pub name: String,
+    /// `approved`, `rejected`, `running`, `queued`, `notApplicable`, `broken`.
+    pub status: String,
+    /// It must be met. One that is not blocking is advice.
+    pub blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]

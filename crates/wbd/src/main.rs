@@ -272,6 +272,15 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.reviews.vote(&ctx.dova, &dir, pr, vote).await?;
             Answer::Done
         }
+        Call::PullEdit {
+            dir,
+            pr,
+            title,
+            description,
+        } => {
+            review::edit(&ctx.dova, &dir, pr, title, description).await?;
+            Answer::Done
+        }
         Call::PullSet { dir, pr, to } => {
             ctx.reviews.set(&ctx.dova, &dir, pr, to).await?;
             Answer::Done

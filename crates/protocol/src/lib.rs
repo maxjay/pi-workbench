@@ -179,6 +179,15 @@ pub enum Call {
         pr: u64,
         vote: i8,
     },
+    /// Changes a pull request's title, its description, or both. What is left out stays as it is.
+    #[serde(rename = "pull.edit")]
+    PullEdit {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        title: Option<String>,
+        description: Option<String>,
+    },
     /// Completes, abandons or reopens a pull request, or moves it in or out of draft.
     #[serde(rename = "pull.set")]
     PullSet {

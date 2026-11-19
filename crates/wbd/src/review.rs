@@ -10,8 +10,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use protocol::{
-    ChangedFile, CheckRun, Comment, DiffKind, DiffLine, FileChange, Place, PullRequest, PullTo,
-    Review, Reviewer, Step, Thread, WorkItemRef,
+    ChangedFile, CheckRun, Comment, DiffKind, DiffLine, FileChange, Place, Policy, PullRequest,
+    PullTo, Review, Reviewer, Step, Thread, WorkItemRef,
 };
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -84,6 +84,8 @@ impl Reviews {
             merge: raw["mergeStatus"].as_str().map(str::to_string),
             auto_complete: raw["autoCompleteSetBy"]["id"].is_string(),
             ready: policies.as_ref().is_ok_and(met),
+            mine: raw["createdBy"]["id"].as_str() == Some(me.as_str()),
+            policies: policies.as_ref().map(listed).unwrap_or_default(),
             reviewers: reviewers
                 .map(|reviewer| Reviewer {
                     name: text(&reviewer["displayName"]),
@@ -319,6 +321,24 @@ pub async fn rerun(dova: &Dova, dir: &str, run: u64) -> Result<(), Error> {
 
 /// A REST call through dova. A picture kept on Azure DevOps that the
 /// answer links to comes back as the picture itself.
+/// Changes a pull request's title, its description, or both.
+pub async fn edit(
+    dova: &Dova,
+    dir: &str,
+    pr: u64,
+    title: Option<String>,
+    description: Option<String>,
+) -> Result<(), Error> {
+    let mut params = json!({ "idOrUrl": pr.to_string() });
+    if let Some(title) = title {
+        params["title"] = json!(title);
+    }
+    if let Some(description) = description {
+        params["body"] = json!(description);
+    }
+    dova.call("pr.edit", dir, params).await.map(|_| ())
+}
+
 async fn get(dova: &Dova, dir: &str, path: String) -> Result<Value, Error> {
     dova.call("api", dir, json!({ "path": path, "inlineImages": true }))
         .await
@@ -355,6 +375,25 @@ fn met(evaluations: &Value) -> bool {
                 Some("approved" | "notApplicable")
             )
         })
+}
+
+/// The policies on a pull request that are switched on, each with where it stands.
+fn listed(evaluations: &Value) -> Vec<Policy> {
+    let all = evaluations["value"].as_array().into_iter().flatten();
+    all.filter(|policy| policy["configuration"]["isEnabled"].as_bool() != Some(false))
+        .map(|policy| {
+            let rule = &policy["configuration"];
+            // A build policy is known by the name it was given, when it has one.
+            let named = rule["settings"]["displayName"]
+                .as_str()
+                .filter(|name| !name.is_empty());
+            Policy {
+                name: named.map_or_else(|| text(&rule["type"]["displayName"]), str::to_string),
+                status: text(&policy["status"]),
+                blocking: rule["isBlocking"].as_bool() == Some(true),
+            }
+        })
+        .collect()
 }
 
 fn vote_of(reviewer: &Value) -> i8 {
@@ -845,6 +884,29 @@ mod tests {
         );
         assert_eq!(steps[2].errors, ["exit code 1"]);
         assert_eq!(errors, ["No agent found"]);
+    }
+
+    #[test]
+    fn lists_the_policies_that_are_on() {
+        let evaluations = json!({ "value": [
+            { "configuration": { "isBlocking": true, "isEnabled": true, "type": { "displayName": "Build" }, "settings": { "displayName": "CI" } }, "status": "rejected" },
+            { "configuration": { "isBlocking": false, "isEnabled": true, "type": { "displayName": "Comment requirements" }, "settings": {} }, "status": "approved" },
+            { "configuration": { "isBlocking": true, "isEnabled": false, "type": { "displayName": "Work item linking" } }, "status": "queued" }
+        ] });
+        let policies = listed(&evaluations);
+        assert_eq!(policies.len(), 2);
+        assert_eq!(
+            (
+                policies[0].name.as_str(),
+                policies[0].status.as_str(),
+                policies[0].blocking
+            ),
+            ("CI", "rejected", true)
+        );
+        assert_eq!(
+            (policies[1].name.as_str(), policies[1].blocking),
+            ("Comment requirements", false)
+        );
     }
 
     #[test]
