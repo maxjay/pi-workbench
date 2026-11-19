@@ -18,12 +18,12 @@ function go() {
   const items: Item[] = [
     ...tabs().map((tab) => ({ group: 'Open tabs', title: titleOf(tab), run: () => open(tab) })),
     ...(workspaces() ?? []).map((view) => ({
-      group: 'Workspaces',
+      group: 'Codespaces',
       title: view.workspace.name,
       detail: view.workspace.path,
       run: () => open(`ws:${view.workspace.id}`),
     })),
-    { group: 'Do', title: 'Open folder', detail: 'as a workspace', run: openFolderDialog },
+    { group: 'Do', title: 'Open folder', detail: 'as a codespace', run: openFolderDialog },
     { group: 'Do', title: 'Settings', detail: 'agents, this machine', run: () => open('settings') },
   ];
   openPalette(items, 'Go to anything');

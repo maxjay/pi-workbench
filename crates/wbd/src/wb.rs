@@ -23,9 +23,9 @@ use crate::{Ctx, repos};
 /// `wb repos` prints no more clones than this at once.
 const LISTED: usize = 200;
 
-const USAGE: &str = "wb name <name>       name the work: the workspace, and the branch in every repo here\n\
+const USAGE: &str = "wb name <name>       name the work: the codespace, and the branch in every repo here\n\
                      wb repos [words]     the user's clones, or those with any of the words\n\
-                     wb add <repo>...     put a worktree of each into this workspace";
+                     wb add <repo>...     put a worktree of each into this codespace";
 
 /// What an agent in a workspace that takes repos is told about it and about `wb`, added to
 /// what it is told about itself.
@@ -36,7 +36,7 @@ pub fn note(workspace: Option<&Workspace>, folder: &Path) -> String {
         .collect();
     let main = workspace.and_then(|workspace| workspace.main.as_deref());
     let mut out = String::from(
-        "This folder is a workspace in the Workbench app, for one piece of work. It holds the \
+        "This folder is a codespace in the Workbench app, for one piece of work. It holds the \
          repositories of the user that the work needs, each in a folder of its own, as a git \
          worktree on the work's branch.\n",
     );
@@ -196,7 +196,7 @@ async fn name(ctx: &Ctx, asked: &Value) -> Result<String, String> {
     let folder = Path::new(&cwd);
     let workspace = ctx.workspaces.at(folder);
     let Some(workspace) = workspace.filter(|workspace| workspace.scratch) else {
-        return Err("This folder is not a workspace the Workbench made. Its name stays.".into());
+        return Err("This folder is not a codespace the Workbench made. Its name stays.".into());
     };
     let was = workspace.work.as_deref().unwrap_or(&workspace.name);
     let Some(new) = asked["name"].as_str().filter(|name| !name.is_empty()) else {
@@ -234,7 +234,7 @@ async fn add(
     let folder = Path::new(&cwd);
     if !repos::takes(folder) {
         return Err(
-            "This folder is a git repository, or inside one. A repo is added to a workspace \
+            "This folder is a git repository, or inside one. A repo is added to a codespace \
              that is not a repo itself: a scratchpad."
                 .into(),
         );
@@ -249,7 +249,7 @@ async fn add(
             .map_err(|why| format!("{why}. `wb repos` lists the clones there are."))?;
         let own = repos::name_of(Path::new(&clone.path));
         if folder.join(&own).exists() {
-            return Err(format!("{own} is already in this workspace, at ./{own}"));
+            return Err(format!("{own} is already in this codespace, at ./{own}"));
         }
         if !clones.contains(&clone.path) {
             clones.push(clone.path.clone());
@@ -268,9 +268,9 @@ async fn add(
         .collect();
     let ask = Ask {
         id: format!("wb-{}", ASKED.fetch_add(1, Ordering::Relaxed)),
-        title: format!("Add {} to this workspace?", all_of(&listing)),
+        title: format!("Add {} to this codespace?", all_of(&listing)),
         message: Some(format!(
-            "A worktree of {} in this workspace's folder, on the branch {branch}. {} not changed.",
+            "A worktree of {} in this codespace's folder, on the branch {branch}. {} not changed.",
             match clones.len() {
                 1 => "your clone",
                 _ => "each of your clones",
@@ -299,7 +299,7 @@ async fn add(
         return Err("The user said no. Nothing was added.".into());
     }
 
-    let mut out = String::from("Added to this workspace:\n");
+    let mut out = String::from("Added to this codespace:\n");
     for clone in &clones {
         let added = repos::add(Path::new(clone), folder, &branch)
             .await

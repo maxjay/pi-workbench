@@ -23,7 +23,7 @@ export function titleOf(tab: TabId) {
   const numbered = numberOf(tab);
   if (numbered !== undefined) return titles[tab] ? `#${numbered} ${titles[tab]}` : `#${numbered}`;
   const id = workspaceOf(tab);
-  return id ? (workspaceById(id)?.workspace.name ?? 'Workspace') : 'Home';
+  return id ? (workspaceById(id)?.workspace.name ?? 'Codespace') : 'Home';
 }
 
 /**

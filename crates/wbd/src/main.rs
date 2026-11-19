@@ -208,7 +208,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::ScratchNew { text, repo } => {
-            let under = ctx.places.own().join("workspaces");
+            let under = ctx.places.own().join("codespaces");
             let main = repo
                 .as_deref()
                 .map(|clone| repos::name_of(Path::new(clone)));
@@ -248,7 +248,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             let folder = Path::new(&dir);
             if !repos::takes(folder) {
                 return Err(Error::Conflict(
-                    "this workspace is a repo itself. A repo is added to one that is not".into(),
+                    "this codespace is a repo itself. A repo is added to one that is not".into(),
                 ));
             }
             let work = ctx

@@ -132,7 +132,7 @@ function Folders() {
       </div>
       <p class="dim">
         A pull request or a ticket opens from any clone in your repos folder, whether or not it is open as a
-        workspace. The agent works on a pull request in a checkout of its own, in the workbench's folder. It
+        codespace. The agent works on a pull request in a checkout of its own, in the workbench's folder. It
         is made from your clone when you first ask the agent something, and removed when the pull request is
         completed or abandoned.
       </p>

@@ -206,7 +206,7 @@ function Page(props: { view: WorkspaceView }) {
             <button
               type="button"
               class="strip-tab"
-              title="Puts a worktree of one of your clones into this workspace, on a branch of its own"
+              title="Puts a worktree of one of your clones into this codespace, on a branch of its own"
               onClick={() => void pickRepo.run()}
             >
               Add repo
@@ -256,7 +256,7 @@ function Page(props: { view: WorkspaceView }) {
                         {repos[part.path]?.git === undefined
                           ? 'Asking git'
                           : takes
-                            ? 'No repo in this workspace yet.'
+                            ? 'No repo in this codespace yet.'
                             : 'Not a git folder.'}
                       </p>
                     }

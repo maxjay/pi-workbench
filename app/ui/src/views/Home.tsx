@@ -116,7 +116,7 @@ export function Home() {
                 {(picked) =>
                   asking.busy()
                     ? `Making a worktree of ${picked().name}`
-                    : `Starts a workspace: a worktree of ${picked().name}, on a branch of its own.`
+                    : `Starts a codespace: a worktree of ${picked().name}, on a branch of its own.`
                 }
               </Show>
             </p>
@@ -131,7 +131,7 @@ export function Home() {
 
       <section class="section" aria-labelledby="workspaces">
         <div class="section-head">
-          <h2 id="workspaces">Workspaces</h2>
+          <h2 id="workspaces">Codespaces</h2>
           <span class="top-gap" />
           <button type="button" class="button" disabled={status() !== 'ready'} onClick={openFolderDialog}>
             Open folder

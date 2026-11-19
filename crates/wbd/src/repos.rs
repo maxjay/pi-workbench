@@ -141,7 +141,7 @@ pub async fn add(clone: &Path, folder: &Path, branch: &str) -> Result<Added, Err
     let there = folder.join(&name);
     if there.exists() {
         return Err(Error::Conflict(format!(
-            "{name} is already in this workspace"
+            "{name} is already in this codespace"
         )));
     }
     let failed = |why: String| Error::Io(format!("couldn't add {name}: {why}"));
