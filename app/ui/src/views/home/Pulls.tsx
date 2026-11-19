@@ -1,15 +1,20 @@
 // Home's two lists of pull requests. "Pull requests" has the ones you opened,
-// from dova, in the whole organization of each folder you have open. A row
-// that needs you says why under it: the check that failed, the thread still
-// open. When dova is missing or signed out, the section says what to run.
-// When there is nothing to list, it says what was asked and what was not.
+// in the whole organization of each folder you have open. "To review" has
+// the open pull requests of other people that you chose to see: by these
+// people, in these repos. Nothing of those is asked for until you choose,
+// because an organization can have thousands.
 //
-// "To review" has the open pull requests of other people that you chose to
-// see: by these people, in these repos. Nothing is asked for until you
-// choose, because an organization can have thousands. Each is one line and
-// says whether you or a team of yours is a reviewer.
+// Both are Home's one table, as the tickets and the workspaces are. The
+// rows are under their repo, and a repo can be shut. A row is its number,
+// its title, and two facts. Of yours: its check and its open threads. Of
+// the ones to review: who opened it and your vote. What a check said and
+// what a thread says are in the pull request's own tab, not here.
+//
+// When dova is missing or signed out, the section says what to run. When
+// there is nothing to list, it says what was asked and what was not.
 
-import { createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { createMemo, createSignal, For, type JSX, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { createStore } from 'solid-js/store';
 import { pullHue } from '../../components/hues';
 import { openFolderDialog } from '../../components/OpenFolder';
 import { openUrl } from '../../components/open';
@@ -53,94 +58,128 @@ function Run(props: { command: string; onDone: () => void }) {
   );
 }
 
-function Row(props: { row: PullRow }) {
-  const row = () => props.row;
-  const state = () => (row().isDraft ? 'draft' : row().status);
-  return (
-    <div class="pull">
-      <button
-        type="button"
-        class="row pull-row"
-        disabled={!row().workspace}
-        onClick={() => {
-          const workspace = row().workspace;
-          if (!workspace) return;
-          open(`pr:${workspace}:${row().id}`);
-        }}
-      >
-        <span style={{ color: pullHue(row().id) }}>#{row().id}</span>
-        <span class="pull-title">{row().title}</span>
-        <span>{row().repo}</span>
-        <span class="dim">
-          {row().sourceBranch} -&gt; {row().targetBranch}
-        </span>
-        <span classList={{ dim: row().isDraft }}>{state()}</span>
-        <span class="pull-check" data-result={row().check?.result ?? 'none'}>
-          {row().check ? (row().check?.result ?? 'running') : 'none'}
-        </span>
-        <span class="pull-threads" data-open={row().openThreads > 0}>
-          {row().openThreads > 0 ? `${row().openThreads} open` : '0'}
-        </span>
-      </button>
-      <Show when={row().failed}>
-        {(why) => (
-          <p class="pull-why">
-            <span class="note-failed">{row().check?.name} failed.</span> {why()}
-          </p>
-        )}
-      </Show>
-      <Show when={row().thread}>
-        {(thread) => (
-          <p class="pull-why">
-            <span class="pull-thread">#{thread().id}</span>{' '}
-            <Show when={thread().location}>
-              {(at) => (
-                <>
-                  {at().file}
-                  {at().line ? `:${at().line}` : ''} ·{' '}
-                </>
-              )}
-            </Show>
-            {thread().lastAuthor}: {thread().lastComment}
-          </p>
-        )}
-      </Show>
-      <Show when={!row().workspace}>
-        <p class="pull-why">
-          The {row().repo} repo is not open here.{' '}
-          <button type="button" class="pull-open" onClick={openFolderDialog}>
-            Open its folder
-          </button>
-        </p>
-      </Show>
-    </div>
+/** The repos you shut, in either list. Kept in the window's own storage. */
+const [shut, setShut] = createStore<Record<string, boolean>>(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem('pulls-shut') ?? '{}') ?? {};
+    } catch {
+      return {};
+    }
+  })(),
+);
+
+function toggle(key: string) {
+  setShut(key, !shut[key]);
+  localStorage.setItem('pulls-shut', JSON.stringify(shut));
+}
+
+interface Group {
+  key: string;
+  project: string;
+  repo: string;
+  rows: PullRow[];
+}
+
+/** Rows under their repo, the repos by project and then by name. The rows of one repo stay in the order they came. */
+function byRepo(rows: PullRow[]): Group[] {
+  const groups = new Map<string, Group>();
+  for (const row of rows) {
+    const key = `${row.project}/${row.repo}`.toLowerCase();
+    const group = groups.get(key) ?? { key, project: row.project, repo: row.repo, rows: [] };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort(
+    (a, b) => a.project.localeCompare(b.project) || a.repo.localeCompare(b.repo),
   );
 }
 
-/** One to review: a line. It opens here when its repo is open here, and on Azure DevOps when not. */
-function ReviewRow(props: { row: PullRow }) {
-  const row = () => props.row;
+/**
+ * Pull requests under their repos, as rows of Home's table. `facts` gives a row its two facts.
+ * A repo's project is said only when the rows are in more than one.
+ */
+function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: PullRow) => JSX.Element }) {
+  const groups = createMemo(() => byRepo(props.rows));
+  const projects = () => new Set(props.rows.map((row) => row.project.toLowerCase())).size;
+  /** A row opens here when its repo is open here, and on Azure DevOps when not. */
+  const go = (row: PullRow) => (row.workspace ? open(`pr:${row.workspace}:${row.id}`) : openUrl(row.url));
   return (
-    <button
-      type="button"
-      class="row pull-row pull-review"
-      title={row().workspace ? undefined : `The ${row().repo} repo is not open here. Opens on Azure DevOps.`}
-      onClick={() => {
-        const workspace = row().workspace;
-        if (workspace) open(`pr:${workspace}:${row().id}`);
-        else openUrl(row().url);
+    <For each={groups()}>
+      {(group) => {
+        const key = `${props.list}:${group.key}`;
+        return (
+          <>
+            <button
+              type="button"
+              class="row table-group"
+              aria-expanded={!shut[key]}
+              onClick={() => toggle(key)}
+            >
+              <Show when={projects() > 1}>
+                <span class="dim">{group.project} /</span>
+              </Show>
+              <span>{group.repo}</span>
+              <span class="dim">{group.rows.length}</span>
+            </button>
+            <Show when={!shut[key]}>
+              <For each={group.rows}>
+                {(row) => (
+                  <button
+                    type="button"
+                    class="row table-row"
+                    title={
+                      row.workspace
+                        ? undefined
+                        : `The ${row.repo} repo is not open here. Opens on Azure DevOps.`
+                    }
+                    onClick={() => go(row)}
+                  >
+                    <span style={{ color: pullHue(row.id) }}>#{row.id}</span>
+                    <span class="table-name">
+                      {row.title}
+                      <Show when={row.isDraft}>
+                        <span class="table-aside">draft</span>
+                      </Show>
+                    </span>
+                    {props.facts(row)}
+                  </button>
+                )}
+              </For>
+            </Show>
+          </>
+        );
       }}
-    >
-      <span style={{ color: pullHue(row().id) }}>#{row().id}</span>
-      <span class="pull-title">{row().title}</span>
-      <span title={`${row().project}/${row().repo}`}>{row().repo}</span>
-      <span class="dim">{row().author}</span>
-      <span classList={{ dim: row().isDraft }}>{row().isDraft ? 'draft' : row().status}</span>
-      <Show when={row().review} fallback={<span class="dim">not asked</span>}>
-        {(review) => <span classList={{ dim: review().vote === 'none' }}>{review().vote}</span>}
-      </Show>
-      <span class="dim">{row().review ? (row().review?.team ?? 'you') : ''}</span>
-    </button>
+    </For>
+  );
+}
+
+/** One of yours: its latest check, and how many threads are open. */
+function yoursFacts(row: PullRow) {
+  const check = () => (row.check ? (row.check.result ?? 'running') : '');
+  const threads = () => (row.openThreads === 1 ? '1 thread' : `${row.openThreads} threads`);
+  return (
+    <>
+      <span data-state={check()}>{check() === 'succeeded' ? 'passed' : check()}</span>
+      <span>{row.openThreads > 0 ? threads() : ''}</span>
+    </>
+  );
+}
+
+/** One to review: who opened it, and your vote. The team is said when you were asked through one. */
+function reviewFacts(row: PullRow) {
+  const vote = () => (row.review ? (row.review.vote === 'none' ? 'no vote' : row.review.vote) : 'not asked');
+  const quiet = () => !row.review || row.review.vote === 'none';
+  return (
+    <>
+      <span class="dim">{row.author}</span>
+      <span
+        classList={{ dim: quiet() }}
+        title={row.review?.team ? `Asked through ${row.review.team}` : undefined}
+      >
+        {vote()}
+      </span>
+    </>
   );
 }
 
@@ -183,40 +222,31 @@ function ToReview() {
           {any() ? 'Change' : 'Choose'}
         </button>
       </div>
-      <Switch>
-        {/* Nothing is asked for until you choose: an organization can have thousands open. */}
-        <Match when={!any()}>
-          <p class="rows-none dim">
-            Nothing is loaded here yet. Choose the people, teams, repos or projects whose pull requests you
-            want to see.
-          </p>
-        </Match>
-        <Match when={toReview.error && !pulls.error}>
-          <p class="rows-none note-failed">{failure()}</p>
-        </Match>
-        <Match when={toReview.latest}>
-          <div class="rows rows-review">
+      <div class="rows">
+        <Switch>
+          {/* Nothing is asked for until you choose: an organization can have thousands open. */}
+          <Match when={!any()}>
+            <p class="rows-none dim">
+              Nothing is loaded here yet. Choose the people, teams, repos or projects whose pull requests you
+              want to see.
+            </p>
+          </Match>
+          <Match when={toReview.error && !pulls.error}>
+            <p class="rows-none note-failed">{failure()}</p>
+          </Match>
+          <Match when={toReview.latest}>
             <Show
               when={rows().length > 0}
               fallback={<p class="rows-none dim">None open {where()} you chose, apart from your own.</p>}
             >
-              <div class="pull-row pull-head dim">
-                <span>#</span>
-                <span>Title</span>
-                <span>Repo</span>
-                <span>By</span>
-                <span>State</span>
-                <span>Your vote</span>
-                <span>Asked as</span>
-              </div>
-              <For each={rows()}>{(row) => <ReviewRow row={row} />}</For>
+              <Table list="review" rows={rows()} facts={reviewFacts} />
             </Show>
-          </div>
-        </Match>
-        <Match when={toReview.loading || filtering()}>
-          <p class="rows-none dim">Asking Azure DevOps</p>
-        </Match>
-      </Switch>
+          </Match>
+          <Match when={toReview.loading || filtering()}>
+            <p class="rows-none dim">Asking Azure DevOps</p>
+          </Match>
+        </Switch>
+      </div>
     </section>
   );
 }
@@ -229,7 +259,6 @@ function Yours() {
     return error instanceof Error ? error.message : String(error);
   };
   const rows = () => listed() ?? [];
-  const needYou = () => rows().filter((row) => row.failed || row.thread).length;
   /** The folders that were passed over: their remote is not on Azure Repos, or they have none. */
   const passed = () => asked().filter((folder) => !folder.project);
 
@@ -238,9 +267,7 @@ function Yours() {
       <div class="section-head">
         <h2 id="pulls">Pull requests</h2>
         <Show when={rows().length}>
-          <span class="dim">
-            {rows().length} yours{needYou() > 0 ? `, ${needYou()} need you` : ''}
-          </span>
+          <span class="dim">{rows().length}</span>
         </Show>
       </div>
       <Switch>
@@ -268,16 +295,7 @@ function Yours() {
         </Match>
         <Match when={listed()}>
           <div class="rows">
-            <div class="pull-row pull-head dim">
-              <span>#</span>
-              <span>Title</span>
-              <span>Repo</span>
-              <span>Branch</span>
-              <span>State</span>
-              <span>Check</span>
-              <span>Threads</span>
-            </div>
-            <For each={rows()}>{(row) => <Row row={row} />}</For>
+            <Table list="yours" rows={rows()} facts={yoursFacts} />
             {/* Nothing to list: say what was asked, so it is plain whether that is right. */}
             <Show when={rows().length === 0}>
               <div class="rows-none dim pulls-why">

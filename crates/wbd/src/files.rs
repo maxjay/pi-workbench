@@ -1,5 +1,6 @@
-//! Files: listed for the tree, read for the editor, and saved from it unless
-//! something else changed them first.
+//! Files: one folder read for the tree, every file listed to find one by
+//! name, a file read for the editor, and saved from it unless something else
+//! changed it first.
 
 use std::io::Read;
 use std::path::Path;
@@ -11,10 +12,11 @@ use protocol::{FileContent, FileView};
 const TEXT_LIMIT: usize = 512 * 1024;
 
 /// No more paths than this are listed.
-const LIST_LIMIT: usize = 5000;
+const LIST_LIMIT: usize = 100_000;
 
-/// Folders a listing skips, as nobody means a file in them.
-const SKIPPED: [&str; 6] = [
+/// Folders the walk of a folder outside git skips, as nobody means a file in them.
+const SKIPPED: [&str; 7] = [
+    ".git",
     "node_modules",
     "target",
     "__pycache__",
@@ -23,44 +25,81 @@ const SKIPPED: [&str; 6] = [
     "build",
 ];
 
-/// The files under `dir`, as paths relative to it, sorted, skipping hidden
-/// files and folders and ones like `node_modules`. True when there were
-/// more than [`LIST_LIMIT`].
-pub fn list(dir: &Path) -> (Vec<String>, bool) {
+/// What `dir` holds directly, as names: its folders and its files, each
+/// sorted without regard to case. A link to a folder is a folder. Only `.git`
+/// is left out.
+pub fn entries(dir: &Path) -> std::io::Result<(Vec<String>, Vec<String>)> {
+    let (mut folders, mut files) = (Vec::new(), Vec::new());
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == ".git" {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        // Only a link needs a second look, at what it points to.
+        if kind.is_dir() || (kind.is_symlink() && entry.path().is_dir()) {
+            folders.push(name);
+        } else {
+            files.push(name);
+        }
+    }
+    for names in [&mut folders, &mut files] {
+        // Sorted twice so that `A` and `a` always come in the same order.
+        names.sort();
+        names.sort_by_cached_key(|name| name.to_lowercase());
+    }
+    Ok((folders, files))
+}
+
+/// Every file under `dir`, as paths relative to it, sorted. In a git
+/// repository these are the files git tracks or would track, so only what
+/// the repository ignores is left out. Elsewhere the folder is walked. True
+/// when there were more than [`LIST_LIMIT`].
+pub async fn list(dir: &Path) -> (Vec<String>, bool) {
+    let mut paths = match crate::git::files(dir).await {
+        Some(paths) => paths,
+        None => {
+            let dir = dir.to_path_buf();
+            let walking = tokio::task::spawn_blocking(move || walk(&dir));
+            walking.await.unwrap_or_default()
+        }
+    };
+    paths.sort();
+    // git names a file in a conflict once for each side.
+    paths.dedup();
+    let truncated = paths.len() > LIST_LIMIT;
+    paths.truncate(LIST_LIMIT);
+    (paths, truncated)
+}
+
+/// The files under `dir`, skipping only the [`SKIPPED`] folders. Stops at
+/// one more than [`LIST_LIMIT`].
+fn walk(dir: &Path) -> Vec<String> {
     let mut paths = Vec::new();
     let mut folders = vec![dir.to_path_buf()];
-    let mut truncated = false;
     while let Some(folder) = folders.pop() {
         let Ok(entries) = std::fs::read_dir(&folder) else {
             continue;
         };
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') {
-                continue;
-            }
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
             let path = entry.path();
             if kind.is_dir() {
-                if !SKIPPED.contains(&name.as_ref()) {
+                if !SKIPPED.contains(&entry.file_name().to_string_lossy().as_ref()) {
                     folders.push(path);
                 }
-            } else if paths.len() >= LIST_LIMIT {
-                truncated = true;
-                break;
             } else if let Ok(relative) = path.strip_prefix(dir) {
                 paths.push(relative.display().to_string());
+                if paths.len() > LIST_LIMIT {
+                    return paths;
+                }
             }
         }
-        if truncated {
-            break;
-        }
     }
-    paths.sort();
-    (paths, truncated)
+    paths
 }
 
 pub fn read(path: &Path) -> std::io::Result<FileView> {
@@ -162,23 +201,83 @@ pub fn write_whole(
 mod tests {
     use super::*;
 
-    #[test]
-    fn lists_a_folder_but_not_whats_hidden_or_built() {
+    /// A folder with these files in it, each holding `x`.
+    fn folder_with(files: &[&str]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        for file in [
-            "plan.md",
-            "notes/a.md",
-            ".git/HEAD",
-            "node_modules/x/i.js",
-            ".env",
-        ] {
+        for file in files {
             let path = dir.path().join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "x").unwrap();
         }
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_one_folder_and_leaves_out_only_git() {
+        let dir = folder_with(&[
+            ".git/HEAD",
+            ".github/ci.yml",
+            ".gitignore",
+            "Src/deep/a.rs",
+            "Zed.md",
+            "about.md",
+            "build/out.rs",
+            "node_modules/x/i.js",
+        ]);
+        std::os::unix::fs::symlink(dir.path().join("Src"), dir.path().join("link")).unwrap();
+        let names = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
         assert_eq!(
-            list(dir.path()),
-            (vec!["notes/a.md".into(), "plan.md".into()], false)
+            entries(dir.path()).unwrap(),
+            (
+                names(&[".github", "build", "link", "node_modules", "Src"]),
+                names(&[".gitignore", "about.md", "Zed.md"])
+            )
+        );
+        assert!(entries(&dir.path().join("gone")).is_err());
+    }
+
+    #[test]
+    fn walks_a_folder_outside_git() {
+        let dir = folder_with(&[
+            "plan.md",
+            "notes/a.md",
+            ".env",
+            ".github/ci.yml",
+            ".git/HEAD",
+            "node_modules/x/i.js",
+        ]);
+        let mut paths = walk(dir.path());
+        paths.sort();
+        assert_eq!(paths, [".env", ".github/ci.yml", "notes/a.md", "plan.md"]);
+    }
+
+    #[tokio::test]
+    async fn lists_what_git_tracks_or_would() {
+        let dir = folder_with(&[
+            ".github/ci.yml",
+            "build/a.rs",
+            "inner/a.txt",
+            "new.txt",
+            "node_modules/x/i.js",
+        ]);
+        std::fs::write(dir.path().join(".gitignore"), "node_modules/").unwrap();
+        // `inner` is a repository of its own, so its files are not this one's.
+        let init = |at: &Path| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(at)
+                .args(["init", "-q"])
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+        if !init(dir.path()) || !init(&dir.path().join("inner")) {
+            return;
+        }
+        let paths = [".github/ci.yml", ".gitignore", "build/a.rs", "new.txt"];
+        assert_eq!(
+            list(dir.path()).await,
+            (paths.map(String::from).to_vec(), false)
         );
     }
 

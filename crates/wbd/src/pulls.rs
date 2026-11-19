@@ -19,8 +19,6 @@ use crate::review::Reviews;
 
 #[derive(Default)]
 pub struct Pulls {
-    /// Why each failed run failed, by run id. A finished run doesn't change.
-    failed: Mutex<HashMap<u64, String>>,
     /// The teams you are in, by organization. Asked once: they change rarely.
     teams: Mutex<HashMap<String, Vec<Mine>>>,
     /// Who is in each of those teams, by the team's id. Asked once.
@@ -119,8 +117,8 @@ impl Pulls {
         Ok(rows)
     }
 
-    /// The pull requests you opened, each with its check, its open threads and what it waits
-    /// on, in the whole of each organization a workspace is cloned from: its other projects
+    /// The pull requests you opened, each with its check and how many threads are open, in
+    /// the whole of each organization a workspace is cloned from: its other projects
     /// too. With them, every folder that was looked at and every project that was asked, so
     /// an empty list can say why. This takes requests for each pull request.
     pub async fn list(
@@ -174,14 +172,6 @@ impl Pulls {
                     // The ones you opened are listed as yours, even where you are a reviewer too.
                     row.review = None;
                     row.workspace = home(&clones, &row);
-                    // Why a check failed and which thread is open are asked for one row at a time.
-                    let failed = |run: &PipelineRun| run.result.as_deref() == Some("failed");
-                    if row.check.as_ref().is_some_and(failed) {
-                        row.failed = self.why(dova, cwd, &row).await;
-                    }
-                    if row.open_threads > 0 {
-                        row.thread = first_open(dova, cwd, row.pr.id).await;
-                    }
                     rows.push(row);
                 }
                 searched.push(project);
@@ -429,24 +419,6 @@ impl Pulls {
             .insert(site.to_string(), repos.clone());
         repos
     }
-
-    /// Why a row's check failed, in a line. Asked once for each run.
-    async fn why(&self, dova: &Dova, cwd: &str, row: &PullRow) -> Option<String> {
-        let run = row.check.as_ref()?.id;
-        if let Some(known) = self.failed.lock().expect("not poisoned").get(&run) {
-            return Some(known.clone());
-        }
-        let log = dova
-            .call("pipeline.log", cwd, json!({ "run": run.to_string() }))
-            .await
-            .ok()?;
-        let reason = reason(&log)?;
-        self.failed
-            .lock()
-            .expect("not poisoned")
-            .insert(run, reason.clone());
-        Some(reason)
-    }
 }
 
 /// A folder's branch and its pull request: dova's `status`. With `pr`, that
@@ -536,16 +508,6 @@ fn shape<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
         .map_err(|err| Error::Dova(format!("couldn't read what dova said: {err}")))
 }
 
-/// The first thread on a pull request that still wants an answer.
-async fn first_open(dova: &Dova, cwd: &str, pr: u64) -> Option<ThreadSummary> {
-    let view = dova
-        .call("pr.view", cwd, json!({ "idOrUrl": pr.to_string() }))
-        .await
-        .ok()?;
-    let threads: Vec<ThreadSummary> = serde_json::from_value(view["threads"].clone()).ok()?;
-    threads.into_iter().find(|thread| thread.unresolved)
-}
-
 /// The projects, anywhere in the organization `cwd` is cloned from, that have an open pull
 /// request you opened. Nothing when the organization will not say.
 async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str) -> Vec<String> {
@@ -619,8 +581,6 @@ fn review_row(pull: &Value, site: &str, me: &str, teams: &[Mine]) -> Option<Pull
         },
         check: None,
         open_threads: 0,
-        failed: None,
-        thread: None,
         workspace: None,
         author: pull["createdBy"]["displayName"]
             .as_str()
@@ -766,14 +726,6 @@ pub fn azure(remote: &str) -> Option<(String, String)> {
     Some((project.to_string(), repo.to_string()))
 }
 
-/// Why a run failed, from its log as dova gives it: what the pipeline
-/// itself said went wrong, or else which task failed.
-fn reason(log: &Value) -> Option<String> {
-    let first = |key: &str| log[key].as_array()?.first()?.as_str().map(str::to_string);
-    first("errors")
-        .or_else(|| first("failedTasks").map(|task| format!("Failed in the task {task}")))
-}
-
 #[cfg(test)]
 mod tests {
     use protocol::PullRequest;
@@ -837,18 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn says_why_a_run_failed() {
-        let no_agent = json!({ "errors": ["No agent found"], "failedTasks": ["Job"] });
-        assert_eq!(reason(&no_agent).as_deref(), Some("No agent found"));
-        let tests = json!({ "errors": [], "failedTasks": ["npm test"] });
-        assert_eq!(
-            reason(&tests).as_deref(),
-            Some("Failed in the task npm test")
-        );
-        assert_eq!(reason(&json!({ "errors": [], "failedTasks": [] })), None);
-    }
-
-    #[test]
     fn a_pull_request_belongs_to_the_workspace_on_its_branch() {
         let clone = |id: &str, repo: &str, branch: &str| Clone {
             workspace: Workspace {
@@ -881,8 +821,6 @@ mod tests {
             },
             check: None,
             open_threads: 0,
-            failed: None,
-            thread: None,
             workspace: None,
             author: None,
             author_id: None,

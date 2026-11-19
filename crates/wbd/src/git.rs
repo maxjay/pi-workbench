@@ -79,6 +79,29 @@ pub async fn status(dir: &Path) -> Option<GitStatus> {
     })
 }
 
+/// The files under `dir` that git tracks or would track, relative to `dir`:
+/// what the repository ignores is left out. So is another repository inside
+/// this one that git does not track: git names it as one folder, ending in
+/// `/`. None outside git.
+pub async fn files(dir: &Path) -> Option<Vec<String>> {
+    let listed = git(
+        dir,
+        &[
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+    )
+    .await?;
+    let text = String::from_utf8_lossy(&listed);
+    let names = text
+        .split('\0')
+        .filter(|name| !name.is_empty() && !name.ends_with('/'));
+    Some(names.map(str::to_string).collect())
+}
+
 /// Where the folder's repository was cloned from. None outside git, or with no `origin`.
 pub async fn origin(dir: &Path) -> Option<String> {
     let url = git(dir, &["remote", "get-url", "origin"]).await?;

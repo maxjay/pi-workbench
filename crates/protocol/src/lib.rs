@@ -53,7 +53,10 @@ pub enum Call {
     #[serde(rename = "folders.list")]
     FoldersList { dir: String },
 
-    /// The files under `dir`, relative to it.
+    /// The folders and files directly inside `dir`, for the tree.
+    #[serde(rename = "folder.read")]
+    FolderRead { dir: String },
+    /// Every file under `dir`, relative to it, to find one by name.
     #[serde(rename = "files.list")]
     FilesList { dir: String },
     #[serde(rename = "file.read")]
@@ -446,6 +449,11 @@ pub enum Answer {
         /// The folder listed, with `~` resolved.
         dir: String,
         folders: Vec<Folder>,
+    },
+    /// What one folder holds, as names, each list sorted without regard to case.
+    Entries {
+        folders: Vec<String>,
+        files: Vec<String>,
     },
     Files {
         files: Vec<String>,

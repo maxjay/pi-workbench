@@ -3,46 +3,7 @@
 
 import { For, Show } from 'solid-js';
 import type { GitMark } from '../../protocol/GitMark';
-import { toggleFolder } from './ui';
-
-interface Node {
-  name: string;
-  /** Relative to the workspace. */
-  path: string;
-  /** A folder's children, folders first. Undefined for a file. */
-  children?: Node[];
-}
-
-/** Turns sorted relative paths into a tree, folders before files. */
-export function tree(files: string[]): Node[] {
-  const root: Node[] = [];
-  const folders = new Map<string, Node[]>([['', root]]);
-  for (const file of files) {
-    const parts = file.split('/');
-    let path = '';
-    let into = root;
-    for (const [i, name] of parts.entries()) {
-      path = path ? `${path}/${name}` : name;
-      if (i === parts.length - 1) {
-        into.push({ name, path });
-        continue;
-      }
-      let children = folders.get(path);
-      if (!children) {
-        children = [];
-        folders.set(path, children);
-        into.push({ name, path, children });
-      }
-      into = children;
-    }
-  }
-  const sort = (nodes: Node[]) => {
-    nodes.sort((a, b) => Number(!a.children) - Number(!b.children) || a.name.localeCompare(b.name));
-    for (const node of nodes) if (node.children) sort(node.children);
-  };
-  sort(root);
-  return root;
-}
+import type { Listing } from '../../state/repo';
 
 /** The letter git's mark shows as, and the state it means. */
 export const marks: Record<GitMark, { letter: string; state: 'working' | 'ok' | 'failed' }> = {
@@ -55,30 +16,52 @@ export const marks: Record<GitMark, { letter: string; state: 'working' | 'ok' | 
 };
 
 export function Tree(props: {
-  id: string;
-  files: string[];
+  /** What each folder that was read holds, by path relative to the workspace. */
+  folders: Record<string, Listing>;
   expanded: string[];
   /** Git's mark for each changed file, by relative path. */
   changed: Map<string, GitMark>;
   /** The file shown in the editor, relative to the workspace. */
   current: string | undefined;
   onOpen: (path: string) => void;
+  /** Opens a folder, or shuts it if it is open. */
+  onToggle: (path: string) => void;
 }) {
-  const Rows = (rows: { nodes: Node[]; depth: number }) => (
-    <For each={rows.nodes}>
-      {(node) => (
-        <Show
-          when={node.children}
-          fallback={
+  /** The rows for what one folder holds: its folders, then its files. */
+  const Rows = (rows: { path: string; depth: number }) => {
+    const inside = (name: string) => (rows.path ? `${rows.path}/${name}` : name);
+    const indent = () => ({ 'padding-left': `${20 + rows.depth * 14}px` });
+    return (
+      <>
+        <For each={props.folders[rows.path]?.folders}>
+          {(name) => (
+            <>
+              <button
+                type="button"
+                class="row tree-row tree-folder"
+                style={indent()}
+                aria-expanded={props.expanded.includes(inside(name))}
+                onClick={() => props.onToggle(inside(name))}
+              >
+                <span class="tree-name">{name}/</span>
+              </button>
+              <Show when={props.expanded.includes(inside(name))}>
+                <Rows path={inside(name)} depth={rows.depth + 1} />
+              </Show>
+            </>
+          )}
+        </For>
+        <For each={props.folders[rows.path]?.files}>
+          {(name) => (
             <button
               type="button"
               class="row tree-row"
-              style={{ 'padding-left': `${20 + rows.depth * 14}px` }}
-              aria-current={props.current === node.path ? 'true' : undefined}
-              onClick={() => props.onOpen(node.path)}
+              style={indent()}
+              aria-current={props.current === inside(name) ? 'true' : undefined}
+              onClick={() => props.onOpen(inside(name))}
             >
-              <span class="tree-name">{node.name}</span>
-              <Show when={props.changed.get(node.path)}>
+              <span class="tree-name">{name}</span>
+              <Show when={props.changed.get(inside(name))}>
                 {(mark) => (
                   <span class="mark" data-state={marks[mark()].state}>
                     {marks[mark()].letter}
@@ -86,27 +69,10 @@ export function Tree(props: {
                 )}
               </Show>
             </button>
-          }
-        >
-          {(children) => (
-            <>
-              <button
-                type="button"
-                class="row tree-row tree-folder"
-                style={{ 'padding-left': `${20 + rows.depth * 14}px` }}
-                aria-expanded={props.expanded.includes(node.path)}
-                onClick={() => toggleFolder(props.id, node.path)}
-              >
-                <span class="tree-name">{node.name}/</span>
-              </button>
-              <Show when={props.expanded.includes(node.path)}>
-                <Rows nodes={children()} depth={rows.depth + 1} />
-              </Show>
-            </>
           )}
-        </Show>
-      )}
-    </For>
-  );
-  return <Rows nodes={tree(props.files)} depth={0} />;
+        </For>
+      </>
+    );
+  };
+  return <Rows path="" depth={0} />;
 }

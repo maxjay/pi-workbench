@@ -7,7 +7,7 @@ import { openPalette } from '../components/Palette';
 import type { GitMark } from '../protocol/GitMark';
 import type { WorkspaceView } from '../protocol/WorkspaceView';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
-import { refreshRepo, repos } from '../state/repo';
+import { allFiles, readFolder, refreshRepo, repos } from '../state/repo';
 import { open } from '../state/tabs';
 import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
@@ -16,7 +16,17 @@ import { NewPull } from './workspace/NewPull';
 import { BranchPull } from './workspace/Pull';
 import { Terminals } from './workspace/Terminals';
 import { marks, Tree } from './workspace/Tree';
-import { closeTab, isFile, labelOf, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
+import {
+  closeTab,
+  isFile,
+  labelOf,
+  nameOf,
+  openTab,
+  setConversation,
+  setLeft,
+  toggleFolder,
+  uiOf,
+} from './workspace/ui';
 
 export function WorkspacePage(props: { id: string }) {
   return (
@@ -48,6 +58,9 @@ function Page(props: { view: WorkspaceView }) {
   const root = props.view.workspace.path;
   const ui = () => uiOf(id);
   const repo = () => repos[root];
+  /** The workspace's own folder, as last read. */
+  const top = () => repo()?.folders[''];
+  const refresh = () => refreshRepo(root, ui().expanded);
   const absolute = (relative: string) => `${root}/${relative}`;
   const relative = (path: string) => path.slice(root.length + 1);
 
@@ -63,7 +76,7 @@ function Page(props: { view: WorkspaceView }) {
   const editor = createEditor({
     path: file,
     gitKey: () => JSON.stringify(repo()?.git?.summary ?? null),
-    onSaved: () => void refreshRepo(root),
+    onSaved: () => void refresh(),
   });
 
   const close = (tab: string) => {
@@ -74,25 +87,33 @@ function Page(props: { view: WorkspaceView }) {
     }
   };
 
-  const onKey = (e: KeyboardEvent) => {
+  /** Opens a folder in the tree and reads it at once, or shuts it. */
+  const toggle = (folder: string) => {
+    toggleFolder(id, folder);
+    if (ui().expanded.includes(folder)) void readFolder(root, folder);
+  };
+
+  // Ctrl P asks for every file only now: in a large repository that is a long list.
+  const onKey = async (e: KeyboardEvent) => {
     if (!(e.ctrlKey || e.metaKey) || e.key !== 'p') return;
     e.preventDefault();
+    const { files, truncated } = await allFiles(root);
     openPalette(
-      (repo()?.files ?? []).map((path) => ({
+      files.map((path) => ({
         group: 'Files',
         title: nameOf(path),
         detail: path,
         run: () => openTab(id, absolute(path)),
       })),
-      'Find a file',
+      truncated ? `Find a file (the first ${files.length.toLocaleString('en-US')})` : 'Find a file',
     );
   };
 
   onMount(() => {
-    void refreshRepo(root);
-    // The folder and git are asked again every few seconds, and the open
-    // files checked against the disk more often than that.
-    const repoTimer = setInterval(() => document.hidden || void refreshRepo(root), 5000);
+    void refresh();
+    // The open folders and git are asked again every few seconds, and the
+    // open files checked against the disk more often than that.
+    const repoTimer = setInterval(() => document.hidden || void refresh(), 5000);
     const diskTimer = setInterval(async () => {
       if (document.hidden) return;
       const fresh = await checkDisk(ui().tabs.filter(isFile)).catch(() => new Map<string, string>());
@@ -134,18 +155,18 @@ function Page(props: { view: WorkspaceView }) {
               {(r) => (
                 <>
                   <Tree
-                    id={id}
-                    files={r().files}
+                    folders={r().folders}
                     expanded={ui().expanded}
                     changed={changed()}
                     current={file() ? relative(file() as string) : undefined}
                     onOpen={(path) => openTab(id, absolute(path))}
+                    onToggle={toggle}
                   />
-                  <Show when={r().files.length === 0}>
-                    <p class="left-note dim">This folder is empty.</p>
+                  <Show when={!top()}>
+                    <p class="left-note dim">This folder could not be read.</p>
                   </Show>
-                  <Show when={r().truncated}>
-                    <p class="left-note dim">Only the first {r().files.length} files are listed.</p>
+                  <Show when={top()?.folders.length === 0 && top()?.files.length === 0}>
+                    <p class="left-note dim">This folder is empty.</p>
                   </Show>
                 </>
               )}

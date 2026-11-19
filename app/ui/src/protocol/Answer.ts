@@ -32,7 +32,7 @@ export type Answer = { "kind": "done" } | { "kind": "health" } & Health | { "kin
 /**
  * The folder listed, with `~` resolved.
  */
-dir: string, folders: Array<Folder>, } | { "kind": "files", files: Array<string>, 
+dir: string, folders: Array<Folder>, } | { "kind": "entries", folders: Array<string>, files: Array<string>, } | { "kind": "files", files: Array<string>, 
 /**
  * True when there were more files than are listed.
  */

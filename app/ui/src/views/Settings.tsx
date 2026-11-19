@@ -24,7 +24,7 @@ export function Settings() {
           <For each={['pi', 'claude'] as Agent[]}>
             {(agent) => (
               <div class="row setting-row">
-                <span class="workspace-name">{agentName[agent]}</span>
+                <span class="table-name">{agentName[agent]}</span>
                 <span classList={{ dim: !version(agent) }}>
                   {version(agent) ?? 'not found in WSL'}
                   <Show when={version(agent)}>

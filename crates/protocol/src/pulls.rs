@@ -71,12 +71,6 @@ pub struct PullRow {
     /// Its latest check, if it has one.
     pub check: Option<PipelineRun>,
     pub open_threads: u32,
-    /// Why the check failed, in a line, when it did.
-    #[serde(default)]
-    pub failed: Option<String>,
-    /// The first thread that still wants an answer.
-    #[serde(default)]
-    pub thread: Option<ThreadSummary>,
     /// The workspace that has this pull request's repo, if one does.
     #[serde(default)]
     pub workspace: Option<String>,

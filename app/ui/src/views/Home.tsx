@@ -14,13 +14,19 @@ import { Pulls } from './home/Pulls';
 import { Tickets } from './home/Tickets';
 import { setConversation } from './workspace/ui';
 
-/** Where a workspace's git stands, in a few words. */
+/** What a workspace is on: its branch, or why it has none. */
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
   if (view.workspace.scratch) return 'scratchpad';
-  if (!view.git) return 'not a git folder';
-  return `${view.git.branch} · ${view.git.files === 0 ? 'clean' : `${view.git.files} changed`}`;
+  return view.git ? view.git.branch : 'not a git folder';
 }
+
+/** How many of a workspace's files changed, when any did. */
+const changed = (view: WorkspaceView) =>
+  view.exists && view.git && view.git.files > 0 ? `${view.git.files} changed` : '';
+
+/** A folder's path with the home folder as `~`. */
+const short = (path: string) => path.replace(/^\/home\/[^/]+/, '~');
 
 export function Home() {
   const [text, setText] = createSignal('');
@@ -91,11 +97,16 @@ export function Home() {
             fallback={<p class="rows-none dim">None yet. Open a folder in WSL to start one.</p>}
           >
             {(view) => (
-              <button type="button" class="row workspace-row" onClick={() => open(`ws:${view.workspace.id}`)}>
+              <button type="button" class="row table-row" onClick={() => open(`ws:${view.workspace.id}`)}>
                 <Glyph name={view.workspace.name} size={12} />
-                <span class="workspace-name">{view.workspace.name}</span>
+                <span class="table-name" title={view.workspace.path}>
+                  {view.workspace.name}
+                  <Show when={!view.workspace.scratch}>
+                    <span class="table-aside">{short(view.workspace.path)}</span>
+                  </Show>
+                </span>
                 <span class="dim">{standing(view)}</span>
-                <span class="workspace-path dim">{view.workspace.scratch ? '' : view.workspace.path}</span>
+                <span>{changed(view)}</span>
               </button>
             )}
           </For>

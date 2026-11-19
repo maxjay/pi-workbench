@@ -68,14 +68,10 @@ export function Tickets() {
           }
         >
           {(row) => (
-            <button
-              type="button"
-              class="row ticket-row"
-              onClick={() => open(`wi:${row.workspace}:${row.id}`)}
-            >
+            <button type="button" class="row table-row" onClick={() => open(`wi:${row.workspace}:${row.id}`)}>
               <span style={{ color: ticketHue(row.type) }}>#{row.id}</span>
+              <span class="table-name">{row.title}</span>
               <span class="dim">{row.type}</span>
-              <span class="pull-title">{row.title}</span>
               <span class="dim">{row.state}</span>
             </button>
           )}

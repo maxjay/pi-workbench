@@ -168,8 +168,17 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Folders { dir, folders }
         }
 
+        Call::FolderRead { dir } => {
+            // A big folder on a slow drive takes a while, so it is read off this thread.
+            let reading = tokio::task::spawn_blocking(move || {
+                let dir = Path::new(&dir);
+                files::entries(dir).map_err(|err| Error::io(dir, err))
+            });
+            let (folders, files) = reading.await.map_err(|err| Error::Io(err.to_string()))??;
+            Answer::Entries { folders, files }
+        }
         Call::FilesList { dir } => {
-            let (files, truncated) = files::list(Path::new(&dir));
+            let (files, truncated) = files::list(Path::new(&dir)).await;
             Answer::Files { files, truncated }
         }
         Call::FileRead { path } => {
