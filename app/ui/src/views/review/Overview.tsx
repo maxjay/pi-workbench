@@ -6,7 +6,6 @@ import { For, Show } from 'solid-js';
 import { Markdown } from '../../components/Markdown';
 import { openUrl } from '../../components/open';
 import { hideResolved, notesOf, setHideResolved } from '../../state/review';
-import { FROM_REVIEW } from './agentReview';
 import { type Reviewing, voteWords } from './parts';
 import { NewComment, NoteBox, ThreadBox } from './Threads';
 
@@ -17,7 +16,6 @@ export function Overview(props: { r: Reviewing }) {
   const resolved = () => general().filter((thread) => !thread.unresolved).length;
   const draftFor = (thread: number) => notesOf(props.r.pull).find((note) => note.thread === thread);
   const summary = () => notesOf(props.r.pull).find((note) => note.summary);
-  const drafted = () => notesOf(props.r.pull).filter((note) => note.question === FROM_REVIEW && note.place);
 
   return (
     <div class="overview">
@@ -33,23 +31,23 @@ export function Overview(props: { r: Reviewing }) {
       <Show when={summary()}>
         {(note) => (
           <section class="overview-part" aria-label="The agent's review">
-            <NoteBox note={note()} pull={props.r.pull} label="The agent's review · only you see it" />
-            <Show when={drafted().length > 0}>
-              <span class="dim">
-                It drafted {drafted().length} {drafted().length === 1 ? 'comment' : 'comments'}. Each waits
-                under its line, in the files marked "drafted".
-              </span>
-            </Show>
+            <NoteBox note={note()} pull={props.r.pull} label="agent review" />
           </section>
         )}
       </Show>
 
       <section class="overview-part" aria-labelledby="overview-comments">
         <h2 id="overview-comments" class="pull-label overview-head">
-          <span>Comments not on code</span>
+          <span>Comments</span>
           <Show when={resolved() > 0}>
-            <button type="button" class="quiet" onClick={() => setHideResolved(!hideResolved())}>
-              {hideResolved() ? `Show ${resolved()} resolved` : 'Hide resolved'}
+            <button
+              type="button"
+              class="quiet"
+              title="Show the threads that are resolved"
+              aria-pressed={!hideResolved()}
+              onClick={() => setHideResolved(!hideResolved())}
+            >
+              {resolved()} resolved
             </button>
           </Show>
         </h2>
@@ -68,7 +66,7 @@ export function Overview(props: { r: Reviewing }) {
           {' · '}
         </Show>
         <button type="button" class="pull-open" onClick={() => openUrl(review().pr.url)}>
-          Open it on Azure DevOps
+          Azure DevOps
         </button>
       </p>
     </div>

@@ -95,7 +95,7 @@ export function FileDiff(props: {
     const question = text().trim() || 'Explain these lines, and say if anything is wrong with them.';
     props.r.askAgent(
       `About ${placeName(at)} in this pull request. The lines, as the diff has them:\n\n\`\`\`\n${code}\n\`\`\`\n\n${question}`,
-      { place: at, question },
+      { place: at, question: text().trim() },
     );
     setPicked();
     setText('');
@@ -170,29 +170,40 @@ export function FileDiff(props: {
             <span class="files-count">
               <span data-state="ok">+{f().added}</span> <span data-state="failed">-{f().removed}</span>
             </span>
-            <span class="dim">{f().change}</span>
+            <Show when={f().change !== 'edited'}>
+              <span class="dim">{f().change}</span>
+            </Show>
             <span class="top-gap" />
             <Show when={!f().binary}>
               <button
                 type="button"
                 class="quiet"
+                title="Every line of the file, not only the changes"
+                aria-pressed={Boolean(whole())}
                 disabled={loading.busy()}
                 onClick={() => (whole() ? setWhole() : void loading.run())}
               >
-                {loading.busy() ? 'Reading the file' : whole() ? 'Only the changes' : 'The whole file'}
+                {loading.busy() ? 'reading' : 'whole file'}
               </button>
             </Show>
             <Show when={resolved() > 0}>
-              <button type="button" class="quiet" onClick={() => setHideResolved(!hideResolved())}>
-                {hideResolved() ? `Show ${resolved()} resolved` : 'Hide resolved'}
+              <button
+                type="button"
+                class="quiet"
+                title="Show the threads that are resolved"
+                aria-pressed={!hideResolved()}
+                onClick={() => setHideResolved(!hideResolved())}
+              >
+                {resolved()} resolved
               </button>
             </Show>
             <button
               type="button"
               class="quiet"
+              aria-pressed={isViewed(props.r.pull, f())}
               onClick={() => markViewed(props.r.pull, [f()], !isViewed(props.r.pull, f()))}
             >
-              {isViewed(props.r.pull, f()) ? 'Viewed. Unmark' : 'Mark as viewed'}
+              viewed
             </button>
           </div>
 
@@ -222,8 +233,7 @@ export function FileDiff(props: {
                   <NoteBox
                     note={note}
                     pull={props.r.pull}
-                    label={`The agent · ${note.place ? placeName(note.place) : props.path}, not among the lines shown · only you see it`}
-                    post="Post as a comment"
+                    label={`agent · ${note.place ? placeName(note.place) : props.path}`}
                     onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
                   />
                 </div>
@@ -235,7 +245,7 @@ export function FileDiff(props: {
                 <>
                   <Show when={gapBefore(row()) > 0}>
                     <button type="button" class="diff-gap" onClick={() => void loading.run()}>
-                      {gapBefore(row())} {gapBefore(row()) === 1 ? 'line' : 'lines'} not shown
+                      {gapBefore(row())} {gapBefore(row()) === 1 ? 'line' : 'lines'}
                     </button>
                   </Show>
                   {/* biome-ignore lint/a11y/noStaticElementInteractions: the line's number is the button; the rest of the line is a bigger place to click */}
@@ -277,16 +287,15 @@ export function FileDiff(props: {
                           void posting.run();
                         }}
                       >
-                        <span class="diff-write-where">
+                        <span class="diff-write-where" title="Shift-click another line to cover more">
                           <Show when={place()} fallback="These lines have no number to comment on">
                             {(at) => placeName(at())}
-                          </Show>{' '}
-                          · shift-click another line to cover more
+                          </Show>
                         </span>
                         <textarea
                           class="diff-write-text"
                           rows={2}
-                          placeholder="Comment, or ask the agent about it"
+                          placeholder="Comment, or ask the agent"
                           aria-label="Comment or question"
                           value={text()}
                           onInput={(e) => setText(e.currentTarget.value)}
@@ -308,7 +317,7 @@ export function FileDiff(props: {
                             Comment
                           </button>
                           <button type="button" class="button" disabled={!place()} onClick={askAbout}>
-                            Ask the agent
+                            Ask
                           </button>
                           <button type="button" class="quiet" onClick={() => setPicked()}>
                             Cancel
@@ -331,8 +340,7 @@ export function FileDiff(props: {
                         <NoteBox
                           note={note}
                           pull={props.r.pull}
-                          label={`The agent${note.place ? ` · ${placeName(note.place)}` : ''} · only you see it`}
-                          post="Post as a comment"
+                          label="agent"
                           onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
                         />
                       </div>

@@ -5,8 +5,8 @@
 import type { Place } from '../../protocol/Place';
 import type { Review } from '../../protocol/Review';
 
-/** What a draft from a review says it is, where a question would be. */
-export const FROM_REVIEW = "From the agent's review";
+/** Marks a note as a draft from a review of the whole pull request. */
+export const FROM_REVIEW = 'review';
 
 export function reviewPrompt(review: Review, focus: string) {
   return `Review this pull request the way a careful reviewer would.

@@ -55,17 +55,23 @@ export function Files(props: {
   return (
     <div class="files">
       <div class="files-head">
-        <span>
-          Files · {files().filter(viewed).length} of {files().length} viewed
+        <span title="Files you have viewed, of all the changed files">
+          Files {files().filter(viewed).length}/{files().length}
           <Show when={hidden() > 0}> · {hidden()} hidden</Show>
         </span>
-        <button type="button" class="quiet" onClick={() => setHideViewed(!hideViewed())}>
-          {hideViewed() ? 'show viewed' : 'hide viewed'}
+        <button
+          type="button"
+          class="quiet"
+          title="Leave out the files you have viewed"
+          aria-pressed={hideViewed()}
+          onClick={() => setHideViewed(!hideViewed())}
+        >
+          unviewed
         </button>
       </div>
       <input
         class="files-exclude"
-        placeholder="files to exclude: tests/**, *.md"
+        placeholder="exclude: tests/**, *.md"
         aria-label="Files to exclude"
         value={exclude()}
         onInput={(e) => {

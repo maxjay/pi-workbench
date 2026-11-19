@@ -124,7 +124,7 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
     const review = data.review;
     if (!review) return;
     // A new review takes the place of the last one and of the drafts you left from it.
-    dropNotes(pull, (note) => Boolean(note.summary) || note.question === FROM_REVIEW);
+    dropNotes(pull, (note) => Boolean(note.summary) || note.from === FROM_REVIEW);
     const id = crypto.randomUUID();
     addNote(pull, { id, summary: true, question: focus });
     setAgentShown(true);
@@ -136,7 +136,8 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
         read.comments.map((c) => ({
           id: crypto.randomUUID(),
           place: c.place,
-          question: FROM_REVIEW,
+          from: FROM_REVIEW,
+          question: '',
           answer: c.text,
         })),
       );
@@ -214,24 +215,23 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
             </span>
             <button
               type="button"
-              class="button"
+              class="quiet"
+              title="The agent reviews the whole pull request"
               disabled={reviewAll.busy()}
               onClick={() => {
                 setShown({ kind: 'overview' });
                 void reviewAll.run('');
               }}
             >
-              {reviewAll.busy() ? 'The agent is reviewing' : 'Review with the agent'}
+              {reviewAll.busy() ? 'Reviewing' : 'Review'}
             </button>
-            <Decide review={review()} dir={dir} pr={pr} />
-            <button
-              type="button"
-              class="quiet"
-              aria-pressed={agentShown()}
-              onClick={() => setAgentShown(!agentShown())}
-            >
-              {agentShown() ? 'Hide the agent' : 'Show the agent'}
-            </button>
+            <Decide
+              review={review()}
+              dir={dir}
+              pr={pr}
+              agentShown={agentShown()}
+              onAgent={() => setAgentShown(!agentShown())}
+            />
           </div>
 
           <div class="review-cols" data-agent={agentShown()}>
@@ -345,7 +345,13 @@ function stateOf(review: Review) {
 }
 
 /** The two decisions: your vote, and what becomes of the pull request. */
-function Decide(props: { review: Review; dir: string; pr: number }) {
+function Decide(props: {
+  review: Review;
+  dir: string;
+  pr: number;
+  agentShown: boolean;
+  onAgent: () => void;
+}) {
   const voting = createAction((value: number) => vote(props.dir, props.pr, value));
   const setting = createAction((to: PullTo) => setPull(props.dir, props.pr, to));
   const mine = () => props.review.vote;
@@ -353,20 +359,20 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
   const options = (): Choice[] => {
     const review = props.review;
     if (review.pr.status === 'abandoned')
-      return [{ label: 'Make it active again', run: () => setting.run('reactivate') }];
+      return [{ label: 'Reactivate', run: () => setting.run('reactivate') }];
     if (!activeNow()) return [];
     const complete: Choice[] = [
       {
-        label: 'Complete now',
+        label: 'Complete',
         detail: `Squash into ${review.pr.targetBranch}, delete the branch, close the work items`,
         sure: `Yes, complete it into ${review.pr.targetBranch}`,
         run: () => setting.run('complete'),
       },
       review.autoComplete
-        ? { label: 'Stop completing by itself', run: () => setting.run('cancelAutoComplete') }
+        ? { label: 'Cancel auto-complete', run: () => setting.run('cancelAutoComplete') }
         : {
-            label: 'Complete when its checks pass',
-            detail: 'Sets auto-complete',
+            label: 'Auto-complete',
+            detail: 'Completes when its checks pass',
             run: () => setting.run('autoComplete'),
           },
     ];
@@ -374,59 +380,56 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       // A draft can't be completed. It is made ready first.
       ...(review.pr.isDraft ? [] : complete),
       review.pr.isDraft
-        ? { label: 'Ready for review', detail: 'Takes it out of draft', run: () => setting.run('ready') }
-        : { label: 'Put back into draft', run: () => setting.run('draft') },
+        ? { label: 'Ready', detail: 'Takes it out of draft', run: () => setting.run('ready') }
+        : { label: 'Draft', run: () => setting.run('draft') },
       { label: 'Abandon', sure: 'Yes, abandon it', run: () => setting.run('abandon') },
     ];
   };
+  const rule: Choice = { rule: true, label: '', run: () => undefined };
+  const more = (): Choice[] => [
+    ...(activeNow()
+      ? [
+          { label: 'Approve with suggestions', run: () => voting.run(5) },
+          { label: 'Wait for the author', run: () => voting.run(-5) },
+          { label: 'Reject', run: () => voting.run(-10) },
+          ...(mine() !== 0 ? [{ label: 'Take my vote back', run: () => voting.run(0) }] : []),
+          rule,
+        ]
+      : []),
+    ...options(),
+    rule,
+    { label: props.agentShown ? 'Hide the agent' : 'Show the agent', run: props.onAgent },
+  ];
   return (
     <>
       <Show when={voting.error() ?? setting.error()}>
         {(error) => <span class="note-failed review-late">{error()}</span>}
       </Show>
+      <Show when={mine() !== 0 && mine() < 10}>
+        <span class="mark" data-state={voteWords(mine()).state}>
+          You: {voteWords(mine()).words}
+        </span>
+      </Show>
       <Show when={activeNow()}>
-        <div class="split">
-          <button
-            type="button"
-            class="button"
-            classList={{ 'button-accent': mine() < 10, 'button-done': mine() >= 10 }}
-            disabled={voting.busy()}
-            title={mine() >= 10 ? 'Click to take your vote back' : undefined}
-            onClick={() => void voting.run(mine() >= 10 ? 0 : 10)}
-          >
-            {mine() >= 10 ? 'Approved' : 'Approve'}
-          </button>
-          <Menu
-            label="Other votes"
-            classList={{ 'button-accent': mine() < 10, 'button-done': mine() >= 10 }}
-            choices={[
-              { label: 'Approve', run: () => voting.run(10) },
-              { label: 'Approve with suggestions', run: () => voting.run(5) },
-              { label: 'Wait for the author', run: () => voting.run(-5) },
-              { label: 'Reject', run: () => voting.run(-10) },
-              { label: 'Take my vote back', run: () => voting.run(0) },
-            ]}
-          />
-        </div>
-        <Show when={mine() !== 0 && mine() < 10}>
-          <span class="mark" data-state={voteWords(mine()).state}>
-            You: {voteWords(mine()).words}
-          </span>
-        </Show>
+        <button
+          type="button"
+          class="button"
+          classList={{ 'button-accent': mine() < 10, 'button-done': mine() >= 10 }}
+          disabled={voting.busy()}
+          title={mine() >= 10 ? 'Click to take your vote back' : undefined}
+          onClick={() => void voting.run(mine() >= 10 ? 0 : 10)}
+        >
+          {mine() >= 10 ? 'Approved' : 'Approve'}
+        </button>
       </Show>
-      <Show when={options().length > 0}>
-        <Menu
-          label={!activeNow() ? 'Abandoned' : props.review.pr.isDraft ? 'Draft' : 'Complete'}
-          words
-          choices={options()}
-          busy={setting.busy()}
-        />
-      </Show>
+      <Menu label="More" choices={more()} busy={setting.busy() || voting.busy()} />
     </>
   );
 }
 
 interface Choice {
+  /** A thin line between groups of choices, and nothing to pick. */
+  rule?: boolean;
   label: string;
   detail?: string;
   /** What the choice says once clicked, when it must be clicked twice to be done. */
@@ -465,28 +468,30 @@ function Menu(props: {
         disabled={props.busy}
         onClick={() => setOpen(!open())}
       >
-        {props.words ? `${props.label} ` : ''}▾
+        {props.words ? `${props.label} ▾` : '···'}
       </button>
       <Show when={open()}>
         <div class="menu-list">
           <For each={props.choices}>
             {(choice) => (
-              <button
-                type="button"
-                class="row menu-choice"
-                onClick={() => {
-                  if (choice.sure && armed() !== choice.label) return setArmed(choice.label);
-                  setOpen(false);
-                  void choice.run();
-                }}
-              >
-                <span classList={{ 'note-failed': armed() === choice.label }}>
-                  {armed() === choice.label ? choice.sure : choice.label}
-                </span>
-                <Show when={choice.detail && armed() !== choice.label}>
-                  <span class="dim">{choice.detail}</span>
-                </Show>
-              </button>
+              <Show when={!choice.rule} fallback={<span class="menu-rule" />}>
+                <button
+                  type="button"
+                  class="row menu-choice"
+                  onClick={() => {
+                    if (choice.sure && armed() !== choice.label) return setArmed(choice.label);
+                    setOpen(false);
+                    void choice.run();
+                  }}
+                >
+                  <span classList={{ 'note-failed': armed() === choice.label }}>
+                    {armed() === choice.label ? choice.sure : choice.label}
+                  </span>
+                  <Show when={choice.detail && armed() !== choice.label}>
+                    <span class="dim">{choice.detail}</span>
+                  </Show>
+                </button>
+              </Show>
             )}
           </For>
         </div>

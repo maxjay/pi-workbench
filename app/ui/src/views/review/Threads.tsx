@@ -1,6 +1,7 @@
 // A review thread, and what the agent answered you. Both are drawn where
-// they belong: under a line of the diff, or in the overview. What the agent
-// wrote is yours alone until you post it.
+// they belong: under a line of the diff, or in the overview. A thread is
+// its comments and one quiet line to reply on. What you can do to it shows
+// when you are on it. What the agent wrote is yours alone until you post it.
 
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
@@ -35,59 +36,51 @@ export function ThreadBox(props: {
       .join('\n');
     props.r.askAgent(
       `Draft my reply to review thread #${thread().id}${place ? ` on ${placeName(place)}` : ''}.\n\nThe thread so far:\n${said}\n\nAnswer with only the text of the reply.`,
-      { thread: thread().id, question: 'Draft a reply' },
+      { thread: thread().id, question: '' },
     );
   };
 
   return (
-    <div class="thread-box">
-      <div class="thread-said">
-        <span>
-          <span class="thread-state" data-open={thread().unresolved}>
-            #{thread().id} {thread().unresolved ? 'open' : 'resolved'}
-          </span>
-          <Show when={props.showPlace && thread().place}>
-            {(place) => (
-              <button
-                type="button"
-                class="thread-place"
-                onClick={() =>
-                  props.r.showFile(place().file, place().old ? undefined : (place().line ?? undefined))
-                }
-              >
-                {' '}
-                · {placeName(place())}
-                {place().outdated ? ' · its lines are gone' : ''}
-              </button>
-            )}
-          </Show>
-        </span>
-        <For each={thread().comments}>
-          {(c) => (
-            <div class="said">
-              <span class="said-who">
-                {c.author ?? 'Someone'} · {when(c.publishedAt)}
-              </span>
-              <Markdown text={c.text} />
-            </div>
-          )}
-        </For>
-      </div>
+    // The rule at its left says where it stands: open, or resolved.
+    <div class="thread" data-open={thread().unresolved} title={`Thread ${thread().id}`}>
+      <Show when={props.showPlace && thread().place}>
+        {(place) => (
+          <button
+            type="button"
+            class="thread-place"
+            onClick={() =>
+              props.r.showFile(place().file, place().old ? undefined : (place().line ?? undefined))
+            }
+          >
+            {placeName(place())}
+            {place().outdated ? ' · lines gone' : ''}
+          </button>
+        )}
+      </Show>
+      <For each={thread().comments}>
+        {(c) => (
+          <div class="said">
+            <span class="said-who">
+              {c.author ?? 'Someone'} · {when(c.publishedAt)}
+            </span>
+            <Markdown text={c.text} />
+          </div>
+        )}
+      </For>
 
       <Show when={props.draft}>
         {(draft) => (
           <NoteBox
             note={draft()}
             pull={props.r.pull}
-            label="Draft from the agent · only you see it"
-            post="Post as my reply"
+            label="agent draft"
             onPost={(words) => reply(props.r.dir, props.r.pr, thread().id, words)}
           />
         )}
       </Show>
 
       <Show when={replying.error() ?? setting.error()}>
-        {(error) => <p class="thread-foot note-failed">{error()}</p>}
+        {(error) => <p class="note-failed">{error()}</p>}
       </Show>
       <form
         class="thread-foot"
@@ -105,15 +98,15 @@ export function ThreadBox(props: {
         />
         <Show when={text().trim()}>
           <button type="submit" class="quiet" disabled={replying.busy()}>
-            Reply
+            Send
           </button>
         </Show>
-        <button type="button" class="quiet" disabled={Boolean(props.draft)} onClick={askForReply}>
-          Ask the agent
+        <button type="button" class="quiet thread-act" disabled={Boolean(props.draft)} onClick={askForReply}>
+          Ask
         </button>
         <button
           type="button"
-          class="quiet"
+          class="quiet thread-act"
           disabled={setting.busy()}
           onClick={() => void setting.run(thread().unresolved ? 'resolved' : 'active')}
         >
@@ -128,9 +121,9 @@ export function ThreadBox(props: {
 export function NoteBox(props: {
   note: Note;
   pull: string;
+  /** A word or two for what this is. */
   label: string;
-  /** What posting it is called. Nothing when there is nowhere to post it. */
-  post?: string;
+  /** Posts it. Without this there is nowhere to post it. */
   onPost?: (words: string) => Promise<unknown>;
 }) {
   const [editing, setEditing] = createSignal<string>();
@@ -141,7 +134,7 @@ export function NoteBox(props: {
     dropNote(props.pull, props.note.id);
   });
   return (
-    <div class="note-box">
+    <div class="note">
       <span class="note-label">{props.label}</span>
       <Show when={props.note.question}>
         <span class="dim">{props.note.question}</span>
@@ -149,10 +142,7 @@ export function NoteBox(props: {
       <Show
         when={props.note.answer}
         fallback={
-          <Show
-            when={props.note.failed}
-            fallback={<span class="note-working">The agent is working on it</span>}
-          >
+          <Show when={props.note.failed} fallback={<span class="note-working">working</span>}>
             {(why) => <span class="note-failed">{why()}</span>}
           </Show>
         }
@@ -172,18 +162,18 @@ export function NoteBox(props: {
       <Show when={posting.error()}>{(error) => <span class="note-failed">{error()}</span>}</Show>
       <Show when={props.note.answer || props.note.failed}>
         <div class="note-buttons">
-          <Show when={props.note.answer && props.post}>
+          <Show when={props.note.answer && props.onPost}>
             <button
               type="button"
-              class="button button-accent"
+              class="quiet note-post"
               disabled={posting.busy()}
               onClick={() => void posting.run()}
             >
-              {props.post}
+              Post
             </button>
             <Show when={editing() === undefined}>
               <button type="button" class="quiet" onClick={() => setEditing(props.note.answer)}>
-                Change it first
+                Edit
               </button>
             </Show>
           </Show>
@@ -207,28 +197,26 @@ export function NewComment(props: { r: Reviewing }) {
   });
   return (
     <>
-      <div class="thread-box">
-        <form
-          class="thread-foot thread-alone"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void posting.run();
-          }}
-        >
-          <input
-            class="thread-input"
-            placeholder="Write a comment on the pull request"
-            aria-label="Write a comment on the pull request"
-            value={text()}
-            onInput={(e) => setText(e.currentTarget.value)}
-          />
-          <Show when={text().trim()}>
-            <button type="submit" class="quiet" disabled={posting.busy()}>
-              Comment
-            </button>
-          </Show>
-        </form>
-      </div>
+      <form
+        class="thread-foot thread-new"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void posting.run();
+        }}
+      >
+        <input
+          class="thread-input"
+          placeholder="Comment"
+          aria-label="Write a comment on the pull request"
+          value={text()}
+          onInput={(e) => setText(e.currentTarget.value)}
+        />
+        <Show when={text().trim()}>
+          <button type="submit" class="quiet" disabled={posting.busy()}>
+            Send
+          </button>
+        </Show>
+      </form>
       <Show when={posting.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
     </>
   );

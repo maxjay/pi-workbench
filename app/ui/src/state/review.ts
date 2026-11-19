@@ -114,13 +114,25 @@ export interface Note {
   run?: number;
   /** It is the summary of the agent's review of the whole pull request. */
   summary?: boolean;
+  /** What made it, when it wasn't a question of yours: `review` for a draft from the agent's review. */
+  from?: string;
   question: string;
   /** Undefined while the agent is still working on it. */
   answer?: string;
   failed?: string;
 }
 
-const [notes, setNotes] = createStore<Record<string, Note[]>>(stored('notes', {}));
+/** Notes kept before a review's drafts were marked by `from` said so in their question. */
+function current(kept: Record<string, Note[]>) {
+  for (const list of Object.values(kept)) {
+    for (const note of list) {
+      if (note.question === "From the agent's review") Object.assign(note, { question: '', from: 'review' });
+    }
+  }
+  return kept;
+}
+
+const [notes, setNotes] = createStore<Record<string, Note[]>>(current(stored('notes', {})));
 
 export const notesOf = (pull: string) => notes[pull] ?? [];
 

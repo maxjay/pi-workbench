@@ -108,7 +108,7 @@ export function Checks(props: {
   return (
     <div class="checks">
       <div class="checks-list">
-        <span class="checks-label">Runs on this pull request</span>
+        <span class="checks-label">Runs</span>
         <Show when={props.runs} fallback={<p class="checks-note dim">Asking Azure DevOps</p>}>
           <For each={props.runs} fallback={<p class="checks-note dim">No pipeline has run on it.</p>}>
             {(r) => (
@@ -189,11 +189,11 @@ export function Checks(props: {
                     disabled={again.busy()}
                     onClick={() => void again.run()}
                   >
-                    Run the failed jobs again
+                    Rerun
                   </button>
                 </Show>
                 <button type="button" class="quiet" onClick={() => openUrl(r().url)}>
-                  Open in your browser
+                  Open
                 </button>
               </div>
               <div class="checks-body">
@@ -209,14 +209,12 @@ export function Checks(props: {
                 <Show when={r().result === 'failed' && !why()}>
                   <div>
                     <button type="button" class="button" onClick={askWhy}>
-                      Ask the agent why
+                      Ask why
                     </button>
                   </div>
                 </Show>
                 <Show when={why()}>
-                  {(note) => (
-                    <NoteBox note={note()} pull={props.r.pull} label="The agent · only you see it" />
-                  )}
+                  {(note) => <NoteBox note={note()} pull={props.r.pull} label="agent" />}
                 </Show>
                 <Show when={log.error}>
                   <p class="note-failed">{String(log.error?.message ?? log.error)}</p>
