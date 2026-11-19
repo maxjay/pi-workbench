@@ -4,3 +4,5 @@ node_modules/
 /app/ui/dist/
 /app/src-tauri/gen/
 *.log
+# Put beside the page by the publish step, never committed.
+/site/public/workbench.exe

@@ -48,6 +48,10 @@ npm run check                      # Biome and TypeScript
 
 In WSL: `cargo test -p protocol -p wbd`.
 
+## Release
+
+Set the version in `Cargo.toml`, then push a tag of the same version, like `v2.0.0-alpha.1`. That builds the installer, publishes it as a GitHub release, and puts it on [workbench.maxjay.dev](https://workbench.maxjay.dev) as `workbench.exe`, beside the page in `site/public`.
+
 ## Licence
 
 Copyright 2026 Max Jay. All rights reserved. This is not open source. See [LICENSE](LICENSE).
