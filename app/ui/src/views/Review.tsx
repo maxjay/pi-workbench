@@ -183,8 +183,14 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
               <h1>{review().pr.title}</h1>
               <span class="dim">
                 <span class="accent">#{review().pr.id}</span> ·{' '}
-                <span class="review-state">{stateOf(review())}</span> · {review().author} ·{' '}
-                {review().pr.sourceBranch} into {review().pr.targetBranch}
+                <span class="review-state">{stateOf(review())}</span>
+                <Show when={review().autoComplete && review().pr.status === 'active'}>
+                  {' '}
+                  <span class="mark" data-state="working" title="It completes by itself when its checks pass">
+                    auto
+                  </span>
+                </Show>{' '}
+                · {review().author} · {review().pr.sourceBranch} into {review().pr.targetBranch}
                 <Show when={review().merge === 'conflicts'}>
                   <span class="note-failed"> · conflicts with {review().pr.targetBranch}</span>
                 </Show>
@@ -225,13 +231,12 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
             >
               {reviewAll.busy() ? 'Reviewing' : 'Review'}
             </button>
-            <Decide
-              review={review()}
-              dir={dir}
-              pr={pr}
-              agentShown={agentShown()}
-              onAgent={() => setAgentShown(!agentShown())}
-            />
+            <Decide review={review()} dir={dir} pr={pr} />
+            <Show when={!agentShown()}>
+              <button type="button" class="quiet" onClick={() => setAgentShown(true)}>
+                Agent
+              </button>
+            </Show>
           </div>
 
           <div class="review-cols" data-agent={agentShown()}>
@@ -316,6 +321,8 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
                   <Chat
                     cwd={ready().cwd}
                     brief={ready().brief}
+                    plain
+                    onHide={() => setAgentShown(false)}
                     shown={conversation()}
                     onShow={setConversation}
                     onOpenFile={(path) => {
@@ -340,18 +347,11 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
 /** Where a pull request stands, in a word or a few. */
 function stateOf(review: Review) {
   if (review.pr.isDraft && review.pr.status === 'active') return 'draft';
-  if (review.autoComplete && review.pr.status === 'active') return 'active, completes when its checks pass';
   return review.pr.status;
 }
 
 /** The two decisions: your vote, and what becomes of the pull request. */
-function Decide(props: {
-  review: Review;
-  dir: string;
-  pr: number;
-  agentShown: boolean;
-  onAgent: () => void;
-}) {
+function Decide(props: { review: Review; dir: string; pr: number }) {
   const voting = createAction((value: number) => vote(props.dir, props.pr, value));
   const setting = createAction((to: PullTo) => setPull(props.dir, props.pr, to));
   const mine = () => props.review.vote;
@@ -397,8 +397,6 @@ function Decide(props: {
         ]
       : []),
     ...options(),
-    rule,
-    { label: props.agentShown ? 'Hide the agent' : 'Show the agent', run: props.onAgent },
   ];
   return (
     <>

@@ -38,6 +38,10 @@ export function Chat(props: {
   onOpenFile: (path: string) => void;
   /** What a new conversation here tells the agent before anything you write. */
   brief?: string;
+  /** No title and no list of conversations: where it is says what it is about. */
+  plain?: boolean;
+  /** Hides the agent's column, where it can be hidden. */
+  onHide?: () => void;
 }) {
   const conversation = () => (props.shown ? open[props.shown] : undefined);
   const [agent, setAgent] = createSignal<Agent>(defaultAgent());
@@ -82,17 +86,26 @@ export function Chat(props: {
     <section class="chat" aria-label="The agent">
       <div class="bar chat-head">
         <span class="chat-agent">{agentName[conversation()?.state.agent ?? agent()]}</span>
-        <button
-          type="button"
-          class="chat-title"
-          aria-expanded={listing()}
-          onClick={() => setListing(!listing())}
-        >
-          {conversation()?.state.title ?? 'New conversation'}
-        </button>
+        <Show when={!props.plain} fallback={<span class="top-gap" />}>
+          <button
+            type="button"
+            class="chat-title"
+            aria-expanded={listing()}
+            onClick={() => setListing(!listing())}
+          >
+            {conversation()?.state.title ?? 'New conversation'}
+          </button>
+        </Show>
         <button type="button" class="strip-tab" onClick={() => props.onShow(undefined)}>
           New
         </button>
+        <Show when={props.onHide}>
+          {(hide) => (
+            <button type="button" class="strip-tab" onClick={() => hide()()}>
+              Hide
+            </button>
+          )}
+        </Show>
       </div>
       <Show when={listing()}>
         <div class="chat-list">

@@ -1417,12 +1417,12 @@ svg.glyph {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  padding: 12px 8px;
+  padding: 16px 10px;
   border-right: 1px solid var(--line);
 }
 
 .review-part {
-  height: 32px;
+  height: 38px;
   padding: 0 10px;
   flex-shrink: 0;
 }
@@ -1432,15 +1432,15 @@ svg.glyph {
 }
 
 .review-label {
-  margin-top: 12px;
-  padding: 14px 10px 4px;
+  margin-top: 18px;
+  padding: 18px 10px 8px;
   border-top: 1px solid var(--line);
   font-size: 12px;
   color: var(--dim);
 }
 
 .review-ticket {
-  height: 28px;
+  height: 34px;
   padding: 0 10px;
   flex-shrink: 0;
 }
@@ -1494,8 +1494,8 @@ svg.glyph {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 12px;
-  padding: 12px 2px 4px 10px;
+  margin-top: 18px;
+  padding: 16px 2px 8px 10px;
   border-top: 1px solid var(--line);
   font-size: 12px;
   color: var(--dim);
@@ -1503,8 +1503,8 @@ svg.glyph {
 }
 
 .files-exclude {
-  height: 26px;
-  margin: 0 10px 10px;
+  height: 28px;
+  margin: 0 10px 12px;
   padding: 0 8px;
   background: none;
   border: 1px solid var(--line);
@@ -1540,7 +1540,7 @@ svg.glyph {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 28px;
+  height: 32px;
   padding: 0 4px 0 10px;
 }
 
@@ -1715,9 +1715,39 @@ svg.glyph {
 
 /* What is drawn under a line: a thread, a note, the box you write in. */
 .diff-under {
-  margin: 8px 20px 10px 116px;
+  margin: 0;
+  padding: 14px 20px 16px 116px;
   line-height: 1.5;
+  background: var(--hover);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.diff-under + .diff-under {
+  border-top: 0;
+}
+
+.diff-under > * {
   max-width: 760px;
+}
+
+/* Side by side: the old file on the left, the new on the right */
+
+.diff-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.diff-pair > :first-child {
+  border-right: 1px solid var(--line);
+}
+
+.diff-line[data-side] {
+  grid-template-columns: 48px 20px minmax(0, 1fr);
+}
+
+.diff-blank {
+  background: var(--hover);
 }
 
 .diff-write {
@@ -1789,12 +1819,30 @@ svg.glyph {
 .said {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+}
+
+.said + .said {
+  margin-top: 6px;
 }
 
 .said-who {
   color: var(--dim);
   font-size: 12px;
+}
+
+/* What people and the agent wrote is prose: set in the face for prose, so it reads apart from code. */
+.thread .markdown,
+.note .markdown {
+  font-family: var(--display);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.thread .markdown code,
+.note .markdown code {
+  font-family: var(--mono);
+  font-size: 12.5px;
 }
 
 .thread[data-open="false"] .said {
@@ -1883,7 +1931,11 @@ svg.glyph {
 
 .overview-part > .thread,
 .overview-part > .thread-new {
-  margin-top: 14px;
+  margin-top: 26px;
+}
+
+.overview-part > .pull-label + .thread {
+  margin-top: 10px;
 }
 
 .overview-line {
