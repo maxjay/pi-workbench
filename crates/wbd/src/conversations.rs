@@ -402,9 +402,18 @@ fn now() -> u64 {
         .map_or(0, |since| since.as_millis() as u64)
 }
 
-/// What you first wrote, as a title: its first line, cut short.
+/// What you first wrote, as a title: its first line, cut short. What a tab put in front of it,
+/// to tell the agent what you were on, is not what you wrote and is left out.
 fn title(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default().trim();
+    let own = match text.starts_with("<about ") {
+        true => text.split_once("</about>").map_or(text, |(_, own)| own),
+        false => text,
+    };
+    let line = own
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
     match line.char_indices().nth(TITLE) {
         Some((cut, _)) => format!("{}…", &line[..cut]),
         None => line.to_string(),
@@ -426,6 +435,12 @@ mod tests {
     #[test]
     fn a_title_is_the_first_line_cut_short() {
         assert_eq!(title("Fix the login\nand more"), "Fix the login");
+        assert_eq!(
+            title(
+                "<about where=\"lines:a.ts:1-2\" under=\"yes\">\na.ts\n</about>\n\nWhy is this here?"
+            ),
+            "Why is this here?"
+        );
         let long = "é".repeat(TITLE + 5);
         let cut = title(&long);
         assert_eq!(cut.chars().count(), TITLE + 1);
