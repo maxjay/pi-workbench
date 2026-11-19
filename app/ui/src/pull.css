@@ -6,10 +6,6 @@
 
 .pr,
 .ticket {
-  --people: oklch(0.8 0.15 250);
-  --agent: oklch(0.8 0.15 60);
-  --faint: #4a4b45;
-  --ground: #131411;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1485,18 +1481,14 @@ button.dl-num {
   width: auto;
 }
 
-/* Code in what was said is set apart by its letters, not by a box inside the box it is in. */
-.said .markdown pre {
-  padding: 2px 0;
-  border: 0;
-  background: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .ticket-plain {
   font-family: var(--display);
   font-size: 15px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+/* The agent's column is a shade above the paper, so what is set apart in it goes down to the paper. */
+.pr-cols > .chat {
+  --ground: var(--paper);
 }

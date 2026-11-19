@@ -689,86 +689,196 @@ svg.glyph {
   gap: 14px;
 }
 
-.entry-who {
-  color: var(--dim);
+/* What you said is a block of its own. What the agent did follows under its name. */
+.entry-mine {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--raised);
+}
+
+.entry-who,
+.entry-agent {
   font-size: 12px;
+  color: var(--dim);
+}
+
+.entry-agent {
+  margin-bottom: -8px;
+  color: var(--agent);
 }
 
 .entry-you {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.entry-thinking,
-.tool {
-  color: var(--dim);
+.chat-earlier {
+  align-self: flex-start;
+}
+
+/* One line that opens: what the agent thought, or what it ran. */
+.fold {
+  display: flex;
+  flex-direction: column;
   font-size: 12px;
 }
 
-.entry-thinking summary,
-.tool summary {
-  cursor: pointer;
-  list-style: none;
-}
-
-.entry-thinking p {
-  padding-top: 6px;
-  white-space: pre-wrap;
-}
-
-.tool summary {
+.fold-head {
   display: flex;
+  align-items: baseline;
   gap: 8px;
+  min-height: 22px;
+  color: var(--dim);
 }
 
-.tool-title {
-  min-width: 0;
+.fold-head:hover:enabled .fold-name,
+.fold-head[aria-expanded="true"] .fold-name {
   color: var(--ink);
+}
+
+.fold-head:disabled {
+  cursor: default;
+}
+
+.fold-arrow {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.fold-head[aria-expanded="true"] .fold-arrow {
+  transform: rotate(90deg);
+}
+
+.fold-head:disabled .fold-arrow {
+  visibility: hidden;
+}
+
+.fold-name {
+  flex-shrink: 0;
+}
+
+.fold-title,
+.fold-hint {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.tool-count [data-state="ok"] {
+.fold-title {
+  color: var(--ink);
+}
+
+.fold-count,
+.fold-status {
+  flex-shrink: 0;
+}
+
+.fold-count [data-state="ok"] {
   color: var(--ok);
 }
 
-.tool-count [data-state="failed"],
-.tool[data-status="failed"] .tool-status {
+.fold-count [data-state="failed"],
+.fold[data-state="failed"] .fold-status {
   color: var(--failed);
 }
 
-.tool[data-status="running"] .tool-status {
+.fold[data-state="running"] .fold-status {
   color: var(--working);
 }
 
-.tool-body {
-  margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  overflow: auto;
-  max-height: 320px;
+.fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 4px 17px;
 }
 
-.tool pre {
-  font: inherit;
+.fold-words {
+  color: var(--dim);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.tool-old {
+.fold-open {
+  align-self: flex-start;
+}
+
+/* Code, and what a command printed: set apart by its ground, with what it is and Copy above it. */
+.code {
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 4px 0 12px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.code .code-copy,
+.code .code-more {
+  height: 24px;
+}
+
+.code-more {
+  align-self: flex-start;
+  margin: 0 4px;
+}
+
+.code pre {
+  max-height: 420px;
+  padding: 2px 12px 12px;
+  border: 0;
+  overflow: auto;
+  font: inherit;
+  white-space: pre;
+}
+
+/* What was printed wraps: it is read, not run. */
+.fold .code pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.code[data-tone="old"] pre {
+  color: var(--dim);
   text-decoration: line-through;
-  padding-bottom: 8px;
 }
 
-.tool-new {
-  color: var(--ink);
+.syn-keyword {
+  color: var(--syn-keyword);
 }
 
-.tool-open {
-  display: block;
-  padding-bottom: 8px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+.syn-string {
+  color: var(--syn-string);
+}
+
+.syn-number {
+  color: var(--syn-number);
+}
+
+.syn-type {
+  color: var(--syn-type);
+}
+
+.syn-function {
+  color: var(--syn-function);
+}
+
+.syn-comment {
+  color: var(--dim);
+  font-style: italic;
 }
 
 .entry-notice[data-tone="failed"] {
@@ -819,12 +929,6 @@ svg.glyph {
 
 .picture-link:hover {
   color: var(--ink);
-}
-
-.markdown pre {
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  overflow: auto;
 }
 
 .markdown code {

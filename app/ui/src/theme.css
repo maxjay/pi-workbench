@@ -25,6 +25,13 @@
      marks what is picked, what posts, and what the agent wrote. */
   --accent: oklch(0.8 0.15 310);
 
+  /* What a thing is: what people said is blue, the agent and anything only you see is orange. */
+  --people: oklch(0.8 0.15 250);
+  --agent: oklch(0.8 0.15 60);
+  --faint: #4a4b45;
+  /* Under code and what a command printed: a shade under the paper. */
+  --ground: #131411;
+
   /* Code, in the editor: one lightness and strength, only the hue differs. */
   --syn-keyword: oklch(0.8 0.1 310);
   --syn-string: oklch(0.8 0.1 150);

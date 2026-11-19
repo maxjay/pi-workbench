@@ -2,25 +2,11 @@
 // When the agent asks something, its question takes the place of the box
 // you write in. The same parts whichever agent it is.
 
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  type JSX,
-  Match,
-  on,
-  onMount,
-  Show,
-  Switch,
-} from 'solid-js';
+import { createEffect, createSignal, For, type JSX, on, onMount, Show } from 'solid-js';
 import { createAction } from '../../components/action';
-import { Markdown } from '../../components/Markdown';
 import type { Agent } from '../../protocol/Agent';
 import type { Ask } from '../../protocol/Ask';
-import type { Entry } from '../../protocol/Entry';
 import type { Offer } from '../../protocol/Offer';
-import type { Tool } from '../../protocol/Tool';
 import {
   agentName,
   answer,
@@ -39,19 +25,9 @@ import {
   start,
   stop,
 } from '../../state/conversations';
+import { type Dress, Log } from './Log';
 
-/**
- * How somewhere that is about one thing, such as a pull request's tab,
- * changes what is written here and how it reads.
- */
-export interface Dress {
-  /** What goes to the agent when you write: your words, with what you are on in front. */
-  wrap: (text: string) => string;
-  /** What you wrote, as shown: your own words, and where you asked. Hidden when it shows somewhere else. */
-  you: (text: string) => { text: string; where?: { label: string; go?: () => void }; hidden: boolean };
-  /** What the agent wrote, as shown. */
-  agent: (text: string) => string;
-}
+export type { Dress };
 
 export function Chat(props: {
   cwd: string;
@@ -186,6 +162,7 @@ export function Chat(props: {
 
       <Log
         entries={conversation()?.entries ?? []}
+        agent={agentName[talkingTo()]}
         cwd={props.cwd}
         onOpenFile={props.onOpenFile}
         dress={props.dress}
@@ -223,141 +200,6 @@ export function Chat(props: {
         </Show>
       </div>
     </section>
-  );
-}
-
-/** The conversation, kept at its end while the agent writes unless you scroll up. */
-function Log(props: {
-  entries: Entry[];
-  cwd: string;
-  onOpenFile: (path: string) => void;
-  dress?: Dress;
-  top?: JSX.Element;
-  empty?: string;
-}) {
-  let box!: HTMLDivElement;
-  let following = true;
-  // A turn that shows somewhere else is left out here: what you wrote, and all the agent did after it.
-  const hidden = createMemo(() => {
-    let off = false;
-    return props.entries.map((entry) => {
-      if (entry.kind === 'you') off = props.dress?.you(entry.text).hidden ?? false;
-      return off;
-    });
-  });
-  const you = (text: string) => props.dress?.you(text) ?? { text, hidden: false };
-  createEffect(() => {
-    // Read every entry's text, so this runs as the reply grows.
-    for (const entry of props.entries) void ('text' in entry ? entry.text : entry.output);
-    if (following) requestAnimationFrame(() => box.scrollTo({ top: box.scrollHeight }));
-  });
-  return (
-    <div
-      class="chat-log"
-      ref={box}
-      onScroll={() => {
-        following = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
-      }}
-    >
-      <div class="chat-entries">
-        {props.top}
-        <Show when={!hidden().includes(false)}>
-          <p class="dim chat-empty">{props.empty ?? 'Nothing asked yet.'}</p>
-        </Show>
-        <For each={props.entries}>
-          {(entry, at) => (
-            <Switch>
-              <Match when={hidden()[at()]}>{null}</Match>
-              <Match when={entry.kind === 'you' && entry}>
-                {(e) => (
-                  <div class="entry">
-                    <span class="entry-who">
-                      You
-                      <Show when={you(e().text).where}>
-                        {(where) => (
-                          <button type="button" class="entry-where" onClick={() => where().go?.()}>
-                            on {where().label}
-                          </button>
-                        )}
-                      </Show>
-                    </span>
-                    <p class="entry-you">{you(e().text).text}</p>
-                  </div>
-                )}
-              </Match>
-              <Match when={entry.kind === 'text' && entry}>
-                {(e) => <Markdown text={props.dress ? props.dress.agent(e().text) : e().text} />}
-              </Match>
-              <Match when={entry.kind === 'thinking' && entry}>
-                {(e) => (
-                  <details class="entry-thinking">
-                    <summary>Thought</summary>
-                    <p>{e().text}</p>
-                  </details>
-                )}
-              </Match>
-              <Match when={entry.kind === 'tool' && entry}>
-                {(e) => <ToolRow tool={e()} cwd={props.cwd} onOpenFile={props.onOpenFile} />}
-              </Match>
-              <Match when={entry.kind === 'notice' && entry}>
-                {(e) => (
-                  <p class="entry-notice" data-tone={e().tone}>
-                    {e().text}
-                  </p>
-                )}
-              </Match>
-            </Switch>
-          )}
-        </For>
-      </div>
-    </div>
-  );
-}
-
-/** Something the agent did: one line, which opens to what it changed or printed. */
-function ToolRow(props: { tool: Tool; cwd: string; onOpenFile: (path: string) => void }) {
-  const lines = (text: string) => text.split('\n').length;
-  /** The file an edit changed, as an absolute path. */
-  const file = () => {
-    const path = props.tool.diff?.path;
-    return path && (path.startsWith('/') ? path : `${props.cwd}/${path}`);
-  };
-  return (
-    <details class="tool" data-status={props.tool.status}>
-      <summary>
-        <span class="tool-name">{props.tool.name}</span>
-        <span class="tool-title">{props.tool.title}</span>
-        <Show when={props.tool.diff}>
-          {(diff) => (
-            <span class="tool-count">
-              <span data-state="ok">+{lines(diff().new)}</span>
-              <Show when={diff().old}>{(old) => <span data-state="failed"> -{lines(old())}</span>}</Show>
-            </span>
-          )}
-        </Show>
-        <Show when={props.tool.status !== 'done'}>
-          <span class="tool-status">{props.tool.status === 'running' ? 'running' : 'failed'}</span>
-        </Show>
-      </summary>
-      <Show when={props.tool.diff}>
-        {(diff) => (
-          <div class="tool-body">
-            <Show when={file()}>
-              {(path) => (
-                <button type="button" class="tool-open" onClick={() => props.onOpenFile(path())}>
-                  Open {diff().path}
-                </button>
-              )}
-            </Show>
-            <Show when={diff().old}>{(old) => <pre class="tool-old">{old()}</pre>}</Show>
-            <pre class="tool-new">{diff().new}</pre>
-          </div>
-        )}
-      </Show>
-      <Show when={!props.tool.diff && props.tool.output}>
-        <pre class="tool-body">{props.tool.output}</pre>
-      </Show>
-    </details>
   );
 }
 

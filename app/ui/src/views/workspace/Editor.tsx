@@ -4,13 +4,7 @@
 // shows the new text. When yours has unsaved changes, a bar asks which to keep.
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import {
-  bracketMatching,
-  HighlightStyle,
-  indentOnInput,
-  type LanguageSupport,
-  syntaxHighlighting,
-} from '@codemirror/language';
+import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { unifiedMergeView } from '@codemirror/merge';
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { Compartment, EditorState, type Extension, type TransactionSpec } from '@codemirror/state';
@@ -26,27 +20,9 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
 import { createAction } from '../../components/action';
+import { languages } from '../../components/languages';
 import { buffers, keepMine, load, save, setBuffers, takeTheirs } from '../../state/editor';
 import { original } from '../../state/repo';
-
-/** Each language, loaded the first time a file needs it. */
-const languages: Record<string, () => Promise<LanguageSupport>> = {
-  js: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
-  jsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
-  ts: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ typescript: true })),
-  tsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ typescript: true, jsx: true })),
-  mjs: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
-  rs: () => import('@codemirror/lang-rust').then((m) => m.rust()),
-  py: () => import('@codemirror/lang-python').then((m) => m.python()),
-  java: () => import('@codemirror/lang-java').then((m) => m.java()),
-  kt: () => import('@codemirror/lang-java').then((m) => m.java()),
-  json: () => import('@codemirror/lang-json').then((m) => m.json()),
-  md: () => import('@codemirror/lang-markdown').then((m) => m.markdown()),
-  css: () => import('@codemirror/lang-css').then((m) => m.css()),
-  html: () => import('@codemirror/lang-html').then((m) => m.html()),
-  yml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
-  yaml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
-};
 
 // The colours are theme.css's tokens, so none is written twice.
 const colours = HighlightStyle.define([
