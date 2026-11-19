@@ -44,7 +44,7 @@ pub enum Update {
 
 /// No more of a tool's output than this is kept: the end of it, where a
 /// failure usually says why.
-const OUTPUT_LIMIT: usize = 20_000;
+pub const OUTPUT_LIMIT: usize = 20_000;
 
 pub struct Folded {
     pub state: Conversation,
@@ -203,7 +203,7 @@ impl Folded {
 
 /// What a tool call acts on, from its input: a few words for its row, and
 /// what it changes if it is an edit. The agents name these fields differently.
-fn describe(input: &Value) -> (String, Option<Diff>) {
+pub fn describe(input: &Value) -> (String, Option<Diff>) {
     let text = |keys: &[&str]| {
         keys.iter()
             .find_map(|key| input[*key].as_str())
@@ -261,7 +261,7 @@ fn describe(input: &Value) -> (String, Option<Diff>) {
 }
 
 /// The last `limit` bytes of a text, cut at a character.
-fn tail(text: &str, limit: usize) -> String {
+pub fn tail(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_string();
     }

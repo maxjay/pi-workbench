@@ -1,7 +1,9 @@
 //! Conversations with an agent: one process each while you are talking,
 //! and one file each in wbd's data folder, so a conversation can be opened
 //! again and carried on. The file holds what the page shows. The agent
-//! keeps its own memory of the conversation, under the same id.
+//! keeps its own memory of the conversation, under the same id. So a
+//! session the agent made outside the workbench is a conversation too: it
+//! is listed, and gets its file when it is first opened.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -74,6 +76,16 @@ impl Conversations {
             .map(|saved| saved.state)
             .filter(|state| state.cwd == cwd)
             .collect();
+        // The agents' own sessions here that have no file yet: the ones
+        // made outside the workbench. Opening one gives it a file.
+        let own = agent::sessions(cwd)
+            .into_iter()
+            .filter(|state| plain(&state.id) && !self.path(&state.id).exists())
+            .map(|state| Conversation {
+                title: title(&state.title),
+                ..state
+            });
+        list.extend(own);
         // One that is running is further on than its file.
         let live = self.live.lock().expect("not poisoned");
         for state in &mut list {
@@ -203,13 +215,34 @@ impl Conversations {
         self.live.lock().expect("not poisoned").get(id).cloned()
     }
 
+    /// A conversation from its file. One that has no file may be a session
+    /// the agent kept by itself: that is taken in.
     fn saved(&self, id: &str) -> Result<Saved, Error> {
-        // An id is a file name here, so it must not be a path.
-        let plain = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-        plain
-            .then(|| read(&self.dir.join(format!("{id}.json"))))
+        plain(id)
+            .then(|| read(&self.path(id)).or_else(|| self.take_in(id)))
             .flatten()
             .ok_or_else(|| Error::NotFound(format!("no conversation {id}")))
+    }
+
+    /// Reads an agent's own session into a conversation and saves it, so
+    /// it is the workbench's own from then on. The agent knows it by the
+    /// same id, so it carries on where it was.
+    fn take_in(&self, id: &str) -> Option<Saved> {
+        let view = agent::session(id)?;
+        let saved = Saved {
+            state: Conversation {
+                title: title(&view.state.title),
+                ..view.state
+            },
+            entries: view.entries,
+            brief: None,
+        };
+        self.store(&saved);
+        Some(saved)
+    }
+
+    fn path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.json"))
     }
 
     /// Writes what you said, to the page, to the file and to the agent.
@@ -330,7 +363,7 @@ impl Conversations {
 
     fn store(&self, saved: &Saved) {
         let text = serde_json::to_string(saved).expect("a conversation serializes");
-        let path = self.dir.join(format!("{}.json", saved.state.id));
+        let path = self.path(&saved.state.id);
         // A conversation that can't be saved still runs. It just can't be opened again.
         if std::fs::create_dir_all(&self.dir).is_ok() {
             let _ = files::write_whole(&path, &text, None);
@@ -356,6 +389,11 @@ async fn write(live: &Live, mut line: String) -> Result<(), Error> {
 
 fn read(path: &Path) -> Option<Saved> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// An id is a file name here, so it must not be a path.
+fn plain(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 fn now() -> u64 {

@@ -5,13 +5,14 @@
 
 mod claude;
 mod pi;
+mod pi_sessions;
 
 use std::path::Path;
 use std::process::Stdio;
 
 use std::time::Duration;
 
-use protocol::{Agent, Ask, Offer};
+use protocol::{Agent, Ask, Conversation, ConversationView, Offer};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -56,6 +57,19 @@ pub fn command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command
+}
+
+/// The sessions the agents keep by themselves for a folder, as
+/// conversations. Those made outside the workbench are among them. Each
+/// `title` is the whole of what you first wrote. Only Pi's are read.
+pub fn sessions(cwd: &str) -> Vec<Conversation> {
+    pi_sessions::root().map_or_else(Vec::new, |root| pi_sessions::list(&root, cwd))
+}
+
+/// One of those sessions, whole. Its id is what the agent knows it by, so
+/// starting the agent with it carries the session on.
+pub fn session(id: &str) -> Option<ConversationView> {
+    pi_sessions::open(&pi_sessions::root()?, id)
 }
 
 /// What one line from the agent means. Nothing, for a line the workbench doesn't use.
