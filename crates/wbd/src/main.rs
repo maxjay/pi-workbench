@@ -36,7 +36,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// What wbd keeps between calls.
 struct Ctx {
-    workspaces: Workspaces,
+    /// wbd's one writer: lines for the page.
+    out: mpsc::UnboundedSender<String>,
+    workspaces: Arc<Workspaces>,
     places: places::Places,
     terminals: Terminals,
     conversations: Conversations,
@@ -89,11 +91,13 @@ async fn main() -> ExitCode {
         Some(door) => (door.env.clone(), Some(door.socket.clone())),
         None => (Vec::new(), None),
     };
+    let workspaces = Arc::new(Workspaces::new(&data_dir()));
     let ctx = Arc::new(Ctx {
-        workspaces: Workspaces::new(&data_dir()),
+        out: out.clone(),
+        workspaces: workspaces.clone(),
         places: places::Places::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
-        conversations: Conversations::new(&data_dir(), out.clone(), env),
+        conversations: Conversations::new(&data_dir(), out.clone(), env, workspaces),
         dova: dova::Dova::default(),
         pulls: pulls::Pulls::default(),
         reviews: review::Reviews::default(),
@@ -203,9 +207,23 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.workspaces.forget(&id)?;
             Answer::Done
         }
-        Call::ScratchNew { text } => {
+        Call::ScratchNew { text, repo } => {
             let under = ctx.places.own().join("workspaces");
-            Answer::Workspace(view(ctx.workspaces.scratch(&under, &text)?))
+            let main = repo
+                .as_deref()
+                .map(|clone| repos::name_of(Path::new(clone)));
+            let workspace = ctx.workspaces.scratch(&under, &text, main.as_deref())?;
+            if let Some(clone) = repo {
+                let folder = Path::new(&workspace.path);
+                let work = workspace.work.clone().unwrap_or_default();
+                // A workspace whose repo could not be put in is not left behind.
+                if let Err(err) = repos::add(Path::new(&clone), folder, &work).await {
+                    let _ = std::fs::remove_dir(folder);
+                    ctx.workspaces.forget(&workspace.id)?;
+                    return Err(err);
+                }
+            }
+            Answer::Workspace(view(workspace))
         }
         Call::ReposList => {
             let found = ctx.places.found().await;
@@ -233,8 +251,14 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     "this workspace is a repo itself. A repo is added to one that is not".into(),
                 ));
             }
-            let branch = branch.unwrap_or_else(|| repos::branch_for(folder));
-            repos::add(Path::new(&clone), folder, &branch).await?;
+            let work = ctx
+                .workspaces
+                .at(folder)
+                .and_then(|workspace| workspace.work);
+            let branch = branch.or(work).unwrap_or_else(|| repos::branch_for(folder));
+            let added = repos::add(Path::new(&clone), folder, &branch).await?;
+            ctx.workspaces.took(folder, &added.name)?;
+            let _ = ctx.out.send(protocol::event(&Event::Workspaces));
             Answer::Done
         }
         Call::FoldersList { dir } => {

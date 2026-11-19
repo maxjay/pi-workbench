@@ -5,6 +5,7 @@
 //!
 //! `wb repos [words]` lists your clones. `wb add <repo>...` puts a worktree of each into the
 //! conversation's workspace, after you said yes to it on a card in the conversation.
+//! `wb name <name>` names the work: the workspace, and the branch in every repo in it.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use protocol::Ask;
+use protocol::{Ask, Event, Workspace};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -22,20 +23,62 @@ use crate::{Ctx, repos};
 /// `wb repos` prints no more clones than this at once.
 const LISTED: usize = 200;
 
-const USAGE: &str = "wb repos [words]                     the user's clones, or those with any of the words\n\
-                     wb add <repo>... [--branch <name>]   put a worktree of each into this workspace";
+const USAGE: &str = "wb name <name>       name the work: the workspace, and the branch in every repo here\n\
+                     wb repos [words]     the user's clones, or those with any of the words\n\
+                     wb add <repo>...     put a worktree of each into this workspace";
 
-/// What an agent in a workspace that takes repos is told about `wb`, added to what it is
-/// told about itself.
-pub const NOTE: &str = "This folder is a workspace in the Workbench app. It can hold several of the user's \
-     repositories, each in a folder of its own, as a git worktree on a branch of its own.\n\
-     `wb repos [words]` lists the user's clones. `wb add <repo>... --branch <name>` puts a \
-     worktree of each into this folder at ./<repo>, after the user confirms it in the app: \
-     wait for it, the command prints what was added or that the user said no. For the first \
-     repos, name the branch after the work, short, in lower case with dashes. Without \
-     --branch a repo goes on the branch the repos already here are on.\n\
-     When the work needs a repository that is not in this folder, add it with `wb add`. \
-     Do not clone it yourself, and do not change files in the user's own clones.";
+/// What an agent in a workspace that takes repos is told about it and about `wb`, added to
+/// what it is told about itself.
+pub fn note(workspace: Option<&Workspace>, folder: &Path) -> String {
+    let here: Vec<String> = repos::inside(folder)
+        .into_iter()
+        .map(|repo| repo.name)
+        .collect();
+    let main = workspace.and_then(|workspace| workspace.main.as_deref());
+    let mut out = String::from(
+        "This folder is a workspace in the Workbench app, for one piece of work. It holds the \
+         repositories of the user that the work needs, each in a folder of its own, as a git \
+         worktree on the work's branch.\n",
+    );
+    match here.as_slice() {
+        [] => out.push_str("No repository is here yet.\n"),
+        names => {
+            let listed: Vec<String> = names
+                .iter()
+                .map(|name| match Some(name.as_str()) == main {
+                    true => format!("./{name} (the main one)"),
+                    false => format!("./{name}"),
+                })
+                .collect();
+            out.push_str(&format!(
+                "Here now: {}. A repository's own instructions for agents (AGENTS.md, CLAUDE.md) \
+                 are in its folder: read them before you work in it.\n",
+                listed.join(", ")
+            ));
+        }
+    }
+    match workspace.filter(|workspace| workspace.named) {
+        Some(workspace) => out.push_str(&format!(
+            "The work is named {}. That is the branch in every repository here.\n",
+            workspace.work.as_deref().unwrap_or(&workspace.name)
+        )),
+        None => out.push_str(
+            "The work has no name yet. As soon as you know what it is, name it, once, with \
+             `wb name <name>`: two to four words in lower case with dashes, like \
+             fix-login-redirect. It becomes the branch in every repository here and the title \
+             the user sees.\n",
+        ),
+    }
+    out.push_str(
+        "`wb repos [words]` lists the user's clones. `wb add <repo>...` puts a worktree of each \
+         into this folder at ./<repo>, on the work's branch, after the user confirms it in the \
+         app: wait for it, the command prints what was added or that the user said no.\n\
+         When the work needs a repository that is not in this folder, add it with `wb add`. \
+         Do not clone it yourself, and do not change files in the user's own clones. \
+         Run a `wb` command by itself, not chained with other commands.",
+    );
+    out
+}
 
 /// The socket wbd listens on for `wb`, and what an agent's environment needs to reach it.
 pub struct Door {
@@ -100,6 +143,7 @@ pub async fn serve(listener: UnixListener, ctx: Arc<Ctx>) {
             let said = match asked["ask"].as_str() {
                 Some("repos") => Ok(listed(&ctx, &words(&asked["words"])).await),
                 Some("add") => add(&ctx, &asked, hung_up).await,
+                Some("name") => name(&ctx, &asked).await,
                 _ => Err(USAGE.to_string()),
             };
             let answer = match said {
@@ -143,6 +187,39 @@ async fn listed(ctx: &Ctx, words: &[String]) -> String {
     out
 }
 
+/// `wb name`: names the work, once. The branch in every repo of the workspace is renamed.
+async fn name(ctx: &Ctx, asked: &Value) -> Result<String, String> {
+    let conversation = asked["conversation"].as_str().unwrap_or_default();
+    let Some(cwd) = ctx.conversations.cwd(conversation) else {
+        return Err("wb works in a conversation started in the Workbench.".into());
+    };
+    let folder = Path::new(&cwd);
+    let workspace = ctx.workspaces.at(folder);
+    let Some(workspace) = workspace.filter(|workspace| workspace.scratch) else {
+        return Err("This folder is not a workspace the Workbench made. Its name stays.".into());
+    };
+    let was = workspace.work.as_deref().unwrap_or(&workspace.name);
+    let Some(new) = asked["name"].as_str().filter(|name| !name.is_empty()) else {
+        return Ok(format!("The work is called {was}."));
+    };
+    if workspace.named {
+        return Ok(format!(
+            "The work already has its name: {was}. Nothing was changed."
+        ));
+    }
+    let renamed = repos::rename(folder, new).await?;
+    let failed = |err| protocol::Failure::from(err).message;
+    ctx.workspaces.name(folder, new).map_err(failed)?;
+    let _ = ctx.out.send(protocol::event(&Event::Workspaces));
+    Ok(match renamed.is_empty() {
+        true => format!("The work is named {new}."),
+        false => format!(
+            "The work is named {new}. That is now the branch in {}.",
+            all_of(&renamed)
+        ),
+    })
+}
+
 /// `wb add`: asks you on a card in the conversation, then puts the worktrees in.
 async fn add(
     ctx: &Ctx,
@@ -178,8 +255,9 @@ async fn add(
             clones.push(clone.path.clone());
         }
     }
-    let branch = match asked["branch"].as_str() {
-        Some(branch) => branch.to_string(),
+    let workspace = ctx.workspaces.at(folder);
+    let branch = match workspace.and_then(|workspace| workspace.work) {
+        Some(work) => work,
         None => repos::branch_for(folder),
     };
 
@@ -233,7 +311,9 @@ async fn add(
             "  ./{}  a worktree of {clone}, on the branch {}{from}\n",
             added.name, added.branch
         ));
+        let _ = ctx.workspaces.took(folder, &added.name);
     }
+    let _ = ctx.out.send(protocol::event(&Event::Workspaces));
     out.push_str("Work, commit and push in these folders.");
     Ok(out)
 }
@@ -251,23 +331,16 @@ fn all_of(names: &[String]) -> String {
 pub fn client(args: &[String]) -> ExitCode {
     let asked = match args.first().map(String::as_str) {
         Some("repos") => json!({ "ask": "repos", "words": &args[1..] }),
-        Some("add") => {
-            let mut repos = Vec::new();
-            let mut branch = None;
-            let mut rest = args[1..].iter();
-            while let Some(arg) = rest.next() {
-                match arg.as_str() {
-                    "--branch" | "-b" => branch = rest.next().cloned(),
-                    _ => repos.push(arg.clone()),
-                }
-            }
-            json!({
-                "ask": "add",
-                "repos": repos,
-                "branch": branch,
-                "conversation": std::env::var("WB_CONVERSATION").unwrap_or_default(),
-            })
-        }
+        Some("add") => json!({
+            "ask": "add",
+            "repos": &args[1..],
+            "conversation": std::env::var("WB_CONVERSATION").unwrap_or_default(),
+        }),
+        Some("name") => json!({
+            "ask": "name",
+            "name": args.get(1),
+            "conversation": std::env::var("WB_CONVERSATION").unwrap_or_default(),
+        }),
         _ => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;

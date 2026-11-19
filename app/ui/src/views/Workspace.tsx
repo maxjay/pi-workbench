@@ -37,10 +37,12 @@ import {
 
 export function WorkspacePage(props: { id: string }) {
   return (
-    <Show when={workspaceById(props.id)} keyed>
+    // Not keyed: the list is asked again when a workspace is named, and what is open in this
+    // one stays as it is then.
+    <Show when={workspaceById(props.id)}>
       {(view) => (
-        <Show when={view.exists} fallback={<Missing view={view} />}>
-          <Page view={view} />
+        <Show when={view().exists} fallback={<Missing view={view()} />}>
+          <Page view={view()} />
         </Show>
       )}
     </Show>

@@ -46,9 +46,10 @@ pub enum Call {
     /// Takes a workspace off the list. The folder is not touched.
     #[serde(rename = "workspaces.forget")]
     WorkspacesForget { id: String },
-    /// Makes an empty folder for what you asked and opens it as a workspace.
+    /// Makes a folder for what you asked and opens it as a workspace. With `repo`, the folder
+    /// of one of your clones, a worktree of it is put in at once, on a branch of its own.
     #[serde(rename = "scratch.new")]
-    ScratchNew { text: String },
+    ScratchNew { text: String, repo: Option<String> },
     /// The folders in `dir`, to pick one to open. `~` is your home folder.
     #[serde(rename = "folders.list")]
     FoldersList { dir: String },
@@ -59,8 +60,8 @@ pub enum Call {
     #[serde(rename = "workspace.repos")]
     WorkspaceRepos { dir: String },
     /// Puts a worktree of `clone` into the workspace at `dir`, in a folder named after the
-    /// clone. Its branch is `branch`. Without one it is the branch the repos already there
-    /// are on, or one named after the workspace.
+    /// clone. Its branch is `branch`. Without one it is the workspace's work name, or the
+    /// branch the repos already there are on.
     #[serde(rename = "workspace.add")]
     WorkspaceAdd {
         dir: String,
@@ -613,6 +614,8 @@ pub enum Event {
     Terminals { list: Vec<Terminal> },
     /// What changed in a conversation.
     Conversation { id: String, changes: Vec<Change> },
+    /// A workspace was named, or got a repo: the list is to be asked for again.
+    Workspaces,
 }
 
 /// Why a call wasn't answered: a JSON-RPC error.

@@ -5,14 +5,15 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// A folder opened in the workbench. Nothing is written into the folder itself.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct Workspace {
     pub id: String,
     /// Absolute, with links resolved.
     pub path: String,
-    /// The folder's own name.
+    /// What it is called. For a folder you opened, the folder's own name. For one the
+    /// workbench made, the main repo and the name of the work: `web-fix-login`.
     pub name: String,
     /// When it was last opened, in milliseconds since 1970.
     #[ts(type = "number")]
@@ -21,6 +22,16 @@ pub struct Workspace {
     /// you asked that is not about a repo.
     #[serde(default)]
     pub scratch: bool,
+    /// The repo the work started from, by its folder's name. None while there is no repo in
+    /// it, and for a folder you opened.
+    #[serde(default)]
+    pub main: Option<String>,
+    /// The name of the work, in a workspace the workbench made: the branch in every repo in it.
+    #[serde(default)]
+    pub work: Option<String>,
+    /// True once the work was named. Until then its name is the first words you wrote.
+    #[serde(default)]
+    pub named: bool,
 }
 
 /// A workspace as Home lists it.

@@ -9,7 +9,8 @@ export type Workspace = { id: string,
  */
 path: string, 
 /**
- * The folder's own name.
+ * What it is called. For a folder you opened, the folder's own name. For one the
+ * workbench made, the main repo and the name of the work: `web-fix-login`.
  */
 name: string, 
 /**
@@ -20,4 +21,17 @@ opened: number,
  * True for a scratchpad: a folder the workbench made, for something
  * you asked that is not about a repo.
  */
-scratch: boolean, };
+scratch: boolean, 
+/**
+ * The repo the work started from, by its folder's name. None while there is no repo in
+ * it, and for a folder you opened.
+ */
+main: string | null, 
+/**
+ * The name of the work, in a workspace the workbench made: the branch in every repo in it.
+ */
+work: string | null, 
+/**
+ * True once the work was named. Until then its name is the first words you wrote.
+ */
+named: boolean, };

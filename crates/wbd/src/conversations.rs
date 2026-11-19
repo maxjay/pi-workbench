@@ -23,6 +23,7 @@ use crate::agent::{self, name};
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
+use crate::workspaces::Workspaces;
 use crate::{repos, wb};
 
 /// How often what an agent says goes to the page. A reply streaming word
@@ -39,6 +40,8 @@ pub struct Conversations {
     out: UnboundedSender<String>,
     /// What every agent's environment gets, so it can run `wb`. Empty without it.
     env: Arc<Vec<(String, String)>>,
+    /// To tell an agent what workspace it is in.
+    workspaces: Arc<Workspaces>,
 }
 
 /// A conversation whose agent is running.
@@ -65,12 +68,18 @@ struct Saved {
 }
 
 impl Conversations {
-    pub fn new(data_dir: &Path, out: UnboundedSender<String>, env: Vec<(String, String)>) -> Self {
+    pub fn new(
+        data_dir: &Path,
+        out: UnboundedSender<String>,
+        env: Vec<(String, String)>,
+        workspaces: Arc<Workspaces>,
+    ) -> Self {
         Conversations {
             dir: data_dir.join("conversations"),
             live: Arc::default(),
             out,
             env: Arc::new(env),
+            workspaces,
         }
     }
 
@@ -341,10 +350,12 @@ impl Conversations {
         let (id, agent, cwd) = (state.id.clone(), state.agent, Path::new(&state.cwd));
         let (model, effort) = (state.model.as_deref(), state.effort.as_deref());
         // In a workspace that takes repos the agent is told about `wb`, each time it starts.
-        let note = (!self.env.is_empty() && repos::takes(cwd)).then_some(wb::NOTE);
+        let note = (!self.env.is_empty() && repos::takes(cwd))
+            .then(|| wb::note(self.workspaces.at(cwd).as_ref(), cwd));
         let told = match (brief.as_deref(), note) {
             (Some(brief), Some(note)) => Some(format!("{brief}\n\n{note}")),
-            (brief, note) => brief.or(note).map(str::to_string),
+            (Some(brief), None) => Some(brief.to_string()),
+            (None, note) => note,
         };
         let mut child = agent::command(agent, &id, cwd, resume, model, effort, told.as_deref())
             .envs(self.env.iter().cloned())

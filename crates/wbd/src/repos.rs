@@ -49,6 +49,59 @@ pub fn branch_for(folder: &Path) -> String {
     }
 }
 
+/// Gives the work in `folder` another name: the branch each repo there is on is renamed to
+/// `new`. Nothing is renamed when one of them can't be: a branch that is pushed keeps its
+/// name, and so does everything else then. Gives the repos that were renamed.
+pub async fn rename(folder: &Path, new: &str) -> Result<Vec<String>, String> {
+    let fits = new
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_./".contains(c));
+    let valid = run(folder, &["check-ref-format", "--branch", new], None).await;
+    if !fits || valid.is_err() {
+        return Err(format!(
+            "{new} can't be a branch's name. Use lower case letters, digits and dashes."
+        ));
+    }
+    let repos = inside(folder);
+    for repo in &repos {
+        let (dir, old) = (
+            Path::new(&repo.path),
+            repo.branch.as_deref().unwrap_or_default(),
+        );
+        if old == new {
+            continue;
+        }
+        let there = |name: String| async move {
+            let asked = ["show-ref", "--verify", "--quiet", &name];
+            run(dir, &asked, None).await.is_ok()
+        };
+        if there(format!("refs/heads/{new}")).await {
+            return Err(format!(
+                "{} already has a branch called {new}. Pick another name.",
+                repo.name
+            ));
+        }
+        if there(format!("refs/remotes/origin/{old}")).await {
+            return Err(format!(
+                "the branch {old} of {} is pushed, so the work keeps its name",
+                repo.name
+            ));
+        }
+    }
+    let mut renamed = Vec::new();
+    for repo in repos {
+        let on = repo.branch.as_deref().unwrap_or_default();
+        if on == new || on == "detached" {
+            continue;
+        }
+        run(Path::new(&repo.path), &["branch", "-m", new], None)
+            .await
+            .map_err(|why| format!("couldn't rename the branch of {}: {why}", repo.name))?;
+        renamed.push(repo.name);
+    }
+    Ok(renamed)
+}
+
 /// A folder's own name.
 pub fn name_of(path: &Path) -> String {
     path.file_name()
@@ -219,6 +272,12 @@ mod tests {
         assert_eq!(inside(&room)[0].branch.as_deref(), Some("fix-it"));
         // The next repo here goes on the same branch, where none is named.
         assert_eq!(branch_for(&room), "fix-it");
+        // Naming the work renames the branch, and a name git would not take is refused.
+        assert_eq!(rename(&room, "login-fix").await.unwrap(), ["web"]);
+        assert_eq!(inside(&room)[0].branch.as_deref(), Some("login-fix"));
+        assert!(rename(&room, "Not A Name").await.is_err());
+        assert!(rename(&room, "main").await.is_err());
+        rename(&room, "fix-it").await.unwrap();
         // A workspace with no repo yet names the branch after itself.
         assert_eq!(branch_for(&clone.join(".git")), ".git");
         // The clone is where it was.

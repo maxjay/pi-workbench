@@ -1,7 +1,7 @@
 // The workspaces, as wbd lists them.
 
 import { createResource } from 'solid-js';
-import { ask, status } from '../daemon';
+import { ask, onEvent, status } from '../daemon';
 import { close, open } from './tabs';
 
 const [workspaces, { refetch }] = createResource(
@@ -10,6 +10,11 @@ const [workspaces, { refetch }] = createResource(
 );
 
 export { workspaces };
+
+// wbd says when one was named or got a repo, which an agent does without the page asking.
+onEvent((event) => {
+  if (event.event === 'workspaces') void refetch();
+});
 
 export const workspaceById = (id: string) => workspaces()?.find((view) => view.workspace.id === id);
 

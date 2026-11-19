@@ -1,10 +1,11 @@
-// Home: the ask line, which starts a scratchpad, then your pull requests,
-// then your workspaces.
+// Home: the ask line, which starts a workspace in a repo or a scratchpad,
+// then your pull requests, then your workspaces.
 
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../components/action';
 import { Glyph } from '../components/Glyph';
 import { openFolderDialog } from '../components/OpenFolder';
+import { openPalette } from '../components/Palette';
 import { ask, connect, status, stopReason } from '../daemon';
 import type { WorkspaceView } from '../protocol/WorkspaceView';
 import { agentName, defaultAgent, start } from '../state/conversations';
@@ -14,9 +15,15 @@ import { Pulls } from './home/Pulls';
 import { Tickets } from './home/Tickets';
 import { setConversation, shortPath } from './workspace/ui';
 
-/** What a workspace is on: its branch, the repos in it, or why it has neither. */
+/**
+ * What a workspace is on. One the workbench made is called after its main repo and its work,
+ * so only the other repos in it are named here. A folder you opened has its branch.
+ */
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
+  const main = view.workspace.main;
+  const others = view.repos.filter((name) => name !== main);
+  if (main) return others.length > 0 ? `+ ${others.join(', ')}` : '';
   if (view.repos.length > 0) return view.repos.join(', ');
   if (view.workspace.scratch) return 'scratchpad';
   return view.branch ?? 'not a git folder';
@@ -24,11 +31,32 @@ function standing(view: WorkspaceView) {
 
 export function Home() {
   const [text, setText] = createSignal('');
-  // What you ask becomes a scratchpad: an empty folder of its own, opened
-  // like any workspace, with the conversation already started in it.
+  /** The clone the work starts in, when you picked one. */
+  const [repo, setRepo] = createSignal<{ name: string; path: string }>();
+  const picking = createAction(async () => {
+    const { dir, folders } = await ask({ method: 'repos.list' }, 'folders');
+    openPalette(
+      [
+        { group: '', title: 'No repo', detail: 'a scratchpad', run: () => setRepo() },
+        ...folders.map((clone) => ({
+          group: 'Repo',
+          title: clone.name,
+          detail: shortPath(clone.path),
+          run: () => setRepo({ name: clone.name, path: clone.path }),
+        })),
+      ],
+      `Start in a repo from ${shortPath(dir)}`,
+    );
+  });
+  // What you ask becomes a workspace: a folder of its own, with the conversation already
+  // started in it. With a repo picked, a worktree of it is in the folder from the start, on
+  // a branch of its own. Without one it is a scratchpad, and a repo can be put in later.
   const asking = createAction(async () => {
     const asked = text().trim();
-    const view = await ask({ method: 'scratch.new', params: { text: asked } }, 'workspace');
+    const view = await ask(
+      { method: 'scratch.new', params: { text: asked, repo: repo()?.path ?? null } },
+      'workspace',
+    );
     const conversation = await start(defaultAgent(), view.workspace.path, asked);
     await refreshWorkspaces();
     setConversation(view.workspace.id, conversation);
@@ -65,11 +93,36 @@ export function Home() {
             disabled={asking.busy()}
             onInput={(e) => setText(e.currentTarget.value)}
           />
+          <button
+            type="button"
+            class="button"
+            title="The repo the work starts in"
+            disabled={status() !== 'ready' || asking.busy()}
+            onClick={() => void picking.run()}
+          >
+            {repo()?.name ?? 'Repo'}
+          </button>
           <button type="submit" class="button button-primary" disabled={!ready()}>
             Start
           </button>
         </div>
-        <Show when={asking.error()} fallback={<p class="dim">Starts a scratchpad: a folder of its own.</p>}>
+        <Show
+          when={asking.error() ?? picking.error()}
+          fallback={
+            <p class="dim">
+              <Show
+                when={repo()}
+                fallback="Starts a scratchpad: a folder of its own. Pick a repo to start in one."
+              >
+                {(picked) =>
+                  asking.busy()
+                    ? `Making a worktree of ${picked().name}`
+                    : `Starts a workspace: a worktree of ${picked().name}, on a branch of its own.`
+                }
+              </Show>
+            </p>
+          }
+        >
           {(error) => <p class="note-failed">{error()}</p>}
         </Show>
       </form>

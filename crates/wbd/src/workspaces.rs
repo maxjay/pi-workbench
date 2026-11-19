@@ -64,27 +64,80 @@ impl Workspaces {
         list
     }
 
-    /// Makes an empty folder in `under`, named after what you asked, and opens it as a
-    /// workspace marked as a scratchpad.
-    pub fn scratch(&self, under: &Path, text: &str) -> Result<Workspace, Error> {
-        let name = slug(text);
-        let folder = (1..)
+    /// Makes an empty folder in `under` for what you asked, and opens it as a workspace the
+    /// workbench made. Its work is named after the first words you wrote, until it is named.
+    /// With `main`, a repo's name, the workspace is called after both: the repo is put in
+    /// by whoever asked.
+    pub fn scratch(
+        &self,
+        under: &Path,
+        text: &str,
+        main: Option<&str>,
+    ) -> Result<Workspace, Error> {
+        let words = slug(text);
+        let called = |work: &str| match main {
+            Some(main) => format!("{main}-{work}"),
+            None => work.to_string(),
+        };
+        let work = (1..)
             .map(|n| match n {
-                1 => under.join(&name),
-                n => under.join(format!("{name}-{n}")),
+                1 => words.clone(),
+                n => format!("{words}-{n}"),
             })
-            .find(|folder| !folder.exists())
+            .find(|work| !under.join(called(work)).exists())
             .expect("some number is free");
+        let folder = under.join(called(&work));
         std::fs::create_dir_all(&folder).map_err(|err| Error::io(&folder, err))?;
-        self.add(&folder.display().to_string(), true)
+        self.add(&folder.display().to_string(), |workspace| {
+            workspace.scratch = true;
+            workspace.main = main.map(str::to_string);
+            workspace.work = Some(work);
+        })
     }
 
     /// Opens a folder as a workspace, or opens it again.
     pub fn open(&self, path: &str) -> Result<Workspace, Error> {
-        self.add(path, false)
+        self.add(path, |_| {})
     }
 
-    fn add(&self, path: &str, scratch: bool) -> Result<Workspace, Error> {
+    /// The workspace whose folder is `path`.
+    pub fn at(&self, path: &Path) -> Option<Workspace> {
+        let list = self.list.lock().expect("not poisoned");
+        list.iter()
+            .find(|workspace| Path::new(&workspace.path) == path)
+            .cloned()
+    }
+
+    /// Names the work in the workspace at `path`, and so the workspace.
+    pub fn name(&self, path: &Path, work: &str) -> Result<(), Error> {
+        self.change(|list| {
+            let found = list
+                .iter_mut()
+                .find(|workspace| Path::new(&workspace.path) == path);
+            if let Some(workspace) = found {
+                workspace.work = Some(work.to_string());
+                workspace.named = true;
+                workspace.name = called(workspace);
+            }
+        })
+    }
+
+    /// A repo was put into the workspace at `path`. In one the workbench made that had none,
+    /// it is the main repo from now on, and the workspace is called after it.
+    pub fn took(&self, path: &Path, repo: &str) -> Result<(), Error> {
+        self.change(|list| {
+            let found = list
+                .iter_mut()
+                .find(|workspace| Path::new(&workspace.path) == path);
+            if let Some(workspace) = found.filter(|one| one.scratch && one.main.is_none()) {
+                workspace.work.get_or_insert_with(|| workspace.name.clone());
+                workspace.main = Some(repo.to_string());
+                workspace.name = called(workspace);
+            }
+        })
+    }
+
+    fn add(&self, path: &str, made: impl FnOnce(&mut Workspace)) -> Result<Workspace, Error> {
         let path = expand(path);
         if !path.is_dir() {
             return Err(Error::NotFound(format!("no folder at {}", path.display())));
@@ -99,13 +152,17 @@ impl Workspaces {
                 workspace.opened = now;
                 return workspace.clone();
             }
-            let workspace = Workspace {
+            let mut workspace = Workspace {
                 id: new_id(list, now),
                 name: name_of(Path::new(&path)),
                 path,
                 opened: now,
-                scratch,
+                ..Workspace::default()
             };
+            made(&mut workspace);
+            if workspace.scratch {
+                workspace.name = called(&workspace);
+            }
             list.push(workspace.clone());
             workspace
         })
@@ -144,7 +201,7 @@ impl Workspaces {
                     name: name_of(folder),
                     path: path.clone(),
                     opened: changed,
-                    scratch: false,
+                    ..Workspace::default()
                 });
             });
         }
@@ -222,6 +279,15 @@ pub fn folders(dir: &str) -> Result<(String, Vec<Folder>), Error> {
         .collect();
     folders.sort_by_key(|folder| folder.name.to_lowercase());
     Ok((dir.display().to_string(), folders))
+}
+
+/// What a workspace the workbench made is called: its main repo and the name of its work.
+fn called(workspace: &Workspace) -> String {
+    let work = workspace.work.as_deref().unwrap_or(&workspace.name);
+    match &workspace.main {
+        Some(main) => format!("{main}-{work}"),
+        None => work.to_string(),
+    }
 }
 
 /// A folder's own name.
@@ -397,16 +463,43 @@ mod tests {
         let workspaces = Workspaces::beside(data.path(), None);
         let under = data.path().join("workspaces");
         let first = workspaces
-            .scratch(&under, "Why does checkout crash on run?")
+            .scratch(&under, "Why does checkout crash on run?", None)
             .unwrap();
         assert_eq!(first.name, "why-does-checkout-crash-on");
         assert!(first.scratch && Path::new(&first.path).is_dir());
         // The same question again gets a folder of its own.
         let second = workspaces
-            .scratch(&under, "Why does checkout crash on run?")
+            .scratch(&under, "Why does checkout crash on run?", None)
             .unwrap();
         assert_eq!(second.name, "why-does-checkout-crash-on-2");
         assert_eq!(slug("¿?"), "scratch");
+    }
+
+    #[test]
+    fn a_workspace_is_called_after_its_main_repo_and_its_work() {
+        let data = tempfile::tempdir().unwrap();
+        let workspaces = Workspaces::beside(data.path(), None);
+        let under = data.path().join("workspaces");
+        // Started from a repo: called after both from the start.
+        let started = workspaces
+            .scratch(&under, "Fix the login", Some("web"))
+            .unwrap();
+        assert_eq!(started.name, "web-fix-the-login");
+        assert_eq!(started.work.as_deref(), Some("fix-the-login"));
+        let path = Path::new(&started.path);
+        workspaces.name(path, "login-redirect").unwrap();
+        let named = workspaces.at(path).unwrap();
+        assert_eq!(named.name, "web-login-redirect");
+        assert!(named.named);
+
+        // Started with no repo: the first one put in is the main one, a later one is not.
+        let plain = workspaces.scratch(&under, "Look around", None).unwrap();
+        let path = Path::new(&plain.path);
+        workspaces.took(path, "api").unwrap();
+        workspaces.took(path, "docs").unwrap();
+        let took = workspaces.at(path).unwrap();
+        assert_eq!(took.name, "api-look-around");
+        assert_eq!(took.main.as_deref(), Some("api"));
     }
 
     #[test]
@@ -417,8 +510,7 @@ mod tests {
             id: base36(5),
             path: String::new(),
             name: String::new(),
-            opened: 0,
-            scratch: false,
+            ..Workspace::default()
         }];
         assert_eq!(new_id(&taken, 5), base36(6));
     }
