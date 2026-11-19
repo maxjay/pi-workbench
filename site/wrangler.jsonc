@@ -1,0 +1,10 @@
+// workbench.maxjay.dev: Cloudflare serves the files in public/ as they are. There is no Worker code.
+// Published by .github/workflows/site.yml, which puts the installer in public/ first.
+{
+  "name": "workbench",
+  "compatibility_date": "2026-11-01",
+  "routes": [{ "pattern": "workbench.maxjay.dev", "custom_domain": true }],
+  "assets": {
+    "directory": "./public"
+  }
+}

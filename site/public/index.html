@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en" style="--h:180">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Workbench</title>
+<meta name="description" content="A window on Claude Code or Pi, on Windows, with the agent, your code and your terminals in WSL.">
+<meta property="og:title" content="Workbench">
+<meta property="og:description" content="A window on Claude Code or Pi, on Windows, with the agent, your code and your terminals in WSL.">
+<link rel="canonical" href="https://workbench.maxjay.dev/">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* The same look as maxjay.dev and dova.maxjay.dev. */
+  :root {
+    --paper: #f2f0e9; --ink: #14140f; --dim: #78766b; --line: #d5d2c6;
+    --cl: 0.62; --cc: 0.17;
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --c: oklch(var(--cl) var(--cc) var(--h));
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not(:has(.theme [value="light"]:checked)) { --paper: #0e0f0d; --ink: #ecebe4; --dim: #8b897e; --line: #2a2b27; --cl: 0.80; --cc: 0.15; }
+  }
+  :root:has(.theme [value="dark"]:checked) { --paper: #0e0f0d; --ink: #ecebe4; --dim: #8b897e; --line: #2a2b27; --cl: 0.80; --cc: 0.15; }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--paper); color: var(--ink); }
+  html::before { content: ""; position: fixed; inset: 0 0 auto 0; height: 6px; background: var(--c); z-index: 1; }
+  body {
+    font-family: var(--mono); font-size: 15px; line-height: 1.5;
+    max-width: 1180px; margin: 0 auto; padding: 0 32px;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  svg.glyph { display: block; fill: currentColor; }
+
+  .strip {
+    display: flex; justify-content: space-between; align-items: center; gap: 24px;
+    min-height: 60px; padding: 20px 0; color: var(--dim); font-size: 13px;
+  }
+  .strip .here { display: flex; align-items: center; gap: 10px; color: var(--ink); white-space: nowrap; }
+  .strip .here svg { width: 14px; height: 14px; }
+  .strip .here span { color: var(--dim); }
+  .strip a:hover { color: var(--ink); }
+  .strip .right { display: flex; gap: 22px; white-space: pre; }
+  .contact { margin-left: auto; }
+  .theme { border: 0; }
+  .theme label { cursor: pointer; }
+  .theme input { position: absolute; opacity: 0; pointer-events: none; }
+  .theme label:has(:checked), .theme:not(:has(:checked)) label:first-of-type { color: var(--ink); }
+  @media (prefers-color-scheme: dark) {
+    .theme:not(:has(:checked)) label:first-of-type { color: inherit; }
+    .theme:not(:has(:checked)) label:last-of-type { color: var(--ink); }
+  }
+
+  .title { display: flex; align-items: flex-end; gap: 28px; padding: 44px 0 18px; }
+  .title svg { width: clamp(72px, 10vw, 116px); height: clamp(72px, 10vw, 116px); flex: none; fill: var(--c); }
+  .title h1 {
+    font-family: var(--display); font-stretch: 78%; font-weight: 680;
+    font-size: clamp(56px, 11vw, 148px); line-height: .82; letter-spacing: -0.04em;
+  }
+  .lede {
+    font-family: var(--display); font-stretch: 92%; font-weight: 440;
+    font-size: clamp(26px, 3.4vw, 42px); line-height: 1.12; letter-spacing: -0.018em;
+    padding: 6px 0 20px; max-width: 32ch;
+  }
+  .prose { max-width: 37em; padding-bottom: 20px; }
+  .prose p {
+    font-family: var(--display); font-stretch: 95%; font-weight: 420;
+    font-size: clamp(19px, 1.85vw, 23px); line-height: 1.42; letter-spacing: -0.004em;
+  }
+
+  section { border-top: 1px solid var(--ink); margin-top: 44px; padding-top: 16px; display: grid; grid-template-columns: 44px 150px 1fr; column-gap: 16px; }
+  section > .n { color: var(--dim); font-size: 13px; padding-left: 12px; }
+  section > h2 { font: inherit; color: var(--dim); }
+  section > .body { min-width: 0; }
+
+  /* rows: a name and what it is */
+  .rows { list-style: none; display: grid; grid-template-columns: 240px 1fr; }
+  .rows li { display: contents; }
+  .rows li > * { padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .rows li:first-child > * { border-top: 1px solid var(--line); }
+  .rows code { font: inherit; padding-right: 32px; }
+  .rows span { color: var(--dim); }
+  .note { color: var(--dim); padding-top: 14px; max-width: 60ch; }
+  .note a, .rows a { border-bottom: 2px solid var(--c); color: var(--ink); }
+
+  footer.strip { margin-top: 72px; }
+
+  @media (max-width: 1000px) {
+    .rows { grid-template-columns: 1fr; }
+    .rows li > code { border-bottom: 0; padding: 9px 0 0; }
+    .rows li > span { padding-top: 2px; overflow-wrap: anywhere; }
+    .rows li:first-child > span { border-top: 0; }
+  }
+  @media (max-width: 760px) {
+    body { padding: 0 16px; }
+    .strip { min-height: 0; padding: 16px 0; }
+    .strip .right .hide { display: none; }
+    .contact { margin-left: 0; }
+    .title { gap: 14px; padding: 22px 0 12px; }
+    .title svg { width: 44px; height: 44px; }
+    .title h1 { font-size: clamp(44px, 15vw, 96px); }
+    .lede { font-size: 26px; }
+    .prose p { font-size: 18px; }
+    section { grid-template-columns: 1fr; row-gap: 8px; margin-top: 32px; }
+    section > .n { display: none; }
+    section > h2 { font-size: 12px; }
+    footer.strip { margin-top: 48px; flex-wrap: wrap; gap: 6px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="strip">
+  <a class="here" href="https://maxjay.dev/"><svg class="glyph" aria-hidden="true" viewBox="0 0 4 4" shape-rendering="crispEdges"><rect x="1" y="0" width="1" height="1"/><rect x="2" y="0" width="1" height="1"/><rect x="1" y="1" width="1" height="1"/><rect x="2" y="1" width="1" height="1"/><rect x="3" y="1" width="1" height="1"/><rect x="0" y="2" width="1" height="1"/><rect x="1" y="2" width="1" height="1"/><rect x="2" y="2" width="1" height="1"/><rect x="3" y="2" width="1" height="1"/><rect x="1" y="3" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/></svg>maxjay.dev<span>/ workbench</span></a>
+  <div class="right"><a class="hide" href="https://github.com/maxjay/pi-workbench">github</a><span><a href="https://github.com/maxjay/pi-workbench/releases/tag/__VERSION__">__VERSION__</a><span class="hide">  ·  <a href="https://github.com/maxjay/pi-workbench/commit/__COMMIT__">__COMMIT__</a></span></span></div>
+</header>
+
+<main>
+  <div class="title"><svg class="glyph" aria-hidden="true" viewBox="0 0 4 4" shape-rendering="crispEdges"><rect x="1" y="0" width="1" height="1"/><rect x="2" y="0" width="1" height="1"/><rect x="3" y="0" width="1" height="1"/><rect x="0" y="1" width="1" height="1"/><rect x="1" y="1" width="1" height="1"/><rect x="3" y="1" width="1" height="1"/><rect x="2" y="2" width="1" height="1"/><rect x="2" y="3" width="1" height="1"/></svg><h1>Workbench</h1></div>
+  <p class="lede">A window on Claude Code or Pi.</p>
+  <div class="prose">
+    <p>The window is on Windows. The agent, your code and your terminals are in WSL.</p>
+  </div>
+
+  <section>
+    <span class="n">01</span><h2>In it</h2>
+    <div class="body">
+      <ul class="rows">
+        <li><code>The scratchpad</code><span>ask something from Home, with no repo needed</span></li>
+        <li><code>Workspaces</code><span>a folder in WSL with its files, an editor, terminals, and the agent beside them</span></li>
+        <li><code>Pull requests and tickets</code><span>yours on Home, and each one in a tab of its own, through <a href="https://dova.maxjay.dev">dova</a></span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <span class="n">02</span><h2>Install</h2>
+    <div class="body">
+      <ul class="rows">
+        <li><code>Windows</code><span><a href="/workbench.exe">workbench.maxjay.dev/workbench.exe</a>. No admin needed.</span></li>
+      </ul>
+      <p class="note">Needs Windows 10 or 11 with WSL, and Claude Code or Pi installed in it. Pull requests and tickets need <a href="https://dova.maxjay.dev">dova</a> too.</p>
+      <p class="note">The installer is not signed yet, so Windows may warn about it. Choose More info, then Run anyway.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="strip">
+  <a href="https://github.com/maxjay/pi-workbench">github.com/maxjay/pi-workbench</a>
+  <a class="contact" href="mailto:me@maxjay.dev">me@maxjay.dev</a>
+  <fieldset class="theme"><label><input type="radio" name="theme" value="light">light</label> / <label><input type="radio" name="theme" value="dark">dark</label></fieldset>
+</footer>
+
+<script>
+// The light / dark switch is CSS. This only remembers the pick for the next visit.
+try { document.querySelector('.theme [value="' + localStorage.theme + '"]').checked = true; } catch {}
+document.querySelector('.theme').addEventListener('change', (ev) => { try { localStorage.theme = ev.target.value; } catch {} });
+</script>
+</body>
+</html>

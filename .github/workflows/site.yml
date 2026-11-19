@@ -1,0 +1,43 @@
+# Publishes workbench.maxjay.dev: the page in site/public, and beside it the
+# newest release's installer under a name that never changes (workbench.exe).
+# Runs after every release, and by hand (Actions, site, Run workflow) to publish
+# a change to the page alone.
+#
+# Needs two repository secrets: CLOUDFLARE_API_TOKEN (a token that may edit
+# Workers) and CLOUDFLARE_ACCOUNT_ID.
+name: site
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Put the newest release's installer and its version on the page
+        # Every release so far is a pre-release, which "the latest release"
+        # leaves out, so this takes the newest v2 release of any kind.
+        run: |
+          tag=$(gh release list --limit 50 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft | not) | .tagName | select(startswith("v2"))][0] // empty')
+          if [ -z "$tag" ]; then
+            echo "::error::There is no v2 release to publish yet"
+            exit 1
+          fi
+          commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha[0:7]')
+          gh release download "$tag" --pattern '*.exe' --dir installers
+          cp installers/*.exe site/public/workbench.exe
+          sed -i "s/__VERSION__/$tag/g; s/__COMMIT__/$commit/g" site/public/index.html
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - run: npx --yes wrangler@4 deploy
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
