@@ -19,6 +19,8 @@ export interface Reviewing {
    * note where `about` says, for you alone.
    */
   askAgent: (prompt: string, about: Omit<Note, 'id' | 'answer' | 'failed'>) => void;
+  /** Says something in this pull request's session, and resolves with what the agent ends its turn on. */
+  tell: (prompt: string) => Promise<string>;
   /** Shows a changed file, at a line of the new file if one is given. */
   showFile: (path: string, line?: number) => void;
 }

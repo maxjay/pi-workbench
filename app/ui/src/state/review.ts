@@ -93,6 +93,16 @@ export function markViewed(pull: string, files: ChangedFile[], yes: boolean) {
   localStorage.setItem('viewed', JSON.stringify(viewed));
 }
 
+/** Whether threads that are resolved are left out, in every pull request. */
+const [hideResolved, setHidden] = createSignal(localStorage.getItem('review-hide-resolved') === 'yes');
+
+export { hideResolved };
+
+export function setHideResolved(yes: boolean) {
+  localStorage.setItem('review-hide-resolved', yes ? 'yes' : 'no');
+  setHidden(yes);
+}
+
 /** Something the agent answered you, shown where you asked. Only you see it. */
 export interface Note {
   id: string;
@@ -102,6 +112,8 @@ export interface Note {
   thread?: number;
   /** The run it explains. */
   run?: number;
+  /** It is the summary of the agent's review of the whole pull request. */
+  summary?: boolean;
   question: string;
   /** Undefined while the agent is still working on it. */
   answer?: string;
@@ -122,6 +134,20 @@ function keep() {
 
 export function addNote(pull: string, note: Note) {
   setNotes(pull, [...notesOf(pull), note]);
+}
+
+export function addNotes(pull: string, more: Note[]) {
+  setNotes(pull, [...notesOf(pull), ...more]);
+  keep();
+}
+
+/** Drops the notes that `gone` picks. */
+export function dropNotes(pull: string, gone: (note: Note) => boolean) {
+  setNotes(
+    pull,
+    notesOf(pull).filter((note) => !gone(note)),
+  );
+  keep();
 }
 
 export function settleNote(pull: string, id: string, result: { answer?: string; failed?: string }) {

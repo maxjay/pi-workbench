@@ -5,7 +5,7 @@
 
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { ChangedFile } from '../../protocol/ChangedFile';
-import { isViewed, markViewed } from '../../state/review';
+import { isViewed, markViewed, notesOf } from '../../state/review';
 import { byFolder, excluder, type Reviewing, split } from './parts';
 
 export function Files(props: {
@@ -30,6 +30,14 @@ export function Files(props: {
     for (const thread of props.r.review.threads) {
       if (thread.unresolved && thread.place)
         counts.set(thread.place.file, (counts.get(thread.place.file) ?? 0) + 1);
+    }
+    return counts;
+  });
+  /** How many comments the agent has drafted on each file, waiting for you. */
+  const drafted = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const note of notesOf(props.r.pull)) {
+      if (note.place && note.answer) counts.set(note.place.file, (counts.get(note.place.file) ?? 0) + 1);
     }
     return counts;
   });
@@ -115,6 +123,9 @@ export function Files(props: {
                       onClick={() => props.onPick(file.path)}
                     >
                       <span class="tree-name">{split(file.path).name}</span>
+                      <Show when={drafted().get(file.path)}>
+                        {(n) => <span class="files-drafted">{n()} drafted</span>}
+                      </Show>
                       <Show when={open().get(file.path)}>
                         {(n) => <span class="files-open">{n()} open</span>}
                       </Show>

@@ -8,7 +8,16 @@ import { createAction } from '../../components/action';
 import type { DiffLine } from '../../protocol/DiffLine';
 import type { Place } from '../../protocol/Place';
 import type { Thread } from '../../protocol/Thread';
-import { comment, isViewed, markViewed, type Note, notesOf, wholeFile } from '../../state/review';
+import {
+  comment,
+  hideResolved,
+  isViewed,
+  markViewed,
+  type Note,
+  notesOf,
+  setHideResolved,
+  wholeFile,
+} from '../../state/review';
 import { placeName, type Reviewing } from './parts';
 import { NoteBox, ThreadBox } from './Threads';
 
@@ -92,12 +101,19 @@ export function FileDiff(props: {
     setText('');
   };
 
+  /** This file's threads, without the resolved ones while those are hidden. */
+  const here = () =>
+    props.r.review.threads.filter(
+      (thread) => thread.place?.file === props.path && !(hideResolved() && !thread.unresolved),
+    );
+  const resolved = () =>
+    props.r.review.threads.filter((thread) => thread.place?.file === props.path && !thread.unresolved).length;
   // Threads and notes are found by the line they end on, so a line draws its own.
   const threads = createMemo(() => {
     const at = new Map<string, Thread[]>();
-    for (const thread of props.r.review.threads) {
+    for (const thread of here()) {
       const where = thread.place;
-      if (where?.file !== props.path || where.line === null) continue;
+      if (!where || where.line === null) continue;
       const key = keyOf(where.old, where.line);
       at.set(key, [...(at.get(key) ?? []), thread]);
     }
@@ -121,7 +137,12 @@ export function FileDiff(props: {
   /** Threads on this file that no line shown draws: on the whole file, on lines gone, or on lines not shown. */
   const loose = createMemo(() => {
     const drawn = new Set(lines().flatMap((line) => under(threads(), line)));
-    return props.r.review.threads.filter((thread) => thread.place?.file === props.path && !drawn.has(thread));
+    return here().filter((thread) => !drawn.has(thread));
+  });
+  /** What the agent wrote about lines of this file that are not shown. */
+  const looseNotes = createMemo(() => {
+    const drawn = new Set(lines().flatMap((line) => under(notes(), line)));
+    return notesOf(props.r.pull).filter((note) => note.place?.file === props.path && !drawn.has(note));
   });
 
   /** How many lines of the file are left out just before a row. */
@@ -161,6 +182,11 @@ export function FileDiff(props: {
                 {loading.busy() ? 'Reading the file' : whole() ? 'Only the changes' : 'The whole file'}
               </button>
             </Show>
+            <Show when={resolved() > 0}>
+              <button type="button" class="quiet" onClick={() => setHideResolved(!hideResolved())}>
+                {hideResolved() ? `Show ${resolved()} resolved` : 'Hide resolved'}
+              </button>
+            </Show>
             <button
               type="button"
               class="quiet"
@@ -187,6 +213,19 @@ export function FileDiff(props: {
               {(thread) => (
                 <div class="diff-under">
                   <ThreadBox r={props.r} thread={thread} draft={draftFor(thread)} showPlace />
+                </div>
+              )}
+            </For>
+            <For each={looseNotes()}>
+              {(note) => (
+                <div class="diff-under">
+                  <NoteBox
+                    note={note}
+                    pull={props.r.pull}
+                    label={`The agent · ${note.place ? placeName(note.place) : props.path}, not among the lines shown · only you see it`}
+                    post="Post as a comment"
+                    onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
+                  />
                 </div>
               )}
             </For>
@@ -292,7 +331,7 @@ export function FileDiff(props: {
                         <NoteBox
                           note={note}
                           pull={props.r.pull}
-                          label={`You asked the agent${note.place ? ` · ${placeName(note.place)}` : ''} · only you see it`}
+                          label={`The agent${note.place ? ` · ${placeName(note.place)}` : ''} · only you see it`}
                           post="Post as a comment"
                           onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
                         />

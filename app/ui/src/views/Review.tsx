@@ -121,6 +121,10 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
     pull,
     review,
     askAgent,
+    tell: (prompt) => {
+      setAgentShown(true);
+      return tell(prompt);
+    },
     showFile: (path, at) => setShown({ kind: 'file', path, at }),
   });
 

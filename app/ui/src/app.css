@@ -1546,6 +1546,12 @@ svg.glyph {
   white-space: nowrap;
 }
 
+.files-drafted {
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .files-count {
   font-size: 12px;
   white-space: nowrap;
@@ -1842,6 +1848,13 @@ svg.glyph {
   width: auto;
   margin: 0 -10px;
   padding: 5px 10px;
+}
+
+.overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .overview-out {
