@@ -83,6 +83,9 @@ pub struct PullRow {
     /// Who opened it.
     #[serde(default)]
     pub author: Option<String>,
+    /// Their account in the organization, so a filter can tell two people of one name apart.
+    #[serde(default)]
+    pub author_id: Option<String>,
     /// Set when you or a team of yours were asked to review it: how you stand on it.
     #[serde(default)]
     pub review: Option<Reviewing>,
@@ -97,6 +100,33 @@ pub struct Reviewing {
     pub vote: String,
     /// The team of yours that was asked, when it was a team and not you by name.
     pub team: Option<String>,
+}
+
+/// Someone in the organization, by their account there.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct Person {
+    pub id: String,
+    pub name: String,
+    /// What they sign in with: it tells two people of one name apart.
+    pub mail: Option<String>,
+}
+
+/// A team you are in, with who else is in it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct Team {
+    pub name: String,
+    pub project: String,
+    pub members: Vec<Person>,
+}
+
+/// A repo, by its project and its name.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct RepoName {
+    pub project: String,
+    pub repo: String,
 }
 
 /// A folder Home's list of pull requests was made from, and what was done with it.

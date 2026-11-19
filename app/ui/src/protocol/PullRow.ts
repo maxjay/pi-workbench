@@ -28,6 +28,10 @@ workspace: string | null,
  */
 author: string | null, 
 /**
+ * Their account in the organization, so a filter can tell two people of one name apart.
+ */
+authorId: string | null, 
+/**
  * Set when you or a team of yours were asked to review it: how you stand on it.
  */
 review: Reviewing | null, id: number, title: string, 

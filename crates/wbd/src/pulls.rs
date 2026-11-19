@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    Asked, PipelineRun, PullBefore, PullRequest, PullRow, PullView, Reviewing, ThreadSummary,
-    WorkItemRef, Workspace,
+    Asked, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName, Reviewing,
+    Team, ThreadSummary, WorkItemRef, Workspace,
 };
 use serde_json::{Value, json};
 
@@ -21,9 +21,24 @@ use crate::review::Reviews;
 pub struct Pulls {
     /// Why each failed run failed, by run id. A finished run doesn't change.
     failed: Mutex<HashMap<u64, String>>,
-    /// The teams you are in, as id and name, by organization. Asked once: they change rarely.
-    teams: Mutex<HashMap<String, Vec<(String, String)>>>,
+    /// The teams you are in, by organization. Asked once: they change rarely.
+    teams: Mutex<HashMap<String, Vec<Mine>>>,
+    /// Who is in each of those teams, by the team's id. Asked once.
+    members: Mutex<HashMap<String, Vec<Person>>>,
+    /// Every repo of an organization, by organization. Asked once: the search reads from it.
+    repos: Mutex<HashMap<String, Vec<RepoName>>>,
 }
+
+/// A team you are in.
+#[derive(Clone)]
+struct Mine {
+    id: String,
+    name: String,
+    project: String,
+}
+
+/// The most of each kind a search gives back.
+const FOUND: usize = 8;
 
 /// A workspace that is cloned from Azure Repos.
 struct Clone {
@@ -165,8 +180,8 @@ impl Pulls {
             let site = site(organization(&clone.project));
             // You by name first, so a row you were asked for both ways says so by name.
             let mut asked = vec![(me.clone(), None)];
-            for (id, name) in self.teams(dova, cwd, &site).await {
-                asked.push((id, Some(name)));
+            for team in self.teams(dova, cwd, &site).await {
+                asked.push((team.id, Some(team.name)));
             }
             for (who, team) in asked {
                 let path = format!(
@@ -197,9 +212,9 @@ impl Pulls {
         Ok(rows)
     }
 
-    /// The teams you are in, anywhere in the organization, as id and name. None when the
-    /// organization will not say.
-    async fn teams(&self, dova: &Dova, cwd: &str, site: &str) -> Vec<(String, String)> {
+    /// The teams you are in, anywhere in the organization. None when the organization
+    /// will not say.
+    async fn teams(&self, dova: &Dova, cwd: &str, site: &str) -> Vec<Mine> {
         if let Some(known) = self.teams.lock().expect("not poisoned").get(site) {
             return known.clone();
         }
@@ -207,15 +222,16 @@ impl Pulls {
         let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
             return Vec::new();
         };
-        let teams: Vec<(String, String)> = found["value"]
+        let teams: Vec<Mine> = found["value"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|team| {
-                Some((
-                    team["id"].as_str()?.to_string(),
-                    team["name"].as_str()?.to_string(),
-                ))
+                Some(Mine {
+                    id: team["id"].as_str()?.to_string(),
+                    name: team["name"].as_str()?.to_string(),
+                    project: team["projectName"].as_str()?.to_string(),
+                })
             })
             .collect();
         self.teams
@@ -223,6 +239,132 @@ impl Pulls {
             .expect("not poisoned")
             .insert(site.to_string(), teams.clone());
         teams
+    }
+
+    /// The teams you are in, each with who else is in it. A team whose members the
+    /// organization will not give is listed with none.
+    pub async fn teams_with_members(
+        &self,
+        dova: &Dova,
+        reviews: &Reviews,
+        workspaces: Vec<Workspace>,
+    ) -> Result<Vec<Team>, Error> {
+        let (clones, _) = clones(workspaces).await;
+        let mut teams = Vec::new();
+        for clone in one_each(&clones) {
+            let cwd = &clone.workspace.path;
+            let me = reviews.me(dova, cwd).await?;
+            let site = site(organization(&clone.project));
+            for team in self.teams(dova, cwd, &site).await {
+                let members = self.members(dova, cwd, &team).await;
+                teams.push(Team {
+                    name: team.name,
+                    project: team.project,
+                    members: members.into_iter().filter(|one| one.id != me).collect(),
+                });
+            }
+        }
+        Ok(teams)
+    }
+
+    /// Who is in a team: the people, not the groups inside it.
+    async fn members(&self, dova: &Dova, cwd: &str, team: &Mine) -> Vec<Person> {
+        if let Some(known) = self.members.lock().expect("not poisoned").get(&team.id) {
+            return known.clone();
+        }
+        let project = team.project.replace(' ', "%20");
+        let path = format!(
+            "/_apis/projects/{project}/teams/{}/members?$top=500&api-version=7.1",
+            team.id
+        );
+        let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
+            return Vec::new();
+        };
+        let mut members: Vec<Person> = found["value"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|member| &member["identity"])
+            .filter(|identity| identity["isContainer"].as_bool() != Some(true))
+            .filter_map(|identity| {
+                Some(Person {
+                    id: identity["id"].as_str()?.to_string(),
+                    name: identity["displayName"].as_str()?.to_string(),
+                    mail: identity["uniqueName"].as_str().map(str::to_string),
+                })
+            })
+            .collect();
+        members.sort_by(|a, b| a.name.cmp(&b.name));
+        self.members
+            .lock()
+            .expect("not poisoned")
+            .insert(team.id.clone(), members.clone());
+        members
+    }
+
+    /// The people, repos and projects that have `text` in their name, in each organization a
+    /// workspace is cloned from. A few of each. What an organization will not give is left out.
+    pub async fn find(
+        &self,
+        dova: &Dova,
+        workspaces: Vec<Workspace>,
+        text: &str,
+    ) -> (Vec<Person>, Vec<RepoName>, Vec<String>) {
+        let text = text.trim().to_lowercase();
+        let (mut people, mut repos, mut projects) = (Vec::new(), Vec::new(), Vec::new());
+        if text.is_empty() {
+            return (people, repos, projects);
+        }
+        let (clones, _) = clones(workspaces).await;
+        for clone in one_each(&clones) {
+            let cwd = &clone.workspace.path;
+            let site = site(organization(&clone.project));
+            let all = self.repos(dova, cwd, &site).await;
+            let (found, of) = matching(&all, &text);
+            repos.extend(found);
+            for project in of {
+                if !projects.contains(&project) {
+                    projects.push(project);
+                }
+            }
+            for person in search_people(dova, cwd, &text).await {
+                if !people.iter().any(|known: &Person| known.id == person.id) {
+                    people.push(person);
+                }
+            }
+        }
+        people.truncate(FOUND);
+        repos.truncate(FOUND);
+        projects.truncate(FOUND);
+        (people, repos, projects)
+    }
+
+    /// Every repo of an organization that is in use.
+    async fn repos(&self, dova: &Dova, cwd: &str, site: &str) -> Vec<RepoName> {
+        if let Some(known) = self.repos.lock().expect("not poisoned").get(site) {
+            return known.clone();
+        }
+        let path = "/_apis/git/repositories?api-version=7.1";
+        let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
+            return Vec::new();
+        };
+        let repos: Vec<RepoName> = found["value"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|repo| repo["isDisabled"].as_bool() != Some(true))
+            .filter_map(|repo| {
+                Some(RepoName {
+                    project: repo["project"]["name"].as_str()?.to_string(),
+                    repo: repo["name"].as_str()?.to_string(),
+                })
+            })
+            .collect();
+        self.repos
+            .lock()
+            .expect("not poisoned")
+            .insert(site.to_string(), repos.clone());
+        repos
     }
 
     /// Why a row's check failed, in a line. Asked once for each run.
@@ -407,12 +549,76 @@ fn review_row(pull: &Value, site: &str, me: &str, team: Option<&str>) -> Option<
         author: pull["createdBy"]["displayName"]
             .as_str()
             .map(str::to_string),
+        author_id: pull["createdBy"]["id"].as_str().map(str::to_string),
         review: Some(Reviewing {
             vote: vote.into(),
             // Asked by name counts first, whichever search found the row.
             team: team.filter(|_| mine.is_none()).map(str::to_string),
         }),
     })
+}
+
+/// The repos with `text` (in small letters) in their name, and the projects with it in
+/// theirs. A repo whose name starts with it comes before one that only has it somewhere.
+fn matching(all: &[RepoName], text: &str) -> (Vec<RepoName>, Vec<String>) {
+    let mut repos: Vec<&RepoName> = all
+        .iter()
+        .filter(|one| one.repo.to_lowercase().contains(text))
+        .collect();
+    repos.sort_by_key(|one| {
+        (
+            !one.repo.to_lowercase().starts_with(text),
+            one.repo.to_lowercase(),
+            one.project.to_lowercase(),
+        )
+    });
+    let mut projects: Vec<String> = Vec::new();
+    for one in all {
+        if one.project.to_lowercase().contains(text) && !projects.contains(&one.project) {
+            projects.push(one.project.clone());
+        }
+    }
+    projects.sort_by_key(|name| (!name.to_lowercase().starts_with(text), name.to_lowercase()));
+    (
+        repos.into_iter().take(FOUND).cloned().collect(),
+        projects.into_iter().take(FOUND).collect(),
+    )
+}
+
+/// The people of the organization `cwd` is cloned from whose name or sign-in has `text`:
+/// the search Azure DevOps' own people fields use. Only those who have an account in the
+/// organization: nobody else can have opened a pull request there.
+async fn search_people(dova: &Dova, cwd: &str, text: &str) -> Vec<Person> {
+    let body = json!({
+        "query": text,
+        "identityTypes": ["user"],
+        "operationScopes": ["ims", "source"],
+        "options": { "MinResults": 5, "MaxResults": 20 },
+        "properties": ["DisplayName", "Mail", "SignInAddress"],
+    });
+    let asked = json!({
+        "path": "/_apis/IdentityPicker/Identities?api-version=7.1-preview.1",
+        "method": "POST",
+        "body": body.to_string(),
+        "contentType": "application/json",
+    });
+    let Ok(found) = dova.call("api", cwd, asked).await else {
+        return Vec::new();
+    };
+    let results = found["results"].as_array().into_iter().flatten();
+    results
+        .flat_map(|result| result["identities"].as_array().into_iter().flatten())
+        .filter_map(|identity| {
+            Some(Person {
+                id: identity["localId"].as_str()?.to_string(),
+                name: identity["displayName"].as_str()?.to_string(),
+                mail: identity["mail"]
+                    .as_str()
+                    .or(identity["signInAddress"].as_str())
+                    .map(str::to_string),
+            })
+        })
+        .collect()
 }
 
 /// An organization's own address on the web, from its part of a remote:
@@ -601,6 +807,7 @@ mod tests {
             thread: None,
             workspace: None,
             author: None,
+            author_id: None,
             review: None,
         };
         assert_eq!(

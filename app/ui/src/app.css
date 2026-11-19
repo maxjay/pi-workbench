@@ -1527,59 +1527,46 @@ svg.glyph {
   grid-template-columns: 56px minmax(0, 1fr) 120px 130px 56px 130px 120px;
 }
 
-/* What to see of the ones to review: the repos you added, then the people, each with a field to add one. */
-.watch {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  align-items: center;
-  row-gap: 6px;
-  padding: 4px 0 14px;
+/* The dialog that chooses whose pull requests to review show, and in which repos. */
+.filter {
+  width: min(760px, 100% - 48px);
+  max-height: 70vh;
 }
 
-.watch-word {
+.filter .palette-row {
+  gap: 14px;
+}
+
+.filter-head {
+  padding: 12px 16px 4px;
   font-size: 12px;
 }
 
-.watch-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-
-.watch-field {
-  width: 190px;
-  margin-right: 8px;
-}
-
-/* One you picked: ink on paper turned round. A click takes it out. */
-.watch-picked,
-.watch-found {
-  height: 26px;
-  padding: 0 9px;
+.filter-kind {
+  width: 52px;
+  flex-shrink: 0;
   font-size: 12px;
-  white-space: nowrap;
 }
 
-.watch-picked {
-  color: var(--paper);
-  background: var(--ink);
+.filter .palette-title {
+  flex-shrink: 0;
+  max-width: 55%;
 }
 
-/* One that has what you typed. A click adds it, and Enter adds the first. */
-.watch-found {
+/* What a click on the line does. */
+.filter-word {
+  flex-shrink: 0;
+  font-size: 12px;
   color: var(--dim);
-  background: var(--hover);
 }
 
-.watch-found:hover,
-.watch-field + .watch-found {
+.palette-row[aria-current="true"] .filter-word {
   color: var(--ink);
-  background: var(--picked);
 }
 
-.watch-count {
-  opacity: 0.6;
+.filter .folder-foot .quiet[aria-pressed="true"] {
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .pulls-why {

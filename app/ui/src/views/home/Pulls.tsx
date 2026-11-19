@@ -5,8 +5,8 @@
 // When there is nothing to list, it says what was asked and what was not.
 //
 // "To review" has the ones you or a team of yours were asked to review.
-// There can be a great many, so each is one line, and under the heading
-// you add the repos, projects and people whose rows show.
+// There can be a great many, so each is one line, and Filter chooses the
+// people, repos and projects whose rows show.
 
 import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { pullHue } from '../../components/hues';
@@ -17,19 +17,16 @@ import type { PullRow } from '../../protocol/PullRow';
 import { health, recheck } from '../../state/health';
 import {
   asked,
-  byPerson,
-  inRepo,
+  filter,
   yours as listed,
-  picked,
   pulls,
   refreshPulls,
-  repoKey,
   searched,
-  setPicked,
   shows,
   toReview,
 } from '../../state/pulls';
 import { open } from '../../state/tabs';
+import { Filter, openFilter } from './Filter';
 
 const INSTALL = 'curl -LO https://dova.maxjay.dev/dova.deb && sudo apt install ./dova.deb';
 
@@ -133,7 +130,7 @@ function ReviewRow(props: { row: PullRow }) {
     >
       <span style={{ color: pullHue(row().id) }}>#{row().id}</span>
       <span class="pull-title">{row().title}</span>
-      <span title={repoKey(row())}>{row().repo}</span>
+      <span title={`${row().project}/${row().repo}`}>{row().repo}</span>
       <span class="dim">{row().author}</span>
       <span classList={{ dim: row().isDraft }}>{row().isDraft ? 'draft' : row().status}</span>
       <span classList={{ dim: row().review?.vote === 'none' }}>{row().review?.vote}</span>
@@ -142,124 +139,26 @@ function ReviewRow(props: { row: PullRow }) {
   );
 }
 
-/** Every name in a list with how many rows have it, the most first. */
-function counted(names: string[]) {
-  const counts = new Map<string, number>();
-  for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
-  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-}
-
-/**
- * One list of what you picked, and a field to add to it. Typing shows the few names among the
- * rows that have what you typed. Enter takes the first, or what you typed when none has it: a
- * person with nothing open now can be added that way.
- */
-function Adder(props: {
-  word: string;
-  hint: string;
-  picked: string[];
-  /** Every name there is to add, with how many rows have it. */
-  names: [string, number][];
-  /** How a name is shown. */
-  shown: (name: string) => string;
-  /** How many rows a picked name has now. */
-  count: (name: string) => number;
-  onChange: (picked: string[]) => void;
-}) {
-  const [text, setText] = createSignal('');
-  const found = createMemo(() => {
-    const typed = text().trim().toLowerCase();
-    if (!typed) return [];
-    const has = (name: string) => props.picked.some((other) => other.toLowerCase() === name.toLowerCase());
-    return props.names.filter(([name]) => name.toLowerCase().includes(typed) && !has(name)).slice(0, 8);
-  });
-  const add = (name: string) => {
-    if (name && !props.picked.includes(name)) props.onChange([...props.picked, name]);
-    setText('');
-  };
-
-  return (
-    <>
-      <span class="watch-word dim">{props.word}</span>
-      <div class="watch-line">
-        <For each={props.picked}>
-          {(name) => (
-            <button
-              type="button"
-              class="watch-picked"
-              title="Take it out"
-              onClick={() => props.onChange(props.picked.filter((other) => other !== name))}
-            >
-              {props.shown(name)} <span class="watch-count">{props.count(name)}</span>{' '}
-              <span aria-hidden="true">×</span>
-            </button>
-          )}
-        </For>
-        <input
-          class="field watch-field"
-          placeholder={props.hint}
-          aria-label={props.hint}
-          autocomplete="off"
-          value={text()}
-          onInput={(e) => setText(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') add(found()[0]?.[0] ?? text().trim());
-            if (e.key === 'Escape') setText('');
-          }}
-        />
-        <For each={found()}>
-          {([name, count]) => (
-            <button type="button" class="watch-found" onClick={() => add(name)}>
-              {props.shown(name)} <span class="watch-count">{count}</span>
-            </button>
-          )}
-        </For>
-      </div>
-    </>
-  );
-}
-
-/** What to see of the rows to review: the repos and the people you added. */
-function Pick(props: { rows: PullRow[] }) {
-  /** Every repo as `project/repo`, and every project as `project/`, the most rows first. */
-  const repos = createMemo(() => [
-    ...counted(props.rows.map(repoKey)),
-    ...counted(props.rows.map((row) => `${row.project}/`)),
-  ]);
-  const people = createMemo(() => counted(props.rows.map((row) => row.author ?? '').filter(Boolean)));
-  return (
-    <div class="watch">
-      <Adder
-        word="Repos"
-        hint="add a repo or project"
-        picked={picked().repos}
-        names={repos()}
-        shown={(name) => (name.endsWith('/') ? `all of ${name.slice(0, -1)}` : name)}
-        count={(name) => props.rows.filter((row) => inRepo(name, row)).length}
-        onChange={(repos) => setPicked({ ...picked(), repos })}
-      />
-      <Adder
-        word="People"
-        hint="add a person"
-        picked={picked().people}
-        names={people()}
-        shown={(name) => name}
-        count={(name) => props.rows.filter((row) => byPerson(name, row)).length}
-        onChange={(people) => setPicked({ ...picked(), people })}
-      />
-    </div>
-  );
-}
-
 function ToReview() {
   /** The ones to review that you did not open yourself. */
   const all = createMemo(() => {
     const mine = listed() ?? [];
-    const same = (a: PullRow) => (b: PullRow) => a.id === b.id && repoKey(a) === repoKey(b);
+    const same = (a: PullRow) => (b: PullRow) =>
+      a.id === b.id && a.repo === b.repo && a.project === b.project;
     return (toReview.latest ?? []).filter((row) => !mine.some(same(row)));
   });
-  const shown = createMemo(() => all().filter((row) => shows(picked(), row)));
-  const any = () => picked().repos.length + picked().people.length > 0;
+  const shown = createMemo(() => all().filter((row) => shows(filter(), row)));
+  const any = () => filter().repos.length + filter().people.length > 0;
+  /** What is chosen, in a few words: "3 people, 2 repos". */
+  const chosen = () => {
+    const count = (n: number, one: string, many: string) => (n === 0 ? [] : [`${n} ${n === 1 ? one : many}`]);
+    const projects = filter().repos.filter((pick) => pick.repo === null).length;
+    return [
+      ...count(filter().people.length, 'person', 'people'),
+      ...count(filter().repos.length - projects, 'repo', 'repos'),
+      ...count(projects, 'project', 'projects'),
+    ].join(', ');
+  };
   const failure = () => {
     const error: unknown = toReview.error;
     return error instanceof Error ? error.message : String(error);
@@ -270,18 +169,15 @@ function ToReview() {
       <div class="section-head">
         <h2 id="to-review">To review</h2>
         <Show when={toReview.latest}>
-          <span class="dim">{any() ? `${shown().length} of ${all().length}` : all().length}</span>
+          <span class="dim">
+            {any() ? `${shown().length} of ${all().length} · ${chosen()}` : all().length}
+          </span>
         </Show>
         <span class="top-gap" />
-        <Show when={any()}>
-          <button type="button" class="quiet" onClick={() => setPicked({ repos: [], people: [] })}>
-            Clear
-          </button>
-        </Show>
+        <button type="button" class="button" onClick={openFilter}>
+          Filter
+        </button>
       </div>
-      <Show when={all().length > 0}>
-        <Pick rows={all()} />
-      </Show>
       <Switch>
         <Match when={toReview.latest}>
           <div class="rows rows-review">
@@ -302,7 +198,7 @@ function ToReview() {
               </div>
               <For each={shown()}>{(row) => <ReviewRow row={row} />}</For>
               <Show when={shown().length === 0}>
-                <p class="rows-none dim">None in what you picked.</p>
+                <p class="rows-none dim">None by the people and in the repos you chose.</p>
               </Show>
             </Show>
           </div>
@@ -437,6 +333,7 @@ export function Pulls() {
     <>
       <Yours />
       <ToReview />
+      <Filter />
     </>
   );
 }

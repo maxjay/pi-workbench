@@ -48,48 +48,54 @@ export { asked, pulls, searched, toReview, yours };
 /** Asks again. */
 export const refreshPulls = () => Promise.all([refetch(), refetchReview()]);
 
-/**
- * What you picked to see of the ones to review, as you added it. A repo is `project/repo`,
- * `project/` for a whole project, or a repo's name alone for that name in any project. A person
- * is a name. A row shows when its repo is picked and its author is picked; a list with nothing
- * picked lets every row through. Kept in the window's own storage.
- */
-export type Picked = { repos: string[]; people: string[] };
+/** A repo you chose, or with no repo the whole of a project. */
+export type RepoPick = { project: string; repo: string | null };
 
-function kept(): Picked {
+/**
+ * Whose pull requests to review show, and in which repos. A person is kept by their account in
+ * the organization, with their name to show. With nothing chosen every row shows. With people
+ * and repos both chosen, a row must match both, or with `either` one of them is enough. Kept in
+ * the window's own storage.
+ */
+export type ReviewFilter = { people: { id: string; name: string }[]; repos: RepoPick[]; either: boolean };
+
+function kept(): ReviewFilter {
   try {
-    const saved = JSON.parse(localStorage.getItem('review-picked') ?? '{}') as Partial<Picked>;
-    return { repos: saved.repos ?? [], people: saved.people ?? [] };
+    const saved = JSON.parse(localStorage.getItem('review-filter') ?? '{}') as Partial<ReviewFilter>;
+    return { people: saved.people ?? [], repos: saved.repos ?? [], either: saved.either ?? false };
   } catch {
-    return { repos: [], people: [] };
+    return { people: [], repos: [], either: false };
   }
 }
 
-const [picked, setPickedNow] = createSignal<Picked>(kept());
+const [filter, setFilterNow] = createSignal<ReviewFilter>(kept());
 
-export { picked };
+export { filter };
 
-export function setPicked(next: Picked) {
-  localStorage.setItem('review-picked', JSON.stringify(next));
-  setPickedNow(next);
+export function setFilter(next: ReviewFilter) {
+  localStorage.setItem('review-filter', JSON.stringify(next));
+  setFilterNow(next);
 }
-
-export const repoKey = (row: { project: string; repo: string }) => `${row.project}/${row.repo}`;
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
-/** Whether a row is in a repo you added. */
-export function inRepo(entry: string, row: PullRow) {
-  if (entry.endsWith('/')) return same(entry.slice(0, -1), row.project);
-  return entry.includes('/') ? same(entry, repoKey(row)) : same(entry, row.repo);
-}
+/** A repo as it is written: `project/repo`, or the project's name for the whole of it. */
+export const repoName = (pick: RepoPick) =>
+  pick.repo === null ? pick.project : `${pick.project}/${pick.repo}`;
 
-/** Whether a row was opened by a person you added. */
-export const byPerson = (entry: string, row: PullRow) => same(entry, row.author ?? '');
+/** Whether a row is in a repo you chose. */
+export const inRepo = (pick: RepoPick, row: PullRow) =>
+  same(pick.project, row.project) && (pick.repo === null || same(pick.repo, row.repo));
 
-/** Whether a row is among what you picked. */
-export function shows(pick: Picked, row: PullRow) {
-  const repo = pick.repos.length === 0 || pick.repos.some((entry) => inRepo(entry, row));
-  const person = pick.people.length === 0 || pick.people.some((entry) => byPerson(entry, row));
-  return repo && person;
+/** Whether a row was opened by a person you chose. By their account; by name for a row that has none. */
+export const byPerson = (person: { id: string; name: string }, row: PullRow) =>
+  row.authorId ? row.authorId === person.id : same(person.name, row.author ?? '');
+
+/** Whether a row is among what you chose. */
+export function shows(chosen: ReviewFilter, row: PullRow) {
+  const person = chosen.people.some((one) => byPerson(one, row));
+  const repo = chosen.repos.some((one) => inRepo(one, row));
+  if (chosen.people.length === 0) return chosen.repos.length === 0 || repo;
+  if (chosen.repos.length === 0) return person;
+  return chosen.either ? person || repo : person && repo;
 }

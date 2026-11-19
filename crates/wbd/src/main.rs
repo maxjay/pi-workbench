@@ -407,6 +407,21 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::link(&ctx.dova, &dir, &ids).await?;
             Answer::Done
         }
+        Call::PullsTeams => Answer::Teams {
+            teams: ctx
+                .pulls
+                .teams_with_members(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .await?,
+        },
+        Call::PullsFind { text } => {
+            let (people, repos, projects) =
+                ctx.pulls.find(&ctx.dova, ctx.workspaces.all(), &text).await;
+            Answer::Found {
+                people,
+                repos,
+                projects,
+            }
+        }
         Call::PullsList { review: true, .. } => Answer::Pulls {
             rows: ctx
                 .pulls

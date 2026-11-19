@@ -150,6 +150,14 @@ pub enum Call {
         #[serde(default)]
         quick: bool,
     },
+    /// The teams you are in, each with who else is in it: the people whose pull
+    /// requests you most likely want to see.
+    #[serde(rename = "pulls.teams")]
+    PullsTeams,
+    /// The people, repos and projects of your organizations that have `text` in
+    /// their name. A few of each: an organization can have thousands.
+    #[serde(rename = "pulls.find")]
+    PullsFind { text: String },
     /// A folder's branch and its pull request. With `pr`, that pull request
     /// whatever branch the folder is on.
     #[serde(rename = "pull.status")]
@@ -466,6 +474,14 @@ pub enum Answer {
         /// Every project whose pull requests were asked for: the ones of the folders, and the
         /// others in their organizations that have a pull request of yours.
         searched: Vec<String>,
+    },
+    Teams {
+        teams: Vec<Team>,
+    },
+    Found {
+        people: Vec<Person>,
+        repos: Vec<RepoName>,
+        projects: Vec<String>,
     },
     Pull(PullView),
     Before(PullBefore),

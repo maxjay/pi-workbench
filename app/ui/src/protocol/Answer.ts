@@ -9,12 +9,15 @@ import type { Folder } from "./Folder";
 import type { GitStatus } from "./GitStatus";
 import type { Health } from "./Health";
 import type { Offer } from "./Offer";
+import type { Person } from "./Person";
 import type { PullBefore } from "./PullBefore";
 import type { PullRequest } from "./PullRequest";
 import type { PullRow } from "./PullRow";
 import type { PullView } from "./PullView";
+import type { RepoName } from "./RepoName";
 import type { Review } from "./Review";
 import type { Step } from "./Step";
+import type { Team } from "./Team";
 import type { Terminal } from "./Terminal";
 import type { Ticket } from "./Ticket";
 import type { TicketRow } from "./TicketRow";
@@ -57,7 +60,7 @@ asked: Array<Asked>,
  * Every project whose pull requests were asked for: the ones of the folders, and the
  * others in their organizations that have a pull request of yours.
  */
-searched: Array<string>, } | { "kind": "pull" } & PullView | { "kind": "before" } & PullBefore | { "kind": "created" } & PullRequest | { "kind": "review" } & Review | { "kind": "fileDiff", lines: Array<DiffLine>, } | { "kind": "checks", runs: Array<CheckRun>, } | { "kind": "run", steps: Array<Step>, 
+searched: Array<string>, } | { "kind": "teams", teams: Array<Team>, } | { "kind": "found", people: Array<Person>, repos: Array<RepoName>, projects: Array<string>, } | { "kind": "pull" } & PullView | { "kind": "before" } & PullBefore | { "kind": "created" } & PullRequest | { "kind": "review" } & Review | { "kind": "fileDiff", lines: Array<DiffLine>, } | { "kind": "checks", runs: Array<CheckRun>, } | { "kind": "run", steps: Array<Step>, 
 /**
  * What the pipeline itself said went wrong, outside any step.
  */
