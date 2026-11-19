@@ -15,16 +15,22 @@ import { Pulls } from './home/Pulls';
 import { Tickets } from './home/Tickets';
 import { setConversation, shortPath } from './workspace/ui';
 
+/** The repos in a workspace, the main one first. */
+function reposOf(view: WorkspaceView) {
+  const main = view.workspace.main;
+  return main ? [main, ...view.repos.filter((name) => name !== main)] : view.repos;
+}
+
 /**
- * What a workspace is on. One the workbench made is called after its main repo and its work,
- * so only the other repos in it are named here. A folder you opened has its branch.
+ * What a workspace is on. With several repos, how many: pointing at it lists them. One the
+ * workbench made is called after its main repo, so that one is not said again. A folder you
+ * opened has its branch.
  */
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
-  const main = view.workspace.main;
-  const others = view.repos.filter((name) => name !== main);
-  if (main) return others.length > 0 ? `+ ${others.join(', ')}` : '';
-  if (view.repos.length > 0) return view.repos.join(', ');
+  if (view.repos.length > 1) return `${view.repos.length} repos`;
+  if (view.workspace.main) return '';
+  if (view.repos.length === 1) return view.repos[0];
   if (view.workspace.scratch) return 'scratchpad';
   return view.branch ?? 'not a git folder';
 }
@@ -152,7 +158,12 @@ export function Home() {
                     <span class="table-aside">{shortPath(view.workspace.path)}</span>
                   </Show>
                 </span>
-                <span class="dim table-clip">{standing(view)}</span>
+                <span
+                  class="dim table-clip"
+                  title={view.repos.length > 1 ? reposOf(view).join('\n') : undefined}
+                >
+                  {standing(view)}
+                </span>
                 <span />
               </button>
             )}
