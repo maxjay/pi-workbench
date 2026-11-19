@@ -5,8 +5,8 @@
 // When there is nothing to list, it says what was asked and what was not.
 //
 // "To review" has the ones you or a team of yours were asked to review.
-// There can be a great many, so each is one line, and the switches under
-// the heading choose the projects, repos and people whose rows show.
+// There can be a great many, so each is one line, and under the heading
+// you add the repos, projects and people whose rows show.
 
 import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { pullHue } from '../../components/hues';
@@ -17,6 +17,8 @@ import type { PullRow } from '../../protocol/PullRow';
 import { health, recheck } from '../../state/health';
 import {
   asked,
+  byPerson,
+  inRepo,
   yours as listed,
   picked,
   pulls,
@@ -147,92 +149,104 @@ function counted(names: string[]) {
   return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
-/** The projects, repos and people among the rows to review, each a switch. */
-function Pick(props: { rows: PullRow[] }) {
-  const projects = createMemo(() => {
-    const names = [...new Set(props.rows.map((row) => row.project))].sort((a, b) => a.localeCompare(b));
-    return names.map((project) => ({
-      project,
-      repos: counted(props.rows.filter((row) => row.project === project).map((row) => row.repo)),
-    }));
+/**
+ * One list of what you picked, and a field to add to it. Typing shows the few names among the
+ * rows that have what you typed. Enter takes the first, or what you typed when none has it: a
+ * person with nothing open now can be added that way.
+ */
+function Adder(props: {
+  word: string;
+  hint: string;
+  picked: string[];
+  /** Every name there is to add, with how many rows have it. */
+  names: [string, number][];
+  /** How a name is shown. */
+  shown: (name: string) => string;
+  /** How many rows a picked name has now. */
+  count: (name: string) => number;
+  onChange: (picked: string[]) => void;
+}) {
+  const [text, setText] = createSignal('');
+  const found = createMemo(() => {
+    const typed = text().trim().toLowerCase();
+    if (!typed) return [];
+    const has = (name: string) => props.picked.some((other) => other.toLowerCase() === name.toLowerCase());
+    return props.names.filter(([name]) => name.toLowerCase().includes(typed) && !has(name)).slice(0, 8);
   });
-  const people = createMemo(() => counted(props.rows.map((row) => row.author ?? '').filter(Boolean)));
-  const whole = (project: string) => picked().repos.includes(`${project}/*`);
-  const on = (project: string, repo: string) =>
-    whole(project) || picked().repos.includes(`${project}/${repo}`);
-
-  const toggleProject = (project: string) => {
-    const others = picked().repos.filter((key) => !key.startsWith(`${project}/`));
-    setPicked({ ...picked(), repos: whole(project) ? others : [...others, `${project}/*`] });
-  };
-  const toggleRepo = (project: string, repo: string, all: string[]) => {
-    const others = picked().repos.filter((key) => !key.startsWith(`${project}/`));
-    // The repos of this project that are on now, by name.
-    const now = all.filter((name) => on(project, name));
-    const next = now.includes(repo) ? now.filter((name) => name !== repo) : [...now, repo];
-    setPicked({ ...picked(), repos: [...others, ...next.map((name) => `${project}/${name}`)] });
-  };
-  const togglePerson = (name: string) => {
-    const now = picked().people;
-    setPicked({
-      ...picked(),
-      people: now.includes(name) ? now.filter((other) => other !== name) : [...now, name],
-    });
+  const add = (name: string) => {
+    if (name && !props.picked.includes(name)) props.onChange([...props.picked, name]);
+    setText('');
   };
 
   return (
-    <div class="watch">
-      <span class="watch-word dim">Repos</span>
-      <div class="watch-lines">
-        <For each={projects()}>
-          {(group) => (
-            <div class="watch-line">
-              <button
-                type="button"
-                class="watch-switch watch-project"
-                aria-pressed={whole(group.project)}
-                title={`Every repo in ${group.project}`}
-                onClick={() => toggleProject(group.project)}
-              >
-                {group.project}
-              </button>
-              <For each={group.repos}>
-                {([repo, count]) => (
-                  <button
-                    type="button"
-                    class="watch-switch"
-                    aria-pressed={on(group.project, repo)}
-                    onClick={() =>
-                      toggleRepo(
-                        group.project,
-                        repo,
-                        group.repos.map(([name]) => name),
-                      )
-                    }
-                  >
-                    {repo} <span class="watch-count">{count}</span>
-                  </button>
-                )}
-              </For>
-            </div>
-          )}
-        </For>
-      </div>
-      <span class="watch-word dim">People</span>
+    <>
+      <span class="watch-word dim">{props.word}</span>
       <div class="watch-line">
-        <For each={people()}>
-          {([name, count]) => (
+        <For each={props.picked}>
+          {(name) => (
             <button
               type="button"
-              class="watch-switch"
-              aria-pressed={picked().people.includes(name)}
-              onClick={() => togglePerson(name)}
+              class="watch-picked"
+              title="Take it out"
+              onClick={() => props.onChange(props.picked.filter((other) => other !== name))}
             >
-              {name} <span class="watch-count">{count}</span>
+              {props.shown(name)} <span class="watch-count">{props.count(name)}</span>{' '}
+              <span aria-hidden="true">×</span>
+            </button>
+          )}
+        </For>
+        <input
+          class="field watch-field"
+          placeholder={props.hint}
+          aria-label={props.hint}
+          autocomplete="off"
+          value={text()}
+          onInput={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') add(found()[0]?.[0] ?? text().trim());
+            if (e.key === 'Escape') setText('');
+          }}
+        />
+        <For each={found()}>
+          {([name, count]) => (
+            <button type="button" class="watch-found" onClick={() => add(name)}>
+              {props.shown(name)} <span class="watch-count">{count}</span>
             </button>
           )}
         </For>
       </div>
+    </>
+  );
+}
+
+/** What to see of the rows to review: the repos and the people you added. */
+function Pick(props: { rows: PullRow[] }) {
+  /** Every repo as `project/repo`, and every project as `project/`, the most rows first. */
+  const repos = createMemo(() => [
+    ...counted(props.rows.map(repoKey)),
+    ...counted(props.rows.map((row) => `${row.project}/`)),
+  ]);
+  const people = createMemo(() => counted(props.rows.map((row) => row.author ?? '').filter(Boolean)));
+  return (
+    <div class="watch">
+      <Adder
+        word="Repos"
+        hint="add a repo or project"
+        picked={picked().repos}
+        names={repos()}
+        shown={(name) => (name.endsWith('/') ? `all of ${name.slice(0, -1)}` : name)}
+        count={(name) => props.rows.filter((row) => inRepo(name, row)).length}
+        onChange={(repos) => setPicked({ ...picked(), repos })}
+      />
+      <Adder
+        word="People"
+        hint="add a person"
+        picked={picked().people}
+        names={people()}
+        shown={(name) => name}
+        count={(name) => props.rows.filter((row) => byPerson(name, row)).length}
+        onChange={(people) => setPicked({ ...picked(), people })}
+      />
     </div>
   );
 }

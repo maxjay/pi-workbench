@@ -49,9 +49,10 @@ export { asked, pulls, searched, toReview, yours };
 export const refreshPulls = () => Promise.all([refetch(), refetchReview()]);
 
 /**
- * What you picked to see of the ones to review. A repo is `project/repo`, and `project/*` is a
- * whole project. A row shows when its repo is picked and its author is picked; a list with
- * nothing picked lets every row through. Kept in the window's own storage.
+ * What you picked to see of the ones to review, as you added it. A repo is `project/repo`,
+ * `project/` for a whole project, or a repo's name alone for that name in any project. A person
+ * is a name. A row shows when its repo is picked and its author is picked; a list with nothing
+ * picked lets every row through. Kept in the window's own storage.
  */
 export type Picked = { repos: string[]; people: string[] };
 
@@ -75,10 +76,20 @@ export function setPicked(next: Picked) {
 
 export const repoKey = (row: { project: string; repo: string }) => `${row.project}/${row.repo}`;
 
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** Whether a row is in a repo you added. */
+export function inRepo(entry: string, row: PullRow) {
+  if (entry.endsWith('/')) return same(entry.slice(0, -1), row.project);
+  return entry.includes('/') ? same(entry, repoKey(row)) : same(entry, row.repo);
+}
+
+/** Whether a row was opened by a person you added. */
+export const byPerson = (entry: string, row: PullRow) => same(entry, row.author ?? '');
+
 /** Whether a row is among what you picked. */
 export function shows(pick: Picked, row: PullRow) {
-  const repo =
-    pick.repos.length === 0 || pick.repos.includes(repoKey(row)) || pick.repos.includes(`${row.project}/*`);
-  const person = pick.people.length === 0 || pick.people.includes(row.author ?? '');
+  const repo = pick.repos.length === 0 || pick.repos.some((entry) => inRepo(entry, row));
+  const person = pick.people.length === 0 || pick.people.some((entry) => byPerson(entry, row));
   return repo && person;
 }
