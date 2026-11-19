@@ -4,12 +4,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod daemon;
+#[cfg(windows)]
+mod icon;
 mod launch;
 #[cfg(windows)]
 mod wsl;
 
 use daemon::Daemon;
 use tauri::{AppHandle, State};
+#[cfg(windows)]
+use tauri::{Manager, WindowEvent};
 
 /// Starts wbd, or starts it again.
 #[tauri::command(async)]
@@ -50,6 +54,21 @@ fn main() {
             daemon_send,
             open_url
         ])
+        .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                icon::sharpen(&window);
+                let moved = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::ScaleFactorChanged { .. } = event {
+                        icon::sharpen(&moved);
+                    }
+                });
+            }
+            #[cfg(not(windows))]
+            let _ = app;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("the window opens");
 }
