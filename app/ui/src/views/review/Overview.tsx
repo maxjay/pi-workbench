@@ -2,19 +2,10 @@
 // items it is for, who voted how, and the comments that are not on code.
 
 import { createSignal, For, Show } from 'solid-js';
-import { createAction } from '../../components/action';
 import { Markdown } from '../../components/Markdown';
 import { openUrl } from '../../components/open';
-import {
-  addNote,
-  addNotes,
-  dropNotes,
-  hideResolved,
-  notesOf,
-  setHideResolved,
-  settleNote,
-} from '../../state/review';
-import { FROM_REVIEW, readReview, reviewPrompt } from './agentReview';
+import { hideResolved, notesOf, setHideResolved } from '../../state/review';
+import { FROM_REVIEW } from './agentReview';
 import { placeName, type Reviewing, voteWords } from './parts';
 import { NewComment, NoteBox, ThreadBox } from './Threads';
 
@@ -31,29 +22,6 @@ export function Overview(props: { r: Reviewing }) {
   const [focus, setFocus] = createSignal('');
   const summary = () => notesOf(props.r.pull).find((note) => note.summary);
   const drafts = () => notesOf(props.r.pull).filter((note) => note.question === FROM_REVIEW && note.place);
-  const reviewing = createAction(async () => {
-    const pull = props.r.pull;
-    // A new review takes the place of the last one and of the drafts you left from it.
-    dropNotes(pull, (note) => Boolean(note.summary) || note.question === FROM_REVIEW);
-    const id = crypto.randomUUID();
-    addNote(pull, { id, summary: true, question: focus().trim() });
-    try {
-      const read = readReview(await props.r.tell(reviewPrompt(review(), focus().trim())));
-      settleNote(pull, id, { answer: read.summary });
-      addNotes(
-        pull,
-        read.comments.map((c) => ({
-          id: crypto.randomUUID(),
-          place: c.place,
-          question: FROM_REVIEW,
-          answer: c.text,
-        })),
-      );
-    } catch (err) {
-      settleNote(pull, id, { failed: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   return (
     <div class="overview">
       <section class="overview-part" aria-labelledby="overview-agent">
@@ -93,7 +61,7 @@ export function Overview(props: { r: Reviewing }) {
           class="thread-box"
           onSubmit={(e) => {
             e.preventDefault();
-            void reviewing.run();
+            props.r.reviewAll(focus().trim());
           }}
         >
           <div class="thread-foot thread-alone">
@@ -104,8 +72,12 @@ export function Overview(props: { r: Reviewing }) {
               value={focus()}
               onInput={(e) => setFocus(e.currentTarget.value)}
             />
-            <button type="submit" class="quiet" disabled={reviewing.busy()}>
-              {reviewing.busy() ? 'Reviewing' : summary() ? 'Review it again' : 'Review it with the agent'}
+            <button type="submit" class="button review-go" disabled={props.r.reviewingAll}>
+              {props.r.reviewingAll
+                ? 'Reviewing'
+                : summary()
+                  ? 'Review it again'
+                  : 'Review it with the agent'}
             </button>
           </div>
         </form>

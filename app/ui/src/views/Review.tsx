@@ -13,8 +13,10 @@ import type { Review } from '../protocol/Review';
 import { open as conversations, defaultAgent, send, show, start, turnEnd } from '../state/conversations';
 import {
   addNote,
+  addNotes,
   changed,
   checks,
+  dropNotes,
   type Note,
   openReview,
   session,
@@ -25,6 +27,7 @@ import {
 } from '../state/review';
 import { active, type TabId } from '../state/tabs';
 import { workspaceById } from '../state/workspaces';
+import { FROM_REVIEW, readReview, reviewPrompt } from './review/agentReview';
 import { Checks, outcome } from './review/Checks';
 import { FileDiff } from './review/FileDiff';
 import { Files } from './review/Files';
@@ -115,12 +118,40 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
     );
   };
 
+  /** The agent's review of the whole pull request: a summary, and comments drafted on lines. */
+  const reviewAll = createAction(async (focus: string) => {
+    const review = data.review;
+    if (!review) return;
+    // A new review takes the place of the last one and of the drafts you left from it.
+    dropNotes(pull, (note) => Boolean(note.summary) || note.question === FROM_REVIEW);
+    const id = crypto.randomUUID();
+    addNote(pull, { id, summary: true, question: focus });
+    setAgentShown(true);
+    try {
+      const read = readReview(await tell(reviewPrompt(review, focus)));
+      settleNote(pull, id, { answer: read.summary });
+      addNotes(
+        pull,
+        read.comments.map((c) => ({
+          id: crypto.randomUUID(),
+          place: c.place,
+          question: FROM_REVIEW,
+          answer: c.text,
+        })),
+      );
+    } catch (err) {
+      settleNote(pull, id, { failed: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   const reviewing = (review: Review): Reviewing => ({
     dir,
     pr,
     pull,
     review,
     askAgent,
+    reviewAll: (focus) => void reviewAll.run(focus),
+    reviewingAll: reviewAll.busy(),
     tell: (prompt) => {
       setAgentShown(true);
       return tell(prompt);
@@ -180,6 +211,17 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
                 )}
               </For>
             </span>
+            <button
+              type="button"
+              class="button"
+              disabled={reviewAll.busy()}
+              onClick={() => {
+                setShown({ kind: 'overview' });
+                void reviewAll.run('');
+              }}
+            >
+              {reviewAll.busy() ? 'The agent is reviewing' : 'Review with the agent'}
+            </button>
             <Decide review={review()} dir={dir} pr={pr} />
             <button
               type="button"

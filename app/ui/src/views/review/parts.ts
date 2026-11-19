@@ -21,6 +21,13 @@ export interface Reviewing {
   askAgent: (prompt: string, about: Omit<Note, 'id' | 'answer' | 'failed'>) => void;
   /** Says something in this pull request's session, and resolves with what the agent ends its turn on. */
   tell: (prompt: string) => Promise<string>;
+  /**
+   * Has the agent review the whole pull request. Its summary shows in the
+   * overview, and each comment it drafts waits under its line.
+   */
+  reviewAll: (focus: string) => void;
+  /** The agent is reviewing the whole pull request now. */
+  reviewingAll: boolean;
   /** Shows a changed file, at a line of the new file if one is given. */
   showFile: (path: string, line?: number) => void;
 }
