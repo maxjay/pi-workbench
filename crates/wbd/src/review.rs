@@ -67,12 +67,23 @@ impl Reviews {
             .find(|reviewer| reviewer["id"].as_str() == Some(me.as_str()))
             .map_or(0, vote_of);
         let head = text(&diff["head"]);
+        // The policies are asked for by the project's own id. Not being able to ask counts as not met.
+        let policies = get(
+            dova,
+            dir,
+            format!(
+                "_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{}/{pr}&api-version=7.1-preview.1",
+                text(&raw["repository"]["project"]["id"])
+            ),
+        )
+        .await;
         Ok(Review {
             pr: shape::<PullRequest>(view.clone())?,
             author: text(&view["author"]),
             description: text(&view["description"]),
             merge: raw["mergeStatus"].as_str().map(str::to_string),
             auto_complete: raw["autoCompleteSetBy"]["id"].is_string(),
+            ready: policies.as_ref().is_ok_and(met),
             reviewers: reviewers
                 .map(|reviewer| Reviewer {
                     name: text(&reviewer["displayName"]),
@@ -331,6 +342,19 @@ fn shape<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 
 fn text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
+}
+
+/// Whether every policy on a pull request is met, the optional ones too: left to complete by
+/// itself, it waits for those as well. With no policy, it is.
+fn met(evaluations: &Value) -> bool {
+    let all = evaluations["value"].as_array().into_iter().flatten();
+    all.filter(|policy| policy["configuration"]["isEnabled"].as_bool() != Some(false))
+        .all(|policy| {
+            matches!(
+                policy["status"].as_str(),
+                Some("approved" | "notApplicable")
+            )
+        })
 }
 
 fn vote_of(reviewer: &Value) -> i8 {
@@ -821,6 +845,19 @@ mod tests {
         );
         assert_eq!(steps[2].errors, ["exit code 1"]);
         assert_eq!(errors, ["No agent found"]);
+    }
+
+    #[test]
+    fn knows_when_the_policies_are_met() {
+        let policy = |enabled: bool, status: &str| json!({ "configuration": { "isBlocking": false, "isEnabled": enabled }, "status": status });
+        assert!(met(&json!({ "value": [] })));
+        assert!(met(
+            &json!({ "value": [policy(true, "approved"), policy(false, "rejected")] })
+        ));
+        assert!(!met(
+            &json!({ "value": [policy(true, "approved"), policy(true, "queued")] })
+        ));
+        assert!(!met(&json!({ "value": [policy(true, "rejected")] })));
     }
 
     #[test]

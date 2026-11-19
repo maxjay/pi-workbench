@@ -183,14 +183,8 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
               <h1>{review().pr.title}</h1>
               <span class="dim">
                 <span class="dim">#{review().pr.id}</span> ·{' '}
-                <span class="review-state">{stateOf(review())}</span>
-                <Show when={review().autoComplete && review().pr.status === 'active'}>
-                  {' '}
-                  <span class="mark" data-state="working" title="It completes by itself when its checks pass">
-                    auto
-                  </span>
-                </Show>{' '}
-                · {review().author} · {review().pr.sourceBranch} into {review().pr.targetBranch}
+                <span class="review-state">{stateOf(review())}</span> ·{review().author} ·{' '}
+                {review().pr.sourceBranch} into {review().pr.targetBranch}
                 <Show when={review().merge === 'conflicts'}>
                   <span class="note-failed"> · conflicts with {review().pr.targetBranch}</span>
                 </Show>
@@ -359,24 +353,24 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
     if (review.pr.status === 'abandoned')
       return [{ label: 'Reactivate', run: () => setting.run('reactivate') }];
     if (!activeNow()) return [];
-    const complete: Choice[] = [
-      {
-        label: 'Complete',
-        detail: `Squash into ${review.pr.targetBranch}, delete the branch, close the work items`,
-        sure: `Yes, complete it into ${review.pr.targetBranch}`,
-        run: () => setting.run('complete'),
-      },
-      review.autoComplete
-        ? { label: 'Cancel auto-complete', run: () => setting.run('cancelAutoComplete') }
-        : {
-            label: 'Auto-complete',
-            detail: 'Completes when its checks pass',
-            run: () => setting.run('autoComplete'),
-          },
-    ];
+    const complete: Choice = {
+      label: 'Complete',
+      detail: `Squash into ${review.pr.targetBranch}, delete the branch, close the work items`,
+      sure: `Yes, complete it into ${review.pr.targetBranch}`,
+      run: () => setting.run('complete'),
+    };
+    const auto: Choice = review.autoComplete
+      ? { label: 'Cancel auto-complete', run: () => setting.run('cancelAutoComplete') }
+      : {
+          label: 'Auto-complete',
+          detail: 'Completes when its policies are met',
+          run: () => setting.run('autoComplete'),
+        };
     return [
       // A draft can't be completed. It is made ready first.
-      ...(review.pr.isDraft ? [] : complete),
+      // There are always policies, so it is left to complete by itself. Once they are all met
+      // there is nothing to wait for, and completing it comes first.
+      ...(review.pr.isDraft ? [] : review.ready ? [complete, auto] : [auto, complete]),
       review.pr.isDraft
         ? { label: 'Ready', detail: 'Takes it out of draft', run: () => setting.run('ready') }
         : { label: 'Draft', run: () => setting.run('draft') },
@@ -391,6 +385,10 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
   ];
   // The first of what can become of it is the button. The rest are in its list.
   const first = () => options()[0];
+  // It is set to complete by itself and is waiting for its policies. The button says so by
+  // how it looks, and a click cancels it.
+  const waiting = () =>
+    activeNow() && !props.review.pr.isDraft && props.review.autoComplete && !props.review.ready;
   const [sure, setSure] = createSignal(false);
   const decide = () => {
     const choice = first();
@@ -430,16 +428,17 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       </Show>
       <Show when={first()}>
         {(choice) => (
-          <div class="split">
+          <div class="split" data-tone={waiting() ? 'on' : 'accent'}>
             <button
               type="button"
               class="button"
               classList={{ 'note-failed': sure() }}
-              title={choice().detail}
+              title={waiting() ? 'It completes when its policies are met. Click to cancel.' : choice().detail}
+              aria-pressed={waiting() ? true : undefined}
               disabled={setting.busy()}
               onClick={decide}
             >
-              {sure() ? 'Sure?' : choice().label}
+              {sure() ? 'Sure?' : waiting() ? 'Auto-complete' : choice().label}
             </button>
             <Show when={options().length > 1}>
               <Menu label="More" arrow choices={options().slice(1)} busy={setting.busy()} />

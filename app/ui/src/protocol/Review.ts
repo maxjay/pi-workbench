@@ -20,7 +20,11 @@ merge: string | null,
 /**
  * It completes by itself once its checks pass.
  */
-autoComplete: boolean, reviewers: Array<Reviewer>, 
+autoComplete: boolean, 
+/**
+ * Every policy on it is met, the optional ones too. There is nothing left to wait for.
+ */
+ready: boolean, reviewers: Array<Reviewer>, 
 /**
  * Your own vote. See [`Reviewer::vote`].
  */

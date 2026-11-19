@@ -1366,6 +1366,13 @@ svg.glyph {
   color: var(--accent);
 }
 
+/* Switched on: the same outline, filled. */
+.review .split[data-tone="on"] .button {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+}
+
 .review .split[data-tone="done"] .button {
   border-color: var(--ok);
   color: var(--ok);

@@ -19,6 +19,8 @@ pub struct Review {
     pub merge: Option<String>,
     /// It completes by itself once its checks pass.
     pub auto_complete: bool,
+    /// Every policy on it is met, the optional ones too. There is nothing left to wait for.
+    pub ready: bool,
     pub reviewers: Vec<Reviewer>,
     /// Your own vote. See [`Reviewer::vote`].
     pub vote: i8,
