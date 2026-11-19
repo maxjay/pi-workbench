@@ -22,6 +22,9 @@ use crate::{git, pulls};
 
 /// Asked of dova for one file, this many lines around each change is all of the file.
 const WHOLE_FILE: u64 = 1_000_000;
+/// A file that changes more lines than this comes without them: it would be most of the
+/// answer. Asking for the whole file gets them. dova has the same rule for a whole diff.
+const LARGE: usize = 10_000;
 /// No more of a step's log than its last lines.
 const LOG_LINES: usize = 5_000;
 /// What the agent is told is no longer than this: it is one argument on its command line.
@@ -35,8 +38,30 @@ pub struct Reviews {
     me: Mutex<HashMap<String, String>>,
     /// Each pull request's place in Azure DevOps' REST paths, by folder and number.
     paths: Mutex<HashMap<(String, u64), String>>,
-    /// Each pull request's whole diff, as dova last gave it.
-    diffs: Mutex<HashMap<(String, u64), Value>>,
+    /// What changed in each pull request's files, as far as it was asked for.
+    diffs: Mutex<HashMap<(String, u64), Kept>>,
+}
+
+/// The files of a pull request that were asked for, each as dova gave it, by its path. They
+/// are of one push: after another, none of them is kept.
+#[derive(Default)]
+struct Kept {
+    base: Value,
+    head: Value,
+    files: HashMap<String, Value>,
+}
+
+impl Kept {
+    /// Keeps nothing of another push than the one dova now answers about.
+    fn of(&mut self, diff: &Value) {
+        if self.head != diff["head"] || self.base != diff["base"] {
+            *self = Kept {
+                base: diff["base"].clone(),
+                head: diff["head"].clone(),
+                files: HashMap::new(),
+            };
+        }
+    }
 }
 
 impl Reviews {
@@ -44,11 +69,13 @@ impl Reviews {
     pub async fn open(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
         let id = json!({ "idOrUrl": pr.to_string(), "inlineImages": true });
         let at = self.at(dova, dir, pr).await?;
+        // Which files changed, not what changed in them: a few requests, however many there are.
+        let names = json!({ "pr": pr.to_string(), "names": true });
         let (view, raw, threads, diff, me) = tokio::join!(
             dova.call("pr.view", dir, id),
             get(dova, dir, format!("{at}?api-version=7.1")),
             get(dova, dir, format!("{at}/threads?api-version=7.1")),
-            self.whole_diff(dova, dir, pr),
+            dova.call("pr.diff", dir, names),
             self.me(dova, dir),
         );
         let (view, raw, threads, diff, me) = (view?, raw?, threads?, diff?, me?);
@@ -101,12 +128,7 @@ impl Reviews {
                 .flatten()
                 .filter_map(|raw| thread(raw, &places))
                 .collect(),
-            files: diff["files"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|file| changed(file, &head))
-                .collect(),
+            files: self.listed(dir, pr, &diff),
             base: text(&diff["base"]),
             head,
         })
@@ -199,26 +221,52 @@ impl Reviews {
         Ok(text(&raw["description"]))
     }
 
-    /// A pull request's whole diff. It only changes with a push, so it is
-    /// kept until the pull request ends at another commit.
-    async fn whole_diff(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Value, Error> {
-        let key = (dir.to_string(), pr);
-        // Which files changed says which push this is, and costs one request.
-        let asked = json!({ "pr": pr.to_string(), "names": true });
-        let names = dova.call("pr.diff", dir, asked).await?;
-        let kept = self.diffs.lock().expect("not poisoned").get(&key).cloned();
-        let same = |kept: &Value| kept["head"] == names["head"] && kept["base"] == names["base"];
-        if let Some(kept) = kept.filter(same) {
-            return Ok(kept);
-        }
-        let diff = dova
-            .call("pr.diff", dir, json!({ "pr": pr.to_string() }))
-            .await?;
-        self.diffs
-            .lock()
-            .expect("not poisoned")
-            .insert(key, diff.clone());
-        Ok(diff)
+    /// A pull request's files, from dova's list of their names. The ones that were asked
+    /// for since its last push come with what changed in them.
+    fn listed(&self, dir: &str, pr: u64, names: &Value) -> Vec<ChangedFile> {
+        let mut diffs = self.diffs.lock().expect("not poisoned");
+        let kept = diffs.entry((dir.to_string(), pr)).or_default();
+        kept.of(names);
+        let head = text(&names["head"]);
+        let files = names["files"].as_array().into_iter().flatten();
+        files
+            .map(|named| match kept.files.get(&text(&named["path"])) {
+                Some(file) => changed(file, &head, true),
+                None => changed(named, &head, false),
+            })
+            .collect()
+    }
+
+    /// What changed in some of a pull request's files: one call to dova for them all. It is
+    /// kept, so the pull request comes with it from then on, until its next push.
+    pub async fn files(
+        &self,
+        dova: &Dova,
+        dir: &str,
+        pr: u64,
+        paths: &[String],
+    ) -> Result<Vec<ChangedFile>, Error> {
+        let named: Vec<String> = paths.iter().map(|path| format!("/{path}")).collect();
+        let asked = json!({ "pr": pr.to_string(), "files": named });
+        let mut diff = dova.call("pr.diff", dir, asked).await?;
+        let head = text(&diff["head"]);
+        let mut diffs = self.diffs.lock().expect("not poisoned");
+        let kept = diffs.entry((dir.to_string(), pr)).or_default();
+        kept.of(&diff);
+        let files = diff["files"].as_array_mut().into_iter().flatten();
+        Ok(files
+            .map(|file| {
+                // Asked for by name, a file comes with its whole text before and after. Only
+                // its changes are kept.
+                if let Some(file) = file.as_object_mut() {
+                    file.remove("old");
+                    file.remove("new");
+                }
+                let changed = changed(file, &head, true);
+                kept.files.insert(text(&file["path"]), file.take());
+                changed
+            })
+            .collect())
     }
 
     /// Where a pull request is in Azure DevOps' REST paths. A pull request
@@ -484,9 +532,9 @@ fn thread(raw: &Value, places: &HashMap<u64, Option<Place>>) -> Option<Thread> {
     })
 }
 
-/// A changed file, from dova's diff.
-fn changed(file: &Value, head: &str) -> ChangedFile {
-    let lines = lines(file);
+/// A changed file, from dova's diff. Not `loaded`, it is from the list of names alone.
+fn changed(file: &Value, head: &str, loaded: bool) -> ChangedFile {
+    let mut lines = lines(file);
     let count = |key: &str| file[key].as_u64().unwrap_or_default() as u32;
     let mut hasher = DefaultHasher::new();
     match lines.is_empty() {
@@ -495,6 +543,10 @@ fn changed(file: &Value, head: &str) -> ChangedFile {
         false => lines
             .iter()
             .for_each(|line| (line.kind as u8, &line.text).hash(&mut hasher)),
+    }
+    let large = lines.len() > LARGE || file["large"].as_bool() == Some(true);
+    if large {
+        lines.clear();
     }
     ChangedFile {
         path: text(&file["path"]).trim_start_matches('/').to_string(),
@@ -509,10 +561,15 @@ fn changed(file: &Value, head: &str) -> ChangedFile {
         },
         added: count("added"),
         removed: count("removed"),
-        mark: format!("{:016x}", hasher.finish()),
+        // A file that was not asked for yet has no mark: what is in it is not known.
+        mark: match loaded {
+            true => format!("{:016x}", hasher.finish()),
+            false => String::new(),
+        },
         binary: file["binary"].as_bool() == Some(true),
-        large: file["large"].as_bool() == Some(true),
+        large,
         lines,
+        loaded,
     }
 }
 
@@ -814,6 +871,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_file_comes_by_its_name_alone_until_it_is_asked_for_and_then_until_the_next_push() {
+        let names = |head: &str| {
+            json!({ "base": "b", "head": head, "files": [
+                { "path": "/a.txt", "oldPath": null, "change": "edited" },
+                { "path": "/b.txt", "oldPath": null, "change": "added" },
+            ] })
+        };
+        let reviews = Reviews::default();
+        let listed = reviews.listed("dir", 7, &names("one"));
+        assert_eq!(
+            (listed[1].path.as_str(), listed[1].change, listed[1].loaded),
+            ("b.txt", FileChange::Added, false)
+        );
+        assert!(listed[1].mark.is_empty() && listed[1].lines.is_empty());
+
+        let asked = json!({ "path": "/a.txt", "change": "edited", "added": 1, "removed": 0,
+            "hunks": [{ "lines": [{ "kind": "added", "old": null, "new": 1, "text": "x" }] }] });
+        let mut diffs = reviews.diffs.lock().unwrap();
+        let kept = diffs.get_mut(&("dir".to_string(), 7)).unwrap();
+        kept.files.insert("/a.txt".into(), asked);
+        drop(diffs);
+
+        let listed = reviews.listed("dir", 7, &names("one"));
+        assert_eq!(
+            listed.iter().map(|file| file.loaded).collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert_eq!((listed[0].added, listed[0].lines.len()), (1, 1));
+        let pushed = reviews.listed("dir", 7, &names("two"));
+        assert!(pushed.iter().all(|file| !file.loaded));
+    }
+
+    #[test]
     fn reads_dovas_diff_of_a_file() {
         let file = json!({
             "path": "/src/auth.ts", "oldPath": null, "change": "edited", "binary": false, "added": 2, "removed": 1,
@@ -826,7 +916,7 @@ mod tests {
                 { "oldStart": 40, "lines": [{ "kind": "added", "old": null, "new": 41, "text": "more" }] },
             ],
         });
-        let read = changed(&file, "abc");
+        let read = changed(&file, "abc", true);
         assert_eq!(
             (read.path.as_str(), read.change, read.added, read.removed),
             ("src/auth.ts", FileChange::Edited, 2, 1)
@@ -846,13 +936,13 @@ mod tests {
             ]
         );
         // The same change has the same mark, and a different one a different mark.
-        assert_eq!(read.mark, changed(&file, "another push").mark);
+        assert_eq!(read.mark, changed(&file, "another push", true).mark);
         let mut other = file.clone();
         other["hunks"][1]["lines"][0]["text"] = json!("changed again");
-        assert_ne!(read.mark, changed(&other, "abc").mark);
+        assert_ne!(read.mark, changed(&other, "abc", true).mark);
 
         let renamed = json!({ "path": "/docs/to.md", "oldPath": "/docs/from.md", "change": "renamed", "binary": true });
-        let read = changed(&renamed, "abc");
+        let read = changed(&renamed, "abc", true);
         assert_eq!(
             (read.old_path.as_deref(), read.change, read.binary),
             (Some("docs/from.md"), FileChange::Renamed, true)

@@ -16,27 +16,39 @@ const [searched, setSearched] = createSignal<string[]>([]);
 // Nothing to ask until wbd is up and has found dova.
 const ready = () => status() === 'ready' && Boolean(health()?.dova);
 
-/** Your rows as dova first lists them, shown until the full answer comes. */
+/**
+ * Your rows as Azure DevOps' own list has them: one request. They are here first, and they say
+ * which are open now, so one that was completed leaves as soon as this is asked again.
+ */
 const [first, setFirst] = createSignal<PullRow[]>();
+/** When each list was last asked for. */
+let askedAt = 0;
+let reviewAt = 0;
 
-/** The ones you opened. Asked as soon as wbd is up, and shown without waiting for the others. */
-const [pulls, { refetch }] = createResource(ready, async (_, known): Promise<PullRow[]> => {
-  // The first time, the rows are also asked for without the reason under each: why a check
-  // failed and which thread is open take a call for each row. If this fails, the full call says why.
-  if (!known.value) {
-    void ask({ method: 'pulls.list', params: { quick: true } }, 'pulls').then(
-      (listed) => setFirst(listed.rows),
-      () => undefined,
-    );
-  }
+/** The ones you opened, each with its check, its threads and what it waits on. These take longer. */
+const [pulls, { refetch }] = createResource(ready, async (): Promise<PullRow[]> => {
+  askedAt = Date.now();
+  void ask({ method: 'pulls.list', params: { quick: true } }, 'pulls').then(
+    (listed) => setFirst(listed.rows),
+    // If this fails, the full call says why.
+    () => setFirst(),
+  );
   const listed = await ask({ method: 'pulls.list', params: { quick: false } }, 'pulls');
   setAsked(listed.asked);
   setSearched(listed.searched);
   return listed.rows;
 });
 
-/** Your rows: the full answer once it is here, and before that the first one. */
-const yours = () => pulls.latest ?? (pulls.error ? undefined : first());
+const same = (row: PullRow) => `${row.project}/${row.repo}#${row.id}`.toLowerCase();
+
+/** Your rows: which, from the list of one request. What is under each, from the full answer once it is here. */
+const yours = () => {
+  const full = pulls.latest;
+  const rows = pulls.error ? undefined : first();
+  if (!rows) return full;
+  const known = new Map((full ?? []).map((row) => [same(row), row]));
+  return rows.map((row) => known.get(same(row)) ?? row);
+};
 
 /**
  * Whose pull requests show under "To review", and in which repos. A person is kept by their
@@ -77,6 +89,7 @@ export const repoName = (pick: RepoPick) =>
 const [toReview, { refetch: refetchReview }] = createResource(
   () => (ready() && !filtering() && filter().people.length + filter().repos.length > 0 ? filter() : false),
   async (chosen) => {
+    reviewAt = Date.now();
     const params = {
       people: chosen.people.map((person) => person.id),
       repos: chosen.repos,
@@ -94,3 +107,9 @@ export const refreshPulls = () => refetch();
 
 /** Asks for the ones you chose to see again. */
 export const refreshReview = () => refetchReview();
+
+/** Asks again for what was not asked for a moment ago: for when Home comes back on screen. */
+export function refreshOld() {
+  if (!pulls.loading && Date.now() - askedAt > 10_000) void refetch();
+  if (!toReview.loading && Date.now() - reviewAt > 60_000) void refetchReview();
+}

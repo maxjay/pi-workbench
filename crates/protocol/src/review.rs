@@ -115,6 +115,9 @@ pub struct ChangedFile {
     pub large: bool,
     /// The changed lines, with a few unchanged ones around each change.
     pub lines: Vec<DiffLine>,
+    /// Whether what changed in it was asked for yet. Until it is, there are
+    /// no lines, no counts and no mark: only its name and how it changed.
+    pub loaded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]

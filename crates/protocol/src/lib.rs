@@ -137,8 +137,8 @@ pub enum Call {
     },
 
     /// The pull requests you opened, in every project your workspaces are in.
-    /// With `quick`, as dova lists them, without why a check failed and which
-    /// thread is open: those are asked for one row at a time and take longer.
+    /// With `quick`, as Azure DevOps' own list has them, from one request:
+    /// without a check and threads, which take requests for each one.
     #[serde(rename = "pulls.list")]
     PullsList {
         #[serde(default)]
@@ -173,12 +173,22 @@ pub enum Call {
         #[ts(type = "number | null")]
         pr: Option<u64>,
     },
-    /// A pull request to review: its votes, its threads, its changed files.
+    /// A pull request to review: its votes, its threads, and which files it
+    /// changes. What changed in a file comes with it only once `pull.files`
+    /// asked for that file, so opening costs the same however large it is.
     #[serde(rename = "pull.open")]
     PullOpen {
         dir: String,
         #[ts(type = "number")]
         pr: u64,
+    },
+    /// What changed in some of a pull request's files.
+    #[serde(rename = "pull.files")]
+    PullFiles {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        paths: Vec<String>,
     },
     /// One changed file's diff with every line of the file, not only the changes.
     #[serde(rename = "pull.diff")]
@@ -494,6 +504,10 @@ pub enum Answer {
     Before(PullBefore),
     Created(PullRequest),
     Review(Review),
+    /// What changed in the files of a pull request that were asked for.
+    Changed {
+        files: Vec<ChangedFile>,
+    },
     FileDiff {
         lines: Vec<DiffLine>,
     },

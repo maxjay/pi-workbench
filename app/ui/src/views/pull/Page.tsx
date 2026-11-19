@@ -6,8 +6,18 @@
 // before you write anything, works in a separate checkout of its branch,
 // and is told what you are on. Nothing said to it is posted.
 
-import { createEffect, createResource, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
-import { createStore, reconcile } from 'solid-js/store';
+import {
+  batch,
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+} from 'solid-js';
+import { createStore, reconcile, unwrap } from 'solid-js/store';
 import { createAction } from '../../components/action';
 import { shutOnAway } from '../../components/shut';
 import type { Place } from '../../protocol/Place';
@@ -19,6 +29,7 @@ import {
   changed,
   checks,
   dropTalks,
+  loadFiles,
   openReview,
   patchTalk,
   say,
@@ -51,6 +62,9 @@ import { type About, type Pull, placeName, pullHue, voteWord } from './parts';
 import { Tree } from './Tree';
 import { createTalker, why } from './talker';
 
+/** How many files' changes are asked for in one call. */
+const FILES_AT_ONCE = 20;
+
 /** What the middle shows. */
 type Shown = { kind: 'overview' } | { kind: 'checks' } | { kind: 'file'; path: string; at?: number };
 
@@ -77,14 +91,63 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
   const [failure, setFailure] = createSignal<string>();
   const load = async () => {
     try {
-      const fresh = await openReview(dir, pr);
-      setData('review', reconcile(fresh as Review, { merge: true }));
+      const fresh = (await openReview(dir, pr)) as Review;
+      // A file whose changes came while this was on its way keeps them.
+      const had = data.review;
+      if (had && had.head === fresh.head && had.base === fresh.base) {
+        const here = new Map(
+          had.files.filter((file) => file.loaded).map((file) => [file.path, unwrap(file)]),
+        );
+        fresh.files = fresh.files.map((file) => (file.loaded ? file : (here.get(file.path) ?? file)));
+      }
+      setData('review', reconcile(fresh, { merge: true }));
       setTitle(props.tab, fresh.pr.title);
       setFailure();
+      void fill();
     } catch (err) {
       setFailure(why(err));
     }
   };
+
+  // The pull request comes with the names of its files. What changed in them is asked for
+  // after it is on screen: at once for a file you open, and for the rest some at a time while
+  // this tab is the one shown.
+  const asking = new Map<string, Promise<void>>();
+  const fetchFiles = (paths: string[]) => {
+    const work = loadFiles(dir, pr, paths)
+      .then((files) =>
+        batch(() => {
+          for (const file of files) setData('review', 'files', (known) => known.path === file.path, file);
+        }),
+      )
+      .finally(() => {
+        for (const path of paths) asking.delete(path);
+      });
+    for (const path of paths) asking.set(path, work);
+    return work;
+  };
+  const loadFile = (path: string) => asking.get(path) ?? fetchFiles([path]);
+  let filling = false;
+  let closed = false;
+  onCleanup(() => {
+    closed = true;
+  });
+  const fill = async () => {
+    if (filling) return;
+    filling = true;
+    try {
+      while (!closed && active() === props.tab) {
+        const rest = (data.review?.files ?? []).filter((file) => !file.loaded && !asking.has(file.path));
+        if (rest.length === 0) break;
+        await fetchFiles(rest.slice(0, FILES_AT_ONCE).map((file) => file.path));
+      }
+    } catch {
+      // The next time the pull request is asked about, the rest is asked for again.
+    } finally {
+      filling = false;
+    }
+  };
+  createEffect(() => active() === props.tab && void fill());
   const [runs, { refetch: recheck }] = createResource(() => checks(dir, pr));
   createEffect(on(changed, () => void load()));
   onMount(() => {
@@ -204,6 +267,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
     showFile,
     openTicket: (id) => open(`wi:${props.workspace}:${id}`),
     reload: load,
+    loadFile,
   });
 
   /** What the chat is told you are on, as the words on its chip. */

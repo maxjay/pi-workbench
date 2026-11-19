@@ -22,6 +22,7 @@ import {
   filtering,
   yours as listed,
   pulls,
+  refreshOld,
   refreshPulls,
   refreshReview,
   searched,
@@ -329,11 +330,15 @@ function Yours() {
 }
 
 export function Pulls() {
-  // Asked again while Home is on screen: yours each minute, the ones you chose to see every five.
+  // Asked again when Home comes back on screen and when the window is gone back to, and while
+  // Home is on screen: yours each minute, the ones you chose to see every five.
   onMount(() => {
+    refreshOld();
+    window.addEventListener('focus', refreshOld);
     const timer = setInterval(() => document.hidden || void refreshPulls(), 60_000);
     const slower = setInterval(() => document.hidden || void refreshReview(), 300_000);
     onCleanup(() => {
+      window.removeEventListener('focus', refreshOld);
       clearInterval(timer);
       clearInterval(slower);
     });

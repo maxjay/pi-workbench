@@ -62,6 +62,14 @@ export function Diff(props: {
   // Every line of the file, once you ask for it. Until then: the changes and what is near them.
   const [whole, setWhole] = createSignal<DiffLine[]>();
   const loading = createAction(async () => setWhole(await wholeFile(p().dir, p().pr, props.path)));
+  // What changed in it is asked for when it is shown, if it was not yet.
+  const fetching = createAction((path: string) => p().loadFile(path));
+  createEffect(
+    on(
+      () => (file()?.loaded === false ? props.path : undefined),
+      (path) => path && void fetching.run(path),
+    ),
+  );
   // A push that changes the file makes the whole of it stale.
   createEffect(
     on(
@@ -435,12 +443,14 @@ export function Diff(props: {
               <span class="dim diff-dir">{f().path.slice(0, f().path.lastIndexOf('/') + 1)}</span>
               <span class="diff-name">{f().path.slice(f().path.lastIndexOf('/') + 1)}</span>
             </span>
-            <span class="counts">
-              <span data-state="ok">+{f().added}</span>{' '}
-              <Show when={f().removed > 0}>
-                <span data-state="failed">-{f().removed}</span>
-              </Show>
-            </span>
+            <Show when={f().loaded}>
+              <span class="counts">
+                <span data-state="ok">+{f().added}</span>{' '}
+                <Show when={f().removed > 0}>
+                  <span data-state="failed">-{f().removed}</span>
+                </Show>
+              </span>
+            </Show>
             <Show when={f().change !== 'edited'}>
               <span class="dim">{f().change}</span>
             </Show>
@@ -460,6 +470,7 @@ export function Diff(props: {
               type="button"
               class="quiet"
               aria-pressed={isViewed(p().key, f())}
+              disabled={!f().loaded}
               onClick={() => markViewed(p().key, [f()], !isViewed(p().key, f()))}
             >
               {isViewed(p().key, f()) ? '✓ read' : 'Read'}
@@ -468,6 +479,14 @@ export function Diff(props: {
 
           <div class="diff-body" ref={scroller} onScroll={() => menu() && setMenu()}>
             <Show when={loading.error()}>{(error) => <p class="pr-pad note-failed">{error()}</p>}</Show>
+            <Show when={!f().loaded}>
+              <p
+                class="pr-pad"
+                classList={{ dim: !fetching.error(), 'note-failed': Boolean(fetching.error()) }}
+              >
+                {fetching.error() ?? 'Asking dova'}
+              </p>
+            </Show>
             <Show when={f().binary}>
               <p class="pr-pad dim">Not text. There are no lines to show.</p>
             </Show>

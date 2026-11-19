@@ -211,13 +211,15 @@ export function Tree(props: { p: Pull; current: string | undefined; onPick: (pat
                 <span class="ft-marks" aria-hidden="true">
                   <For each={marks(row.file.path)}>{(tone) => <span class="sq" data-tone={tone} />}</For>
                 </span>
-                <span class="counts">
-                  <span data-state="ok">+{row.file.added}</span>
-                  <Show when={row.file.removed > 0}>
-                    {' '}
-                    <span data-state="failed">-{row.file.removed}</span>
-                  </Show>
-                </span>
+                <Show when={row.file.loaded}>
+                  <span class="counts">
+                    <span data-state="ok">+{row.file.added}</span>
+                    <Show when={row.file.removed > 0}>
+                      {' '}
+                      <span data-state="failed">-{row.file.removed}</span>
+                    </Show>
+                  </span>
+                </Show>
                 <span class="ft-tick">{isViewed(p().key, row.file) ? '✓' : ''}</span>
               </button>
             )

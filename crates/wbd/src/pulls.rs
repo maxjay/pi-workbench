@@ -86,16 +86,48 @@ fn one_each(clones: &[Clone]) -> Vec<&Clone> {
 }
 
 impl Pulls {
-    /// The pull requests you opened, in the whole of each organization a workspace is cloned
-    /// from: its other projects too. With them, every folder that was looked at and every
-    /// project that was asked, so an empty list can say why. With `quick`, the rows without
-    /// what is asked for one row at a time.
+    /// The pull requests you opened, as Azure DevOps' own list has them: one request to each
+    /// organization a workspace is cloned from, whatever number of projects they are in. They
+    /// come without a check and threads, which take requests for each one.
+    pub async fn mine(
+        &self,
+        dova: &Dova,
+        reviews: &Reviews,
+        workspaces: Vec<Workspace>,
+    ) -> Result<Vec<PullRow>, Error> {
+        let (clones, _) = clones(workspaces).await;
+        let mut rows = Vec::new();
+        for clone in one_each(&clones) {
+            let cwd = &clone.workspace.path;
+            let me = reviews.me(dova, cwd).await?;
+            let site = site(organization(&clone.project));
+            // A path that starts with a slash is asked of the organization, not of the folder's project.
+            let path = format!(
+                "/_apis/git/pullrequests?searchCriteria.creatorId={me}&searchCriteria.status=active&$top=500&api-version=7.1"
+            );
+            let found = dova.call("api", cwd, json!({ "path": path })).await?;
+            for pull in found["value"].as_array().into_iter().flatten() {
+                let Some(mut row) = review_row(pull, &site, &me, &[]) else {
+                    continue;
+                };
+                // The ones you opened are listed as yours, even where you are a reviewer too.
+                row.review = None;
+                row.workspace = home(&clones, &row);
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// The pull requests you opened, each with its check, its open threads and what it waits
+    /// on, in the whole of each organization a workspace is cloned from: its other projects
+    /// too. With them, every folder that was looked at and every project that was asked, so
+    /// an empty list can say why. This takes requests for each pull request.
     pub async fn list(
         &self,
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
-        quick: bool,
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let (clones, looked) = clones(workspaces).await;
         let mut rows: Vec<PullRow> = Vec::new();
@@ -143,14 +175,12 @@ impl Pulls {
                     row.review = None;
                     row.workspace = home(&clones, &row);
                     // Why a check failed and which thread is open are asked for one row at a time.
-                    if !quick {
-                        let failed = |run: &PipelineRun| run.result.as_deref() == Some("failed");
-                        if row.check.as_ref().is_some_and(failed) {
-                            row.failed = self.why(dova, cwd, &row).await;
-                        }
-                        if row.open_threads > 0 {
-                            row.thread = first_open(dova, cwd, row.pr.id).await;
-                        }
+                    let failed = |run: &PipelineRun| run.result.as_deref() == Some("failed");
+                    if row.check.as_ref().is_some_and(failed) {
+                        row.failed = self.why(dova, cwd, &row).await;
+                    }
+                    if row.open_threads > 0 {
+                        row.thread = first_open(dova, cwd, row.pr.id).await;
                     }
                     rows.push(row);
                 }

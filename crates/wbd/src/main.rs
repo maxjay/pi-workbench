@@ -258,6 +258,9 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         }
         Call::PullStatus { dir, pr } => Answer::Pull(pulls::status(&ctx.dova, &dir, pr).await?),
         Call::PullOpen { dir, pr } => Answer::Review(ctx.reviews.open(&ctx.dova, &dir, pr).await?),
+        Call::PullFiles { dir, pr, paths } => Answer::Changed {
+            files: ctx.reviews.files(&ctx.dova, &dir, pr, &paths).await?,
+        },
         Call::PullDiff { dir, pr, path } => Answer::FileDiff {
             lines: review::diff(&ctx.dova, &dir, pr, &path).await?,
         },
@@ -441,10 +444,18 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             asked: Vec::new(),
             searched: Vec::new(),
         },
-        Call::PullsList { quick } => {
+        Call::PullsList { quick: true } => Answer::Pulls {
+            rows: ctx
+                .pulls
+                .mine(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .await?,
+            asked: Vec::new(),
+            searched: Vec::new(),
+        },
+        Call::PullsList { quick: false } => {
             let (rows, asked, searched) = ctx
                 .pulls
-                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all(), quick)
+                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
                 .await?;
             Answer::Pulls {
                 rows,

@@ -34,6 +34,8 @@ export interface Pull extends Host {
   openTicket: (id: number) => void;
   /** Asks Azure DevOps for the pull request again, and waits for it. */
   reload: () => Promise<void>;
+  /** Asks for what changed in a file, and waits for it. */
+  loadFile: (path: string) => Promise<void>;
 }
 
 /** `auth.ts:42`, or `auth.ts:42-44`: the file's name, not its whole path. */

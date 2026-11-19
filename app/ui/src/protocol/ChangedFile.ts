@@ -27,4 +27,9 @@ large: boolean,
 /**
  * The changed lines, with a few unchanged ones around each change.
  */
-lines: Array<DiffLine>, };
+lines: Array<DiffLine>, 
+/**
+ * Whether what changed in it was asked for yet. Until it is, there are
+ * no lines, no counts and no mark: only its name and how it changed.
+ */
+loaded: boolean, };

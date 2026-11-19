@@ -9,16 +9,26 @@ import { ask } from '../daemon';
 import type { ChangedFile } from '../protocol/ChangedFile';
 import type { Place } from '../protocol/Place';
 import type { PullTo } from '../protocol/PullTo';
+import { refreshPulls, refreshReview } from './pulls';
 
 /** Counts what was written to a pull request from here, so its tab knows to ask again. */
 const [changed, setChanged] = createSignal(0);
 
 export { changed };
 
-const wrote = () => setChanged(changed() + 1);
+// Home's lists are asked again too: a vote, or a pull request that ended, shows there.
+function wrote() {
+  setChanged(changed() + 1);
+  void refreshPulls();
+  void refreshReview();
+}
 
 export const openReview = (dir: string, pr: number) =>
   ask({ method: 'pull.open', params: { dir, pr } }, 'review');
+
+/** What changed in some of a pull request's files. */
+export const loadFiles = async (dir: string, pr: number, paths: string[]) =>
+  (await ask({ method: 'pull.files', params: { dir, pr, paths } }, 'changed')).files;
 
 /** A changed file with every line of it, not only the changes. */
 export const wholeFile = async (dir: string, pr: number, path: string) =>
@@ -57,6 +67,8 @@ export async function vote(dir: string, pr: number, value: number) {
 export async function setPull(dir: string, pr: number, to: PullTo) {
   await ask({ method: 'pull.set', params: { dir, pr, to } }, 'done');
   wrote();
+  // Azure DevOps takes a moment to complete one: asked again once it has.
+  setTimeout(wrote, 3000);
 }
 
 /** Changes the title and the description. */
@@ -108,10 +120,12 @@ function stored<T>(key: string, empty: T): T {
 const [viewed, setViewed] = createStore<Record<string, Record<string, string>>>(stored('viewed', {}));
 
 /** A file is read while it is still the change you marked. A push that changes it unmarks it. */
-export const isViewed = (pull: string, file: ChangedFile) => viewed[pull]?.[file.path] === file.mark;
+export const isViewed = (pull: string, file: ChangedFile) =>
+  file.loaded && viewed[pull]?.[file.path] === file.mark;
 
 export function markViewed(pull: string, files: ChangedFile[], yes: boolean) {
-  for (const file of files) setViewed(pull, { [file.path]: yes ? file.mark : undefined });
+  // A file whose changes were not asked for yet has no mark to keep.
+  for (const file of files) if (file.loaded) setViewed(pull, { [file.path]: yes ? file.mark : undefined });
   localStorage.setItem('viewed', JSON.stringify(viewed));
 }
 
