@@ -3,7 +3,8 @@
 //! again and carried on. The file holds what the page shows. The agent
 //! keeps its own memory of the conversation, under the same id. So a
 //! session the agent made outside the workbench is a conversation too: it
-//! is listed, and gets its file when it is first opened.
+//! is listed, and gets its file when it is first opened. When the agent's
+//! own session holds more than that file, the session is what is shown.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -218,17 +219,24 @@ impl Conversations {
     /// A conversation from its file. One that has no file may be a session
     /// the agent kept by itself: that is taken in.
     fn saved(&self, id: &str) -> Result<Saved, Error> {
-        plain(id)
-            .then(|| read(&self.path(id)).or_else(|| self.take_in(id)))
-            .flatten()
-            .ok_or_else(|| Error::NotFound(format!("no conversation {id}")))
+        let none = || Error::NotFound(format!("no conversation {id}"));
+        if !plain(id) {
+            return Err(none());
+        }
+        match read(&self.path(id)) {
+            Some(saved) => Ok(self.caught_up(saved)),
+            None => self.take_in(id)?.ok_or_else(none),
+        }
     }
 
     /// Reads an agent's own session into a conversation and saves it, so
     /// it is the workbench's own from then on. The agent knows it by the
-    /// same id, so it carries on where it was.
-    fn take_in(&self, id: &str) -> Option<Saved> {
-        let view = agent::session(id)?;
+    /// same id, so it carries on where it was. Nothing, when no agent keeps
+    /// such a session. One that is kept and can't be read is an error.
+    fn take_in(&self, id: &str) -> Result<Option<Saved>, Error> {
+        let Some(view) = agent::session(id, None).map_err(unread)? else {
+            return Ok(None);
+        };
         let saved = Saved {
             state: Conversation {
                 title: title(&view.state.title),
@@ -238,7 +246,23 @@ impl Conversations {
             brief: None,
         };
         self.store(&saved);
-        Some(saved)
+        Ok(Some(saved))
+    }
+
+    /// A conversation with what the agent's own session holds, when that
+    /// is more than its file holds, and saved so. Only Pi's sessions are
+    /// read, so only a conversation with Pi can be behind.
+    fn caught_up(&self, saved: Saved) -> Saved {
+        if saved.state.agent != Agent::Pi {
+            return saved;
+        }
+        // A session that can't be read leaves the file as what is shown.
+        let own = agent::session(&saved.state.id, Some(&saved.state.cwd));
+        let (saved, changed) = longer(saved, own.ok().flatten());
+        if changed {
+            self.store(&saved);
+        }
+        saved
     }
 
     fn path(&self, id: &str) -> PathBuf {
@@ -391,9 +415,41 @@ fn read(path: &Path) -> Option<Saved> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
-/// An id is a file name here, so it must not be a path.
+/// Why an agent's own session wasn't taken in.
+fn unread(why: String) -> Error {
+    Error::Agent(format!("couldn't read the agent's own session: {why}"))
+}
+
+/// A conversation's file, or the agent's own session of it where that
+/// holds more, and whether it is the session. It holds more when the
+/// session went on outside the workbench, and when the file was made by a
+/// workbench that read less of the session. What you picked is kept.
+fn longer(saved: Saved, own: Option<ConversationView>) -> (Saved, bool) {
+    let Some(own) = own.filter(|own| own.entries.len() > saved.entries.len()) else {
+        return (saved, false);
+    };
+    let updated = own.state.updated.max(saved.state.updated);
+    let caught_up = Saved {
+        state: Conversation {
+            updated,
+            ..saved.state
+        },
+        entries: own.entries,
+        brief: saved.brief,
+    };
+    (caught_up, true)
+}
+
+/// An id is a file name here, so it must not be a path. Letters, digits,
+/// dashes, dots and lines under are what Pi lets an id of your own hold,
+/// with a letter or a digit first and last.
 fn plain(id: &str) -> bool {
-    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    let ends = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
+    ends(id.chars().next())
+        && ends(id.chars().last())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
 }
 
 fn now() -> u64 {
@@ -445,5 +501,62 @@ mod tests {
         let cut = title(&long);
         assert_eq!(cut.chars().count(), TITLE + 1);
         assert!(cut.ends_with('…'));
+    }
+
+    #[test]
+    fn an_id_is_one_pi_takes_and_never_a_path() {
+        assert!(plain("01a1f3cd-ba84-7488-a4b8-0ac77e9a050d"));
+        assert!(plain("my_own.id-1"));
+        assert!(plain("7"));
+        for id in [
+            "", ".", "..", ".hidden", "a/b", "a\\b", "ends.", "-a", "a b",
+        ] {
+            assert!(!plain(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_agent_s_own_session_is_shown_when_it_holds_more() {
+        let state = |updated: u64, model: Option<&str>| Conversation {
+            id: "s1".into(),
+            agent: Agent::Pi,
+            cwd: "/code".into(),
+            title: "Fix it".into(),
+            updated,
+            busy: false,
+            ask: None,
+            stopped: None,
+            model: model.map(str::to_string),
+            effort: None,
+        };
+        let said = |texts: &[&str]| -> Vec<Entry> {
+            let each = |text: &&str| Entry::Text {
+                text: text.to_string(),
+            };
+            texts.iter().map(each).collect()
+        };
+        let file = |texts: &[&str]| Saved {
+            state: state(5, Some("anthropic/haiku")),
+            entries: said(texts),
+            brief: Some("Be short".into()),
+        };
+        let own = |texts: &[&str]| ConversationView {
+            state: state(9, None),
+            entries: said(texts),
+        };
+
+        // The session went on outside the workbench, or the file was cut short.
+        let (saved, changed) = longer(file(&["one"]), Some(own(&["one", "two"])));
+        assert!(changed);
+        assert_eq!(saved.entries, said(&["one", "two"]));
+        assert_eq!(saved.state.updated, 9);
+        assert_eq!(saved.state.model.as_deref(), Some("anthropic/haiku"));
+        assert_eq!(saved.brief.as_deref(), Some("Be short"));
+
+        // The file holds as much, or the agent keeps no such session.
+        let (saved, changed) = longer(file(&["one", "note"]), Some(own(&["one", "two"])));
+        assert!(!changed);
+        assert_eq!(saved.entries, said(&["one", "note"]));
+        assert!(!longer(file(&["one"]), None).1);
     }
 }

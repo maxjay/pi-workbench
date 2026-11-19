@@ -68,6 +68,12 @@ export function Chat(props: {
   };
   const [listing, setListing] = createSignal(false);
   const reading = createAction(show);
+  // A conversation that is shown and is not in the page is being read, or could not be read.
+  // Why it could not is said over the box you write in.
+  const empty = () => {
+    if (!props.shown || conversation()) return props.empty;
+    return reading.error() ? 'This conversation could not be read.' : 'Reading the conversation.';
+  };
 
   onMount(async () => {
     await refreshList(props.cwd).catch(() => {});
@@ -167,7 +173,7 @@ export function Chat(props: {
         onOpenFile={props.onOpenFile}
         dress={props.dress}
         top={props.top}
-        empty={props.empty}
+        empty={empty()}
       />
 
       <div class="chat-foot">

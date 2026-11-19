@@ -35,6 +35,8 @@ impl Wbd {
             .env("WB_CLAUDE", &agent)
             .env("WB_DOVA", "/nowhere/dova")
             .env("WB_DATA_DIR", dir.path().join("data"))
+            // Pi's own sessions are read from here, not from your own folder.
+            .env("PI_CODING_AGENT_DIR", dir.path().join("pi"))
             .env(
                 "WB_RUN",
                 Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -92,11 +94,46 @@ impl Wbd {
     }
 
     fn open(&mut self, id: &str) -> Value {
+        self.opened(id)["result"].clone()
+    }
+
+    /// The whole answer to opening a conversation: its `result`, or its `error`.
+    fn opened(&mut self, id: &str) -> Value {
         self.send(json!({
             "jsonrpc": "2.0", "id": 2, "method": "conversation.open", "params": { "id": id },
         }));
-        self.until(|line| line["id"] == 2)["result"].clone()
+        self.until(|line| line["id"] == 2)
     }
+
+    /// Writes a session of Pi's own for the folder, where Pi keeps them and named as Pi names them.
+    fn pi_session(&self, id: &str, lines: &[Value]) {
+        let name = format!("--{}--", self.cwd.trim_start_matches('/').replace('/', "-"));
+        let folder = self._dir.path().join("pi/sessions").join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let first = json!({ "type": "session", "version": 3, "id": id, "cwd": self.cwd });
+        let text: String = std::iter::once(&first)
+            .chain(lines)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let file = folder.join(format!("2026-01-02T03-04-05-678Z_{id}.jsonl"));
+        std::fs::write(file, text).unwrap();
+    }
+}
+
+/// A line of Pi's session file that says something, after the line `parent`.
+fn said(id: &str, parent: Option<&str>, role: &str, text: &str) -> Value {
+    let content = json!([{ "type": "text", "text": text }]);
+    let message = json!({ "role": role, "content": content });
+    json!({ "type": "message", "id": id, "parentId": parent, "message": message })
+}
+
+/// The kinds of a conversation's entries, in order.
+fn kinds(view: &Value) -> Vec<&str> {
+    let entries = view["entries"].as_array().expect("entries");
+    entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap())
+        .collect()
 }
 
 impl Drop for Wbd {
@@ -157,4 +194,58 @@ fn a_conversation_is_listed_and_opens_again_after_wbd_restarts() {
         list[0]["title"],
         "Read note.txt and reply with only the one word in it."
     );
+}
+
+#[test]
+fn a_session_pi_made_by_itself_opens_and_keeps_up_with_pi() {
+    let mut wbd = Wbd::start("pi.jsonl");
+    let start = [
+        said("a1", None, "user", "Name a fruit"),
+        said("a2", Some("a1"), "assistant", "Apple."),
+    ];
+    wbd.pi_session("s1", &start);
+    let cwd = wbd.cwd.clone();
+    wbd.send(json!({
+        "jsonrpc": "2.0", "id": 3, "method": "conversations.list", "params": { "cwd": cwd },
+    }));
+    let list = wbd.until(|line| line["id"] == 3)["result"]["list"].clone();
+    assert_eq!(
+        (&list[0]["id"], &list[0]["title"]),
+        (&json!("s1"), &json!("Name a fruit"))
+    );
+    let view = wbd.open("s1");
+    assert_eq!(kinds(&view), ["you", "text"]);
+    assert_eq!(view["state"]["agent"], "pi");
+
+    // Pi went on with it outside the workbench.
+    let mut more = start.to_vec();
+    more.push(said("a3", Some("a2"), "user", "Another"));
+    more.push(said("a4", Some("a3"), "assistant", "Pear."));
+    wbd.pi_session("s1", &more);
+    assert_eq!(kinds(&wbd.open("s1")), ["you", "text", "you", "text"]);
+
+    // The workbench's own file of it holds less than Pi's: it was cut short when it was taken in.
+    let file = wbd._dir.path().join("data/conversations/s1.json");
+    let mut kept: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    kept["entries"] = json!([]);
+    std::fs::write(&file, kept.to_string()).unwrap();
+    assert_eq!(kinds(&wbd.open("s1")), ["you", "text", "you", "text"]);
+}
+
+#[test]
+fn a_session_that_cannot_be_read_says_why() {
+    let mut wbd = Wbd::start("pi.jsonl");
+    // A file where a session would be, with no first line of a session.
+    wbd.pi_session("s1", &[]);
+    let folder = std::fs::read_dir(wbd._dir.path().join("pi/sessions")).unwrap();
+    let folder = folder.flatten().next().unwrap().path();
+    std::fs::write(folder.join("2026-01-02T03-04-05-678Z_s2.jsonl"), "{}\n").unwrap();
+    let message = |answer: Value| answer["error"]["message"].as_str().unwrap().to_string();
+
+    let why = message(wbd.opened("s2"));
+    assert!(why.starts_with("couldn't read the agent's own session: "));
+    assert!(why.ends_with("_s2.jsonl does not start as a Pi session does"));
+    // You wrote nothing in this one.
+    assert!(message(wbd.opened("s1")).ends_with("_s1.jsonl has nothing you wrote in it"));
+    assert_eq!(message(wbd.opened("s3")), "no conversation s3");
 }

@@ -66,10 +66,16 @@ pub fn sessions(cwd: &str) -> Vec<Conversation> {
     pi_sessions::root().map_or_else(Vec::new, |root| pi_sessions::list(&root, cwd))
 }
 
-/// One of those sessions, whole. Its id is what the agent knows it by, so
-/// starting the agent with it carries the session on.
-pub fn session(id: &str) -> Option<ConversationView> {
-    pi_sessions::open(&pi_sessions::root()?, id)
+/// One of those sessions, whole, or nothing when no agent keeps a session
+/// with this id. Its id is what the agent knows it by, so starting the
+/// agent with it carries the session on. `near` is the folder it worked
+/// in, where that is known. A session that is there and can't be read is
+/// an error that says why.
+pub fn session(id: &str, near: Option<&str>) -> Result<Option<ConversationView>, String> {
+    match pi_sessions::root() {
+        Some(root) => pi_sessions::open(&root, id, near),
+        None => Ok(None),
+    }
 }
 
 /// What one line from the agent means. Nothing, for a line the workbench doesn't use.
