@@ -8,6 +8,7 @@
 import { createEffect, createResource, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { createStore, reconcile } from 'solid-js/store';
 import { createAction } from '../components/action';
+import { openUrl } from '../components/open';
 import type { PullTo } from '../protocol/PullTo';
 import type { Review } from '../protocol/Review';
 import { open as conversations, defaultAgent, send, show, start, turnEnd } from '../state/conversations';
@@ -262,6 +263,25 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
                   )}
                 </Show>
               </button>
+              <Show when={review().workItems.length > 0}>
+                <span class="review-label">Tickets</span>
+                <For each={review().workItems}>
+                  {(item) => (
+                    <button
+                      type="button"
+                      class="row review-ticket"
+                      title={`${item.title ?? ''} · opens in your browser`}
+                      onClick={() =>
+                        openUrl(`${review().pr.url.split('/_git/')[0]}/_workitems/edit/${item.id}`)
+                      }
+                    >
+                      <span class="accent">#{item.id}</span>
+                      <span class="tree-name">{item.title}</span>
+                      <span class="dim">{item.state}</span>
+                    </button>
+                  )}
+                </For>
+              </Show>
               <Files
                 r={reviewing(review())}
                 current={shownFile()?.path}

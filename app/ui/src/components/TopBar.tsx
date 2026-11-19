@@ -1,23 +1,16 @@
-// The one row on top: the mark, the open tabs, Ctrl K, and on the right
-// where wbd runs and what it found.
+// The one row on top: the mark, the open tabs, and Settings. It says where
+// wbd stands only while wbd is starting or has stopped. What wbd found is
+// in Settings.
 
 import { For, Show } from 'solid-js';
 import { status, stopReason } from '../daemon';
 import { standing } from '../state/conversations';
-import { health } from '../state/health';
 import { titles } from '../state/review';
 import { active, close, open, pullOf, type TabId, tabs, workspaceOf } from '../state/tabs';
 import { workspaceById } from '../state/workspaces';
 import { Glyph } from './Glyph';
 
-function words() {
-  if (status() === 'connecting') return 'Starting wbd';
-  if (status() === 'down') return stopReason() ?? 'wbd stopped';
-  const h = health();
-  if (!h) return '';
-  const found = [h.pi && 'pi', h.claude && 'claude', h.dova && `dova ${h.dova}`].filter(Boolean);
-  return [h.distro ?? 'Linux', ...found].join(' · ');
-}
+const words = () => (status() === 'connecting' ? 'Starting wbd' : (stopReason() ?? 'wbd stopped'));
 
 /** What a tab is called: Home, its workspace's name, or its pull request's number and title. */
 export function titleOf(tab: TabId) {
@@ -35,7 +28,7 @@ function dotOf(tab: TabId) {
   return view ? standing(view.workspace.path) : undefined;
 }
 
-export function TopBar(props: { onGo: () => void }) {
+export function TopBar() {
   return (
     <header class="top">
       <div class="top-mark">
@@ -81,13 +74,11 @@ export function TopBar(props: { onGo: () => void }) {
         </For>
       </nav>
       <span class="top-gap" />
-      <button type="button" class="go" onClick={props.onGo}>
-        <span>Go to anything</span>
-        <span>Ctrl K</span>
-      </button>
-      <span class="top-status" data-status={status()}>
-        {words()}
-      </span>
+      <Show when={status() !== 'ready'}>
+        <span class="top-status" data-status={status()}>
+          {words()}
+        </span>
+      </Show>
       <button
         type="button"
         class="top-settings"

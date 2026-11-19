@@ -1,4 +1,4 @@
-// A workspace's tab. On the left a list: Files, Changes, or the branch's pull request. In the middle the
+// A workspace's tab. On the left a list: Files or Changes. In the middle the
 // one thing you picked, with the terminals under it. On the right the agent.
 // While nothing is open in the middle, the agent has the middle.
 
@@ -13,7 +13,7 @@ import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
 import { createEditor } from './workspace/Editor';
 import { NewPull } from './workspace/NewPull';
-import { Pull } from './workspace/Pull';
+import { BranchPull } from './workspace/Pull';
 import { Terminals } from './workspace/Terminals';
 import { marks, Tree } from './workspace/Tree';
 import { closeTab, isFile, labelOf, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
@@ -127,16 +127,6 @@ function Page(props: { view: WorkspaceView }) {
             Changes
             <Show when={repo()?.git?.summary.files}>{(n) => <span class="dim">{n()}</span>}</Show>
           </button>
-          <Show when={repo()?.git}>
-            <button
-              type="button"
-              class="strip-tab"
-              aria-pressed={ui().left === 'pull'}
-              onClick={() => setLeft(id, 'pull')}
-            >
-              Pull request
-            </button>
-          </Show>
         </div>
         <div class="left-body">
           <Show when={ui().left === 'files'}>
@@ -168,6 +158,11 @@ function Page(props: { view: WorkspaceView }) {
                   <p class="left-note dim">
                     {git().summary.branch} · +{git().summary.added} -{git().summary.removed}
                   </p>
+                  <BranchPull
+                    dir={root}
+                    onNew={() => openTab(id, 'newpr')}
+                    onOpen={(pr) => open(`pr:${id}:${pr}`)}
+                  />
                   <For each={git().files} fallback={<p class="left-note dim">Nothing changed.</p>}>
                     {(f) => (
                       <button
@@ -186,9 +181,6 @@ function Page(props: { view: WorkspaceView }) {
                 </>
               )}
             </Show>
-          </Show>
-          <Show when={ui().left === 'pull'}>
-            <Pull dir={root} onNew={() => openTab(id, 'newpr')} onOpen={(pr) => open(`pr:${id}:${pr}`)} />
           </Show>
         </div>
       </aside>

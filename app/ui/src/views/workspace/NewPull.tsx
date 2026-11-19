@@ -4,7 +4,7 @@
 
 import { createEffect, createResource, createSignal, For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
-import { createPull, pullBefore, pullStatus, written } from '../../state/pull';
+import { createPull, linkItems, pullBefore, pullStatus, written } from '../../state/pull';
 
 export function NewPull(props: { dir: string; onDone: () => void }) {
   const [before] = createResource(
@@ -28,6 +28,16 @@ export function NewPull(props: { dir: string; onDone: () => void }) {
     props.onDone();
   });
   const ready = () => title().trim() !== '' && !creating.busy();
+  const [ids, setIds] = createSignal('');
+  const linking = createAction(async () => {
+    const numbers = ids()
+      .split(/[^0-9]+/)
+      .filter(Boolean)
+      .map(Number);
+    if (numbers.length === 0) return;
+    await linkItems(props.dir, numbers);
+    setIds('');
+  });
 
   return (
     <div class="new-pull">
@@ -63,14 +73,33 @@ export function NewPull(props: { dir: string; onDone: () => void }) {
       </div>
 
       <div class="field">
-        <span class="dim">Attached</span>
-        <For each={status.latest?.workItems} fallback={<span class="dim">No work items linked.</span>}>
+        <span class="dim">Tickets</span>
+        <For each={status.latest?.workItems} fallback={<span class="dim">None linked to this branch.</span>}>
           {(item) => (
             <span>
               #{item.id} {item.title}
             </span>
           )}
         </For>
+        <form
+          class="pull-link"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void linking.run();
+          }}
+        >
+          <input
+            class="ask-input"
+            placeholder="Link a ticket by its number"
+            aria-label="Ticket numbers to link"
+            value={ids()}
+            onInput={(e) => setIds(e.currentTarget.value)}
+          />
+          <button type="submit" class="button" disabled={linking.busy() || !/[0-9]/.test(ids())}>
+            Link
+          </button>
+        </form>
+        <Show when={linking.error()}>{(error) => <span class="note-failed">{error()}</span>}</Show>
       </div>
 
       <Show when={creating.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>

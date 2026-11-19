@@ -85,6 +85,7 @@ svg.glyph {
   display: flex;
   align-items: center;
   padding-right: 16px;
+  color: var(--accent);
 }
 
 .tabs {
@@ -103,10 +104,11 @@ svg.glyph {
   background: var(--hover);
 }
 
-.tab[data-current="true"] {
-  color: var(--ink);
-  border-bottom: 2px solid var(--ink);
-  margin-bottom: -1px;
+/* The tab you are on is filled with the accent, the way maxjay.dev fills the row you are on. */
+.tab[data-current="true"],
+.tab[data-current="true"]:hover {
+  background: var(--accent);
+  color: var(--paper);
 }
 
 .tab-open {
@@ -195,24 +197,6 @@ svg.glyph {
 
 .facts dt {
   color: var(--dim);
-}
-
-.top .go {
-  align-self: center;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 280px;
-  height: 28px;
-  padding: 0 10px;
-  margin-right: 20px;
-  border: 1px solid var(--line);
-  color: var(--dim);
-  font-size: 12px;
-}
-
-.top .go:hover {
-  background: var(--hover);
 }
 
 .page {
@@ -327,6 +311,10 @@ svg.glyph {
 
 .tab .strip-close {
   margin-left: -8px;
+}
+
+.tab[data-current="true"] .strip-close {
+  color: var(--paper);
 }
 
 /* Home's lists */
@@ -1438,6 +1426,41 @@ svg.glyph {
 
 .review-part > :last-child {
   font-size: 12px;
+}
+
+.review-label {
+  padding: 16px 10px 4px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.review-ticket {
+  height: 28px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+
+.review-ticket .dim {
+  font-size: 12px;
+}
+
+/* A branch's pull request, in a workspace's Changes */
+
+.branch-pull {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 20px 10px;
+}
+
+.branch-pull-open {
+  height: 30px;
+  padding: 0 20px;
+  margin-bottom: 6px;
+}
+
+.left .branch-pull .button {
+  height: 28px;
 }
 
 /* What is picked in a pull request's lists carries its colour at the left. */

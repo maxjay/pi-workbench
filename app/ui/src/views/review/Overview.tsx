@@ -1,5 +1,6 @@
-// A pull request's overview, in the middle: what it says it does, the work
-// items it is for, who voted how, and the comments that are not on code.
+// A pull request's overview, in the middle: the agent's review, what the
+// pull request says it does, who voted how, and the comments that are not
+// on code.
 
 import { createSignal, For, Show } from 'solid-js';
 import { Markdown } from '../../components/Markdown';
@@ -15,8 +16,6 @@ export function Overview(props: { r: Reviewing }) {
   const shownGeneral = () => general().filter((thread) => !(hideResolved() && !thread.unresolved));
   const resolved = () => review().threads.filter((thread) => !thread.unresolved).length;
   const draftFor = (thread: number) => notesOf(props.r.pull).find((note) => note.thread === thread);
-  /** A work item's page: beside the pull request's, in the same project. */
-  const itemUrl = (id: number) => `${review().pr.url.split('/_git/')[0]}/_workitems/edit/${id}`;
 
   // The agent's review of the whole pull request: a summary here, and comments drafted on lines.
   const [focus, setFocus] = createSignal('');
@@ -90,26 +89,6 @@ export function Overview(props: { r: Reviewing }) {
         <Show when={review().description.trim()} fallback={<span class="dim">None.</span>}>
           <Markdown text={review().description} />
         </Show>
-      </section>
-
-      <section class="overview-part" aria-labelledby="overview-items">
-        <h2 id="overview-items" class="pull-label">
-          Work items
-        </h2>
-        <For each={review().workItems} fallback={<span class="dim">None linked.</span>}>
-          {(item) => (
-            <button
-              type="button"
-              class="row overview-line"
-              title="Opens in your browser"
-              onClick={() => openUrl(itemUrl(item.id))}
-            >
-              <span class="dim">#{item.id}</span>
-              <span class="tree-name">{item.title}</span>
-              <span class="dim">{item.state}</span>
-            </button>
-          )}
-        </For>
       </section>
 
       <section class="overview-part" aria-labelledby="overview-reviewers">

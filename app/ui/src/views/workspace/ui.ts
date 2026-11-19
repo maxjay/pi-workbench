@@ -7,7 +7,7 @@
 
 import { createStore } from 'solid-js/store';
 
-export type Left = 'files' | 'changes' | 'pull';
+export type Left = 'files' | 'changes';
 
 export interface WorkspaceUi {
   left: Left;

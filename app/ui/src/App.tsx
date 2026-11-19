@@ -42,7 +42,7 @@ export function App() {
   onCleanup(() => window.removeEventListener('keydown', onKey));
   return (
     <div class="window">
-      <TopBar onGo={go} />
+      <TopBar />
       <main class="content">
         <Show when={active() === 'home'}>
           <Home />
