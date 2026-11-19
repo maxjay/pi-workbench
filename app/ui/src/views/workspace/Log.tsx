@@ -242,7 +242,11 @@ function Output(props: { text: string; name: string; tone?: 'old' | 'new' }) {
   const lines = createMemo(() => props.text.replace(/\n$/, '').split('\n'));
   const cut = () => !all() && lines().length > START + END + 5;
   return (
-    <div class="code" data-tone={props.tone}>
+    <div
+      class="code"
+      data-tone={props.tone}
+      data-long={(all() && lines().length > START + END + 5) || undefined}
+    >
       <div class="code-head">
         <span>
           {props.name} · {lines().length} {lines().length === 1 ? 'line' : 'lines'}

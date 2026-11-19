@@ -320,13 +320,13 @@ function Composer(props: {
         <Show
           when={props.busy}
           fallback={
-            <button type="button" class="button" disabled={!ready()} onClick={sendIt}>
+            <button type="button" class="soft" data-tone="agent" disabled={!ready()} onClick={sendIt}>
               Send
             </button>
           }
         >
           <span class="dim">Working</span>
-          <button type="button" class="button" onClick={props.onStop}>
+          <button type="button" class="soft" data-tone="failed" onClick={props.onStop}>
             Stop
           </button>
         </Show>

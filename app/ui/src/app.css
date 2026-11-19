@@ -8,7 +8,7 @@
 
 /* Scrollbars in the app's own colours, thin, wherever something scrolls. */
 * {
-  scrollbar-color: var(--line) transparent;
+  scrollbar-color: var(--faint) transparent;
   scrollbar-width: thin;
 }
 
@@ -628,8 +628,13 @@ svg.glyph {
   flex-direction: column;
 }
 
-.columns[data-chat="right"] .chat {
+/* Beside something else, the agent's column is a shade above the paper, and what is set apart in
+   it goes down to the paper. */
+.columns[data-chat="right"] .chat,
+.pr-cols > .chat {
   border-left: 1px solid var(--line);
+  background: #121310;
+  --ground: var(--paper);
 }
 
 .chat-head {
@@ -642,6 +647,13 @@ svg.glyph {
 .chat-agent {
   display: flex;
   align-items: center;
+  color: var(--agent);
+}
+
+.chat-busy {
+  align-self: center;
+  font-size: 12px;
+  color: var(--working);
 }
 
 .chat-title {
@@ -669,11 +681,13 @@ svg.glyph {
   padding: 0 20px;
 }
 
+/* The bar it scrolls by always has its place, so the words do not move when it comes. */
 .chat-log {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 20px;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  padding: 20px 14px 20px 20px;
 }
 
 /* In the middle the conversation keeps a width that reads well. */
@@ -694,8 +708,26 @@ svg.glyph {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 14px;
-  background: var(--raised);
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--accent);
+}
+
+/* What is said is set in the letters people read. Code keeps its own. */
+.entry-you,
+.chat-entries .markdown,
+.chat-empty {
+  font-family: var(--display);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.entry-where {
+  margin-left: 8px;
+  color: var(--dim);
+}
+
+.entry-where:hover {
+  color: var(--ink);
 }
 
 .entry-who,
@@ -845,10 +877,15 @@ svg.glyph {
   white-space: pre;
 }
 
-/* What was printed wraps: it is read, not run. */
+/* What was printed wraps: it is read, not run. Only all of a long one scrolls inside itself. */
 .fold .code pre {
+  max-height: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.fold .code[data-long] pre {
+  max-height: 420px;
 }
 
 .code[data-tone="old"] pre {
@@ -932,7 +969,12 @@ svg.glyph {
 }
 
 .markdown code {
-  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.markdown pre code {
+  font-size: inherit;
 }
 
 .markdown :not(pre) > code {
@@ -945,22 +987,24 @@ svg.glyph {
   text-underline-offset: 3px;
 }
 
+/* Where you write: no box, a line above it. */
 .chat-foot {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 20px 20px;
+  padding: 0 20px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-foot > .note-failed,
+.chat-foot > .ask {
+  margin-top: 12px;
+  margin-bottom: 12px;
 }
 
 .composer {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-}
-
-.composer:focus-within {
-  border-color: var(--dim);
 }
 
 .composer-text {
@@ -969,8 +1013,14 @@ svg.glyph {
   border: 0;
   outline: 0;
   color: var(--ink);
-  font: inherit;
-  padding: 12px 14px;
+  font-family: var(--display);
+  font-size: 14.5px;
+  line-height: 1.5;
+  padding: 12px 0 4px;
+}
+
+.composer-text::placeholder {
+  color: var(--dim);
 }
 
 .composer-foot {
@@ -978,7 +1028,29 @@ svg.glyph {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding: 0 10px 10px 6px;
+  margin-left: -8px;
+  padding: 0 0 12px;
+}
+
+/* What the agent is told you are on. */
+.chat-on {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 10px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.chat-on-what {
+  color: var(--agent);
+}
+
+.chat-on-drop {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  text-align: center;
 }
 
 .composer-agents {

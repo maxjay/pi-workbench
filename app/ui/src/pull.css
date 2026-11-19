@@ -286,8 +286,6 @@
 .pr-cols > .chat {
   width: 380px;
   flex-shrink: 0;
-  border-left: 1px solid var(--line);
-  background: #121310;
 }
 
 .pr-nochat {
@@ -1124,33 +1122,6 @@ button.dl-num {
   overflow-wrap: anywhere;
 }
 
-/* The agent's column in a pull request's tab */
-
-.pr-cols .chat-agent,
-.ticket .chat-agent {
-  color: var(--agent);
-}
-
-.chat-busy {
-  align-self: center;
-  font-size: 12px;
-  color: var(--working);
-}
-
-.chat-empty {
-  font-family: var(--display);
-  font-size: 14px;
-}
-
-.entry-where {
-  margin-left: 8px;
-  color: var(--dim);
-}
-
-.entry-where:hover {
-  color: var(--ink);
-}
-
 /* What was asked under the lines: each goes to where it is. */
 .chat-small {
   display: flex;
@@ -1186,27 +1157,6 @@ button.dl-num {
   font-family: var(--display);
   font-size: 13.5px;
   color: var(--dim);
-}
-
-/* What the agent is told you are on. */
-.chat-on {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px 0;
-  font-size: 12px;
-  color: var(--dim);
-}
-
-.chat-on-what {
-  color: var(--agent);
-}
-
-.chat-on-drop {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  text-align: center;
 }
 
 /* A ticket's tab: its fields on the left, each changed where it is */
@@ -1451,44 +1401,9 @@ button.dl-num {
   margin: 0;
 }
 
-/* Where you write to the agent, in a pull request's tab or a ticket's: no box, a line above it. */
-.pr-cols > .chat .chat-foot {
-  padding: 0;
-  border-top: 1px solid var(--line);
-}
-
-.pr-cols > .chat .composer {
-  border: 0;
-}
-
-.pr-cols > .chat .composer-text {
-  padding: 12px 18px 4px;
-  font-family: var(--display);
-  font-size: 14.5px;
-}
-
-.pr-cols > .chat .composer-foot {
-  padding: 0 12px 12px;
-}
-
-.pr-cols > .chat .chat-on {
-  padding: 10px 18px 0;
-}
-
-.pr-cols > .chat .chat-foot > .note-failed,
-.pr-cols > .chat .chat-foot > .ask {
-  margin: 12px 18px;
-  width: auto;
-}
-
 .ticket-plain {
   font-family: var(--display);
   font-size: 15px;
   line-height: 1.55;
   white-space: pre-wrap;
-}
-
-/* The agent's column is a shade above the paper, so what is set apart in it goes down to the paper. */
-.pr-cols > .chat {
-  --ground: var(--paper);
 }
