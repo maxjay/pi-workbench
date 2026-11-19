@@ -4,11 +4,12 @@
 // open. When dova is missing or signed out, the section says what to run.
 // When there is nothing to list, it says what was asked and what was not.
 //
-// "To review" has the ones you or a team of yours were asked to review.
-// There can be a great many, so each is one line, and Filter chooses the
-// people, repos and projects whose rows show.
+// "To review" has the open pull requests of other people that you chose to
+// see: by these people, in these repos. Nothing is asked for until you
+// choose, because an organization can have thousands. Each is one line and
+// says whether you or a team of yours is a reviewer.
 
-import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { pullHue } from '../../components/hues';
 import { openFolderDialog } from '../../components/OpenFolder';
 import { openUrl } from '../../components/open';
@@ -18,11 +19,12 @@ import { health, recheck } from '../../state/health';
 import {
   asked,
   filter,
+  filtering,
   yours as listed,
   pulls,
   refreshPulls,
+  refreshReview,
   searched,
-  shows,
   toReview,
 } from '../../state/pulls';
 import { open } from '../../state/tabs';
@@ -133,22 +135,17 @@ function ReviewRow(props: { row: PullRow }) {
       <span title={`${row().project}/${row().repo}`}>{row().repo}</span>
       <span class="dim">{row().author}</span>
       <span classList={{ dim: row().isDraft }}>{row().isDraft ? 'draft' : row().status}</span>
-      <span classList={{ dim: row().review?.vote === 'none' }}>{row().review?.vote}</span>
-      <span class="dim">{row().review?.team}</span>
+      <Show when={row().review} fallback={<span class="dim">not asked</span>}>
+        {(review) => <span classList={{ dim: review().vote === 'none' }}>{review().vote}</span>}
+      </Show>
+      <span class="dim">{row().review ? (row().review?.team ?? 'you') : ''}</span>
     </button>
   );
 }
 
 function ToReview() {
-  /** The ones to review that you did not open yourself. */
-  const all = createMemo(() => {
-    const mine = listed() ?? [];
-    const same = (a: PullRow) => (b: PullRow) =>
-      a.id === b.id && a.repo === b.repo && a.project === b.project;
-    return (toReview.latest ?? []).filter((row) => !mine.some(same(row)));
-  });
-  const shown = createMemo(() => all().filter((row) => shows(filter(), row)));
   const any = () => filter().repos.length + filter().people.length > 0;
+  const rows = () => (any() ? (toReview.latest ?? []) : []);
   /** What is chosen, in a few words: "3 people, 2 repos". */
   const chosen = () => {
     const count = (n: number, one: string, many: string) => (n === 0 ? [] : [`${n} ${n === 1 ? one : many}`]);
@@ -159,6 +156,12 @@ function ToReview() {
       ...count(projects, 'project', 'projects'),
     ].join(', ');
   };
+  /** Where was looked, for when nothing was found. */
+  const where = () => {
+    if (filter().repos.length === 0) return 'by the people';
+    if (filter().people.length === 0) return 'in the repos';
+    return filter().either ? 'by the people or in the repos' : 'by the people and in the repos';
+  };
   const failure = () => {
     const error: unknown = toReview.error;
     return error instanceof Error ? error.message : String(error);
@@ -168,24 +171,33 @@ function ToReview() {
     <section class="section" aria-labelledby="to-review">
       <div class="section-head">
         <h2 id="to-review">To review</h2>
-        <Show when={toReview.latest}>
+        <Show when={any()}>
           <span class="dim">
-            {any() ? `${shown().length} of ${all().length} · ${chosen()}` : all().length}
+            {toReview.latest ? `${rows().length} · ` : ''}
+            {chosen()}
           </span>
         </Show>
         <span class="top-gap" />
         <button type="button" class="button" onClick={openFilter}>
-          Filter
+          {any() ? 'Change' : 'Choose'}
         </button>
       </div>
       <Switch>
+        {/* Nothing is asked for until you choose: an organization can have thousands open. */}
+        <Match when={!any()}>
+          <p class="rows-none dim">
+            Nothing is loaded here yet. Choose the people, teams, repos or projects whose pull requests you
+            want to see.
+          </p>
+        </Match>
+        <Match when={toReview.error && !pulls.error}>
+          <p class="rows-none note-failed">{failure()}</p>
+        </Match>
         <Match when={toReview.latest}>
           <div class="rows rows-review">
             <Show
-              when={all().length > 0}
-              fallback={
-                <p class="rows-none dim">None open that you or a team of yours were asked to review.</p>
-              }
+              when={rows().length > 0}
+              fallback={<p class="rows-none dim">None open {where()} you chose, apart from your own.</p>}
             >
               <div class="pull-row pull-head dim">
                 <span>#</span>
@@ -196,18 +208,11 @@ function ToReview() {
                 <span>Your vote</span>
                 <span>Asked as</span>
               </div>
-              <For each={shown()}>{(row) => <ReviewRow row={row} />}</For>
-              <Show when={shown().length === 0}>
-                <p class="rows-none dim">None by the people and in the repos you chose.</p>
-              </Show>
+              <For each={rows()}>{(row) => <ReviewRow row={row} />}</For>
             </Show>
           </div>
         </Match>
-        {/* The section above already says when dova is missing or signed out. */}
-        <Match when={toReview.error && !pulls.error}>
-          <p class="rows-none note-failed">{failure()}</p>
-        </Match>
-        <Match when={toReview.loading}>
+        <Match when={toReview.loading || filtering()}>
           <p class="rows-none dim">Asking Azure DevOps</p>
         </Match>
       </Switch>
@@ -324,10 +329,14 @@ function Yours() {
 }
 
 export function Pulls() {
-  // Asked again each minute while Home is on screen.
+  // Asked again while Home is on screen: yours each minute, the ones you chose to see every five.
   onMount(() => {
     const timer = setInterval(() => document.hidden || void refreshPulls(), 60_000);
-    onCleanup(() => clearInterval(timer));
+    const slower = setInterval(() => document.hidden || void refreshReview(), 300_000);
+    onCleanup(() => {
+      clearInterval(timer);
+      clearInterval(slower);
+    });
   });
   return (
     <>

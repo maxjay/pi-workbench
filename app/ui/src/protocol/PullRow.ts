@@ -32,7 +32,7 @@ author: string | null,
  */
 authorId: string | null, 
 /**
- * Set when you or a team of yours were asked to review it: how you stand on it.
+ * Set when you or a team you are in is a reviewer of it: how you stand on it.
  */
 review: Reviewing | null, id: number, title: string, 
 /**

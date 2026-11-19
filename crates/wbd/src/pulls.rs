@@ -1,14 +1,14 @@
 //! Your pull requests, for Home: asked from dova, once for each Azure DevOps
 //! project your workspaces are cloned from, with the reason under each one
-//! that needs you. And the ones you were asked to review, asked from Azure
-//! DevOps itself in a few calls, because there can be a great many.
+//! that needs you. And the ones of other people that you chose to see, asked
+//! from Azure DevOps itself: one call for each repo, project or person.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    Asked, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName, Reviewing,
-    Team, ThreadSummary, WorkItemRef, Workspace,
+    Asked, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName, RepoPick,
+    Reviewing, Team, ThreadSummary, WorkItemRef, Workspace,
 };
 use serde_json::{Value, json};
 
@@ -160,46 +160,74 @@ impl Pulls {
         Ok((rows, looked, searched))
     }
 
-    /// The open pull requests that you, or a team you are in, were asked to review, in the
-    /// whole of each organization a workspace is cloned from. Asked of Azure DevOps itself:
-    /// one call for you and one for each team. dova's own list also asks for each row's
-    /// check and threads, which is too much when a team is asked to review a hundred, so
-    /// these rows come without them. The ones you opened yourself are left out.
-    pub async fn to_review(
+    /// The open pull requests of other people that you chose to see: the ones in `repos`,
+    /// and the ones opened by `people`, who are given by their accounts. With `both`, and
+    /// with repos and people both given, only the ones by one of the people in one of the
+    /// repos. One call for each repo, project or person, in each organization a workspace is
+    /// cloned from; nothing else is asked for. The rows come without a check and threads.
+    /// Each says whether you or a team you are in is a reviewer, and those come first.
+    pub async fn chosen(
         &self,
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
+        people: &[String],
+        repos: &[RepoPick],
+        both: bool,
     ) -> Result<Vec<PullRow>, Error> {
+        // By person first: with both, the people's own are asked for and the repos only sift them.
+        let narrow = both && !people.is_empty() && !repos.is_empty();
+        let mut paths: Vec<String> = people
+            .iter()
+            .map(|id| format!("/_apis/git/pullrequests?searchCriteria.creatorId={id}&"))
+            .collect();
+        if !narrow {
+            paths.extend(repos.iter().map(|pick| {
+                let project = pick.project.replace(' ', "%20");
+                match &pick.repo {
+                    Some(repo) => {
+                        let repo = repo.replace(' ', "%20");
+                        format!("/{project}/_apis/git/repositories/{repo}/pullrequests?")
+                    }
+                    None => format!("/{project}/_apis/git/pullrequests?"),
+                }
+            }));
+        }
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let (clones, _) = clones(workspaces).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut seen = HashSet::new();
+        // A repo or person that is not in one organization is in another, so one call that
+        // fails is passed over. When none answers, the last reason is given.
+        let (mut answered, mut failed) = (false, None);
         for clone in one_each(&clones) {
             let cwd = &clone.workspace.path;
             let me = reviews.me(dova, cwd).await?;
             let site = site(organization(&clone.project));
-            // You by name first, so a row you were asked for both ways says so by name.
-            let mut asked = vec![(me.clone(), None)];
-            for team in self.teams(dova, cwd, &site).await {
-                asked.push((team.id, Some(team.name)));
-            }
-            for (who, team) in asked {
-                let path = format!(
-                    "/_apis/git/pullrequests?searchCriteria.reviewerId={who}&searchCriteria.status=active&$top=500&api-version=7.1"
-                );
+            let teams = self.teams(dova, cwd, &site).await;
+            for path in &paths {
+                let path = format!("{path}searchCriteria.status=active&$top=500&api-version=7.1");
                 let found = match dova.call("api", cwd, json!({ "path": path })).await {
                     Ok(found) => found,
-                    // You must be answered for. A team that will not list is left out.
-                    Err(err) if team.is_none() => return Err(err),
-                    Err(_) => continue,
+                    Err(err) => {
+                        failed = Some(err);
+                        continue;
+                    }
                 };
+                answered = true;
                 for pull in found["value"].as_array().into_iter().flatten() {
                     if pull["createdBy"]["id"].as_str() == Some(me.as_str()) {
                         continue;
                     }
-                    let Some(mut row) = review_row(pull, &site, &me, team.as_deref()) else {
+                    let Some(mut row) = review_row(pull, &site, &me, &teams) else {
                         continue;
                     };
+                    if narrow && !repos.iter().any(|pick| in_repo(pick, &row)) {
+                        continue;
+                    }
                     let key = (pull["repository"]["id"].to_string(), row.pr.id);
                     if !seen.insert(key) {
                         continue;
@@ -209,6 +237,11 @@ impl Pulls {
                 }
             }
         }
+        if let (false, Some(err)) = (answered, failed) {
+            return Err(err);
+        }
+        // The ones you are a reviewer of first. The sort keeps the rest in the order they came.
+        rows.sort_by_key(|row| row.review.is_none());
         Ok(rows)
     }
 
@@ -506,9 +539,18 @@ async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str) -> Vec<String> {
     projects
 }
 
-/// A pull request to review, from Azure DevOps' own list: who opened it and how you stand
-/// on it. `team` is the team the search was for, when it was not for you by name.
-fn review_row(pull: &Value, site: &str, me: &str, team: Option<&str>) -> Option<PullRow> {
+/// Whether a row is in a repo you chose.
+fn in_repo(pick: &RepoPick, row: &PullRow) -> bool {
+    pick.project.eq_ignore_ascii_case(&row.pr.project)
+        && pick
+            .repo
+            .as_ref()
+            .is_none_or(|repo| repo.eq_ignore_ascii_case(&row.pr.repo))
+}
+
+/// Someone else's pull request, from Azure DevOps' own list: who opened it, and how you stand
+/// on it when you or one of `teams`, the teams you are in, is a reviewer of it.
+fn review_row(pull: &Value, site: &str, me: &str, teams: &[Mine]) -> Option<PullRow> {
     let id = pull["pullRequestId"].as_u64()?;
     let repo = pull["repository"]["name"].as_str()?;
     let project = pull["repository"]["project"]["name"].as_str()?;
@@ -516,11 +558,15 @@ fn review_row(pull: &Value, site: &str, me: &str, team: Option<&str>) -> Option<
         let full = pull[name].as_str().unwrap_or_default();
         full.strip_prefix("refs/heads/").unwrap_or(full).to_string()
     };
-    let mine = pull["reviewers"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|reviewer| reviewer["id"].as_str() == Some(me));
+    let reviewer = |id: &str| {
+        pull["reviewers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|reviewer| reviewer["id"].as_str() == Some(id))
+    };
+    let mine = reviewer(me);
+    let team = teams.iter().find(|team| reviewer(&team.id).is_some());
     let vote = match mine.and_then(|reviewer| reviewer["vote"].as_i64()) {
         Some(10) => "approved",
         Some(5) => "approved with suggestions",
@@ -550,10 +596,12 @@ fn review_row(pull: &Value, site: &str, me: &str, team: Option<&str>) -> Option<
             .as_str()
             .map(str::to_string),
         author_id: pull["createdBy"]["id"].as_str().map(str::to_string),
-        review: Some(Reviewing {
+        // Asked by name counts first: the team is said only when it alone was asked.
+        review: (mine.is_some() || team.is_some()).then(|| Reviewing {
             vote: vote.into(),
-            // Asked by name counts first, whichever search found the row.
-            team: team.filter(|_| mine.is_none()).map(str::to_string),
+            team: team
+                .filter(|_| mine.is_none())
+                .map(|team| team.name.clone()),
         }),
     })
 }
@@ -833,10 +881,19 @@ mod tests {
         })
     }
 
+    fn payments() -> Vec<Mine> {
+        vec![Mine {
+            id: "team".into(),
+            name: "Payments".into(),
+            project: "Shop Front".into(),
+        }]
+    }
+
     #[test]
-    fn reads_a_row_to_review_from_azures_own_list() {
+    fn reads_a_row_from_azures_own_list() {
         let pull = listed(json!([{ "id": "me", "vote": -5 }, { "id": "team", "vote": 0 }]));
-        let row = review_row(&pull, "https://dev.azure.com/contoso", "me", None).expect("a row");
+        let row =
+            review_row(&pull, "https://dev.azure.com/contoso", "me", &payments()).expect("a row");
         assert_eq!(row.pr.id, 7);
         assert_eq!(row.pr.source_branch, "feature/thing");
         assert_eq!(row.pr.target_branch, "main");
@@ -846,24 +903,37 @@ mod tests {
             "https://dev.azure.com/contoso/Shop%20Front/_git/Web%20Shop/pullrequest/7"
         );
         assert_eq!(row.author.as_deref(), Some("Ann Lee"));
+        assert_eq!(row.author_id.as_deref(), Some("ann"));
         let review = row.review.expect("how you stand");
         assert_eq!(review.vote, "waiting for author");
         assert_eq!(review.team, None);
     }
 
     #[test]
-    fn says_the_team_only_when_you_were_not_asked_by_name() {
+    fn says_how_you_stand_only_when_you_or_a_team_of_yours_is_a_reviewer() {
         let by_team = listed(json!([{ "id": "team", "vote": 0 }]));
-        let row = review_row(&by_team, "https://x", "me", Some("Payments")).expect("a row");
+        let row = review_row(&by_team, "https://x", "me", &payments()).expect("a row");
         let review = row.review.expect("how you stand");
         assert_eq!(review.vote, "none");
         assert_eq!(review.team.as_deref(), Some("Payments"));
 
-        let both = listed(json!([{ "id": "team", "vote": 0 }, { "id": "me", "vote": 10 }]));
-        let row = review_row(&both, "https://x", "me", Some("Payments")).expect("a row");
-        let review = row.review.expect("how you stand");
-        assert_eq!(review.vote, "approved");
-        assert_eq!(review.team, None);
+        let others = listed(json!([{ "id": "someone", "vote": 10 }]));
+        let row = review_row(&others, "https://x", "me", &payments()).expect("a row");
+        assert_eq!(row.review, None);
+    }
+
+    #[test]
+    fn knows_a_row_in_a_repo_or_a_project_you_chose() {
+        let pull = listed(json!([]));
+        let row = review_row(&pull, "https://x", "me", &[]).expect("a row");
+        let pick = |project: &str, repo: Option<&str>| RepoPick {
+            project: project.into(),
+            repo: repo.map(str::to_string),
+        };
+        assert!(in_repo(&pick("shop front", Some("web shop")), &row));
+        assert!(in_repo(&pick("Shop Front", None), &row));
+        assert!(!in_repo(&pick("Shop Front", Some("api")), &row));
+        assert!(!in_repo(&pick("Platform", None), &row));
     }
 
     #[test]

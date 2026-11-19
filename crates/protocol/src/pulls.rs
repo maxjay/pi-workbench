@@ -86,7 +86,7 @@ pub struct PullRow {
     /// Their account in the organization, so a filter can tell two people of one name apart.
     #[serde(default)]
     pub author_id: Option<String>,
-    /// Set when you or a team of yours were asked to review it: how you stand on it.
+    /// Set when you or a team you are in is a reviewer of it: how you stand on it.
     #[serde(default)]
     pub review: Option<Reviewing>,
 }
@@ -127,6 +127,14 @@ pub struct Team {
 pub struct RepoName {
     pub project: String,
     pub repo: String,
+}
+
+/// A repo you chose to see the pull requests of, or with no repo the whole of a project.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct RepoPick {
+    pub project: String,
+    pub repo: Option<String>,
 }
 
 /// A folder Home's list of pull requests was made from, and what was done with it.

@@ -422,15 +422,26 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 projects,
             }
         }
-        Call::PullsList { review: true, .. } => Answer::Pulls {
+        Call::PullsChosen {
+            people,
+            repos,
+            both,
+        } => Answer::Pulls {
             rows: ctx
                 .pulls
-                .to_review(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .chosen(
+                    &ctx.dova,
+                    &ctx.reviews,
+                    ctx.workspaces.all(),
+                    &people,
+                    &repos,
+                    both,
+                )
                 .await?,
             asked: Vec::new(),
             searched: Vec::new(),
         },
-        Call::PullsList { quick, .. } => {
+        Call::PullsList { quick } => {
             let (rows, asked, searched) = ctx
                 .pulls
                 .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all(), quick)

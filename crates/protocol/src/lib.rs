@@ -137,18 +137,25 @@ pub enum Call {
     },
 
     /// The pull requests you opened, in every project your workspaces are in.
-    /// With `review`, the ones you or a team of yours were asked to review
-    /// instead, anywhere in those organizations: they come without a check
-    /// and threads, because there can be a great many. They are two calls so
-    /// that yours show without waiting for the others. With `quick`, yours as
-    /// dova lists them, without why a check failed and which thread is open:
-    /// those are asked for one row at a time and take longer.
+    /// With `quick`, as dova lists them, without why a check failed and which
+    /// thread is open: those are asked for one row at a time and take longer.
     #[serde(rename = "pulls.list")]
     PullsList {
         #[serde(default)]
-        review: bool,
-        #[serde(default)]
         quick: bool,
+    },
+    /// The open pull requests of other people that you chose to see: the ones
+    /// in these repos and projects, and the ones opened by these people, given
+    /// by their accounts. With `both`, and with repos and people both given,
+    /// only the ones by one of the people in one of the repos. Nothing is
+    /// asked for that you did not choose. They come without a check and
+    /// threads, and each says whether you or a team of yours is a reviewer.
+    #[serde(rename = "pulls.chosen")]
+    PullsChosen {
+        people: Vec<String>,
+        repos: Vec<RepoPick>,
+        #[serde(default)]
+        both: bool,
     },
     /// The teams you are in, each with who else is in it: the people whose pull
     /// requests you most likely want to see.

@@ -1,4 +1,5 @@
-// Choosing whose pull requests to review, and in which repos, show on Home.
+// Choosing whose pull requests, and in which repos, show under "To review" on
+// Home. They are asked for when this closes, and only what was chosen.
 // One field searches the organization's people, repos and projects, a few
 // at a time, so it works the same with ten of them or ten thousand. With
 // nothing typed it lists what you chose and the teams you are in: a team
@@ -7,10 +8,11 @@
 import { createEffect, createMemo, createResource, createSignal, For, on, Show } from 'solid-js';
 import { ask } from '../../daemon';
 import type { Person } from '../../protocol/Person';
-import type { PullRow } from '../../protocol/PullRow';
-import { byPerson, filter, inRepo, type RepoPick, repoName, setFilter, toReview } from '../../state/pulls';
+import type { RepoPick } from '../../protocol/RepoPick';
+import { filter, filtering, repoName, setFilter, setFiltering } from '../../state/pulls';
 
-const [open, setOpen] = createSignal(false);
+const open = filtering;
+const setOpen = setFiltering;
 
 export const openFilter = () => setOpen(true);
 
@@ -57,9 +59,6 @@ export function Filter() {
     (wanted) => ask({ method: 'pulls.find', params: { text: wanted } }, 'found'),
   );
 
-  const rows = (): PullRow[] => toReview.latest ?? [];
-  const open_ = (count: number) => (count === 0 ? 'none open' : `${count} open`);
-
   const addPeople = (people: Person[]) => {
     const next = [...filter().people];
     for (const person of people)
@@ -79,24 +78,21 @@ export function Filter() {
     person: Person | { id: string; name: string; mail?: string | null },
   ): Line => {
     const chosen = filter().people.some(samePerson(person));
-    const count = rows().filter((row) => byPerson(person, row)).length;
     return {
       group,
       kind: 'person',
       title: person.name,
-      detail: [person.mail, open_(count)].filter(Boolean).join(' · '),
+      detail: person.mail ?? undefined,
       word: chosen ? 'remove' : 'add',
       run: () => (chosen ? dropPeople([person]) : addPeople([{ mail: null, ...person }])),
     };
   };
   const repoLine = (group: string, pick: RepoPick): Line => {
     const chosen = filter().repos.some(sameRepo(pick));
-    const count = rows().filter((row) => inRepo(pick, row)).length;
     return {
       group,
       kind: pick.repo === null ? 'project' : 'repo',
       title: repoName(pick),
-      detail: open_(count),
       word: chosen ? 'remove' : 'add',
       run: () => toggleRepo(pick),
     };
@@ -200,8 +196,7 @@ export function Filter() {
             </Show>
             <Show when={!text().trim() && filter().people.length + filter().repos.length === 0}>
               <p class="palette-none dim">
-                Nothing chosen, so every pull request you were asked to review shows. Type a name, or add a
-                team.
+                Nothing is chosen, so nothing is loaded. Type a name, or add a team.
               </p>
             </Show>
             <Show when={!text().trim() && teams.loading}>
