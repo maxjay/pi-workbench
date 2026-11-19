@@ -2,7 +2,18 @@
 // When the agent asks something, its question takes the place of the box
 // you write in. The same parts whichever agent it is.
 
-import { createEffect, createSignal, For, Match, on, onMount, Show, Switch } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  type JSX,
+  Match,
+  on,
+  onMount,
+  Show,
+  Switch,
+} from 'solid-js';
 import { createAction } from '../../components/action';
 import { Markdown } from '../../components/Markdown';
 import type { Agent } from '../../protocol/Agent';
@@ -29,6 +40,19 @@ import {
   stop,
 } from '../../state/conversations';
 
+/**
+ * How somewhere that is about one thing, such as a pull request's tab,
+ * changes what is written here and how it reads.
+ */
+export interface Dress {
+  /** What goes to the agent when you write: your words, with what you are on in front. */
+  wrap: (text: string) => string;
+  /** What you wrote, as shown: your own words, and where you asked. Hidden when it shows somewhere else. */
+  you: (text: string) => { text: string; where?: { label: string; go?: () => void }; hidden: boolean };
+  /** What the agent wrote, as shown. */
+  agent: (text: string) => string;
+}
+
 export function Chat(props: {
   cwd: string;
   /** The conversation shown, or undefined for a new one. */
@@ -44,9 +68,28 @@ export function Chat(props: {
   onHide?: () => void;
   /** It has a conversation of its own: don't start on the folder's latest one. */
   own?: boolean;
+  dress?: Dress;
+  /** The agent a new conversation starts with, when where this is keeps it. */
+  agent?: Agent;
+  onAgent?: (agent: Agent) => void;
+  /** Shown before the conversation. */
+  top?: JSX.Element;
+  /** Shown over the box you write in. */
+  above?: JSX.Element;
+  /** What it says while nothing was asked. */
+  empty?: string;
+  /** What the box you write in says while it is empty. */
+  hint?: string;
+  /** Gets the box you write in, to put the cursor in it. */
+  box?: (el: HTMLTextAreaElement) => void;
 }) {
   const conversation = () => (props.shown ? open[props.shown] : undefined);
-  const [agent, setAgent] = createSignal<Agent>(defaultAgent());
+  const [ownAgent, setOwnAgent] = createSignal<Agent>(defaultAgent());
+  const agent = () => props.agent ?? ownAgent();
+  const setAgent = (next: Agent) => {
+    setOwnAgent(next);
+    props.onAgent?.(next);
+  };
   const [listing, setListing] = createSignal(false);
   const reading = createAction(show);
 
@@ -80,15 +123,26 @@ export function Chat(props: {
 
   const say = createAction(async (text: string) => {
     const id = props.shown;
-    if (id) return send(id, text);
-    props.onShow(await start(agent(), props.cwd, text, props.brief));
+    const words = props.dress ? props.dress.wrap(text) : text;
+    if (id) return send(id, words);
+    props.onShow(await start(agent(), props.cwd, words, props.brief));
   });
 
   return (
     <section class="chat" aria-label="The agent">
       <div class="bar chat-head">
         <span class="chat-agent">{agentName[conversation()?.state.agent ?? agent()]}</span>
-        <Show when={!props.plain} fallback={<span class="top-gap" />}>
+        <Show
+          when={!props.plain}
+          fallback={
+            <>
+              <span class="top-gap" />
+              <Show when={conversation()?.state.busy}>
+                <span class="chat-busy">working</span>
+              </Show>
+            </>
+          }
+        >
           <button
             type="button"
             class="chat-title"
@@ -130,7 +184,14 @@ export function Chat(props: {
         </div>
       </Show>
 
-      <Log entries={conversation()?.entries ?? []} cwd={props.cwd} onOpenFile={props.onOpenFile} />
+      <Log
+        entries={conversation()?.entries ?? []}
+        cwd={props.cwd}
+        onOpenFile={props.onOpenFile}
+        dress={props.dress}
+        top={props.top}
+        empty={props.empty}
+      />
 
       <div class="chat-foot">
         <Show when={reading.error() ?? say.error() ?? picking.error()}>
@@ -141,6 +202,9 @@ export function Chat(props: {
           when={conversation()?.state.ask}
           fallback={
             <Composer
+              above={props.above}
+              hint={props.hint}
+              box={props.box}
               busy={conversation()?.state.busy ?? false}
               sending={say.busy()}
               agent={props.shown ? undefined : agent()}
@@ -163,9 +227,25 @@ export function Chat(props: {
 }
 
 /** The conversation, kept at its end while the agent writes unless you scroll up. */
-function Log(props: { entries: Entry[]; cwd: string; onOpenFile: (path: string) => void }) {
+function Log(props: {
+  entries: Entry[];
+  cwd: string;
+  onOpenFile: (path: string) => void;
+  dress?: Dress;
+  top?: JSX.Element;
+  empty?: string;
+}) {
   let box!: HTMLDivElement;
   let following = true;
+  // A turn that shows somewhere else is left out here: what you wrote, and all the agent did after it.
+  const hidden = createMemo(() => {
+    let off = false;
+    return props.entries.map((entry) => {
+      if (entry.kind === 'you') off = props.dress?.you(entry.text).hidden ?? false;
+      return off;
+    });
+  });
+  const you = (text: string) => props.dress?.you(text) ?? { text, hidden: false };
   createEffect(() => {
     // Read every entry's text, so this runs as the reply grows.
     for (const entry of props.entries) void ('text' in entry ? entry.text : entry.output);
@@ -180,18 +260,34 @@ function Log(props: { entries: Entry[]; cwd: string; onOpenFile: (path: string) 
       }}
     >
       <div class="chat-entries">
-        <For each={props.entries} fallback={<p class="dim">Nothing asked yet.</p>}>
-          {(entry) => (
+        {props.top}
+        <Show when={!hidden().includes(false)}>
+          <p class="dim chat-empty">{props.empty ?? 'Nothing asked yet.'}</p>
+        </Show>
+        <For each={props.entries}>
+          {(entry, at) => (
             <Switch>
+              <Match when={hidden()[at()]}>{null}</Match>
               <Match when={entry.kind === 'you' && entry}>
                 {(e) => (
                   <div class="entry">
-                    <span class="entry-who">You</span>
-                    <p class="entry-you">{e().text}</p>
+                    <span class="entry-who">
+                      You
+                      <Show when={you(e().text).where}>
+                        {(where) => (
+                          <button type="button" class="entry-where" onClick={() => where().go?.()}>
+                            on {where().label}
+                          </button>
+                        )}
+                      </Show>
+                    </span>
+                    <p class="entry-you">{you(e().text).text}</p>
                   </div>
                 )}
               </Match>
-              <Match when={entry.kind === 'text' && entry}>{(e) => <Markdown text={e().text} />}</Match>
+              <Match when={entry.kind === 'text' && entry}>
+                {(e) => <Markdown text={props.dress ? props.dress.agent(e().text) : e().text} />}
+              </Match>
               <Match when={entry.kind === 'thinking' && entry}>
                 {(e) => (
                   <details class="entry-thinking">
@@ -318,6 +414,9 @@ function AskCard(props: { ask: Ask; onAnswer: (answer: string | null) => void })
 
 /** Where you write. Enter sends, Shift Enter makes a new line. */
 function Composer(props: {
+  above?: JSX.Element;
+  hint?: string;
+  box?: (el: HTMLTextAreaElement) => void;
   busy: boolean;
   sending: boolean;
   /** The agent picked for a new conversation. Undefined once it has started. */
@@ -339,10 +438,12 @@ function Composer(props: {
   };
   return (
     <div class="composer">
+      {props.above}
       <textarea
         class="composer-text"
         rows={2}
-        placeholder={props.agent ? `Ask ${agentName[props.agent]}` : 'Write to the agent'}
+        ref={(el) => props.box?.(el)}
+        placeholder={props.hint ?? (props.agent ? `Ask ${agentName[props.agent]}` : 'Write to the agent')}
         aria-label="Write to the agent"
         value={text()}
         onInput={(e) => setText(e.currentTarget.value)}

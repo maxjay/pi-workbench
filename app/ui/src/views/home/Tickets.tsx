@@ -13,14 +13,27 @@ export function Tickets() {
   const [title, setTitle] = createSignal('');
   /** A folder to file a new ticket from: one that a ticket or a pull request was listed from. */
   const from = () => tickets.latest?.[0]?.workspace ?? pulls.latest?.find((row) => row.workspace)?.workspace;
-  const filing = createAction(async (kind: string) => {
+  /** The type last asked for, kept so a team can be picked for it. */
+  const [kind, setKind] = createSignal('Task');
+  const filing = createAction(async (type: string, team: string | null = null) => {
     const [workspace, name] = [from(), title().trim()];
     const dir = workspace && workspaceById(workspace)?.workspace.path;
     if (!workspace || !dir || !name) return;
-    const id = await fileTicket(dir, name, kind);
+    setKind(type);
+    const id = await fileTicket(dir, name, type, team);
     setTitle('');
     open(`wi:${workspace}:${id}`);
   });
+  /** A project with more than one team: dova says which there are, and one is picked here. */
+  const teams = () => {
+    const listed = filing.error()?.match(/Which team[\s\S]*?Available: ([^(]+)/)?.[1];
+    return listed
+      ? listed
+          .split(',')
+          .map((team) => team.trim())
+          .filter(Boolean)
+      : [];
+  };
 
   return (
     <section class="section" aria-labelledby="tickets">
@@ -69,7 +82,7 @@ export function Tickets() {
         <Show when={from()}>
           <div class="row ticket-new">
             <input
-              class="thread-input"
+              class="ticket-new-input"
               placeholder="New ticket"
               aria-label="A new ticket's title"
               value={title()}
@@ -96,7 +109,26 @@ export function Tickets() {
           </div>
         </Show>
       </div>
-      <Show when={filing.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
+      <Show
+        when={teams().length > 0}
+        fallback={<Show when={filing.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>}
+      >
+        <p class="ticket-teams">
+          <span class="dim">Which team's?</span>
+          <For each={teams()}>
+            {(team) => (
+              <button
+                type="button"
+                class="quiet"
+                disabled={filing.busy()}
+                onClick={() => void filing.run(kind(), team)}
+              >
+                {team}
+              </button>
+            )}
+          </For>
+        </p>
+      </Show>
     </section>
   );
 }

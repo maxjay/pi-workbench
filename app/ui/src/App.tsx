@@ -8,9 +8,9 @@ import { TopBar, titleOf } from './components/TopBar';
 import { active, close, open, pullOf, tabs, ticketOf, workspaceOf } from './state/tabs';
 import { workspaces } from './state/workspaces';
 import { Home } from './views/Home';
-import { ReviewPage } from './views/Review';
+import { PullPage } from './views/pull/Page';
 import { Settings } from './views/Settings';
-import { TicketPage } from './views/Ticket';
+import { TicketPage } from './views/ticket/Page';
 import { WorkspacePage } from './views/Workspace';
 
 /** Ctrl K's list: the open tabs, every workspace, and what you can do. */
@@ -63,7 +63,7 @@ export function App() {
         <For each={tabs().filter((tab) => pullOf(tab))}>
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
-              <ReviewPage tab={tab} workspace={pullOf(tab)?.workspace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
+              <PullPage tab={tab} workspace={pullOf(tab)?.workspace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
             </div>
           )}
         </For>

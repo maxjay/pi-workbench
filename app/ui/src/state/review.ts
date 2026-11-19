@@ -1,7 +1,7 @@
 // Reviewing a pull request: the calls its tab makes, and what the page
-// keeps for itself about one. Which files you have viewed and what the
-// agent answered you are yours alone, so they live in the window's own
-// storage and never go to Azure DevOps.
+// keeps for itself about one. Which files you have read, and what you and
+// the agent said to each other about its lines and threads, are yours
+// alone: they live in the window's own storage and never go to Azure DevOps.
 
 import { createSignal } from 'solid-js';
 import { createStore } from 'solid-js/store';
@@ -35,8 +35,16 @@ export async function reply(dir: string, pr: number, thread: number, text: strin
   wrote();
 }
 
-/** Resolves a thread, or with `active` opens it again. */
-export async function setThread(dir: string, pr: number, thread: number, status: 'resolved' | 'active') {
+/** The states Azure DevOps has for a thread, by its own word for each. */
+export const THREAD_STATES = [
+  { status: 'active', label: 'Active' },
+  { status: 'pending', label: 'Pending' },
+  { status: 'fixed', label: 'Resolved' },
+  { status: 'wontFix', label: "Won't fix" },
+  { status: 'closed', label: 'Closed' },
+] as const;
+
+export async function setThread(dir: string, pr: number, thread: number, status: string) {
   await ask({ method: 'pull.resolve', params: { dir, pr, thread, status } }, 'done');
   wrote();
 }
@@ -50,6 +58,20 @@ export async function setPull(dir: string, pr: number, to: PullTo) {
   await ask({ method: 'pull.set', params: { dir, pr, to } }, 'done');
   wrote();
 }
+
+/** Changes the title and the description. */
+export async function editPull(dir: string, pr: number, title: string, description: string) {
+  await ask({ method: 'pull.edit', params: { dir, pr, title, description } }, 'done');
+  wrote();
+}
+
+/** The description as it was written, with its pictures as the links they are. */
+export const describedAs = async (dir: string, pr: number) =>
+  (await ask({ method: 'pull.description', params: { dir, pr } }, 'printed')).text;
+
+/** Keeps a picture where dova can read it. Gives the path to write in a description. */
+export const keepPicture = async (name: string, data: string) =>
+  (await ask({ method: 'pull.picture', params: { name, data } }, 'printed')).text;
 
 export const checks = async (dir: string, pr: number) =>
   (await ask({ method: 'pull.checks', params: { dir, pr } }, 'checks')).runs;
@@ -82,10 +104,10 @@ function stored<T>(key: string, empty: T): T {
   }
 }
 
-/** The files you marked as viewed: for each pull request, each path's mark when you did. */
+/** The files you marked as read: for each pull request, each path's mark when you did. */
 const [viewed, setViewed] = createStore<Record<string, Record<string, string>>>(stored('viewed', {}));
 
-/** A file is viewed while it is still the change you marked. A push that changes it unmarks it. */
+/** A file is read while it is still the change you marked. A push that changes it unmarks it. */
 export const isViewed = (pull: string, file: ChangedFile) => viewed[pull]?.[file.path] === file.mark;
 
 export function markViewed(pull: string, files: ChangedFile[], yes: boolean) {
@@ -93,84 +115,139 @@ export function markViewed(pull: string, files: ChangedFile[], yes: boolean) {
   localStorage.setItem('viewed', JSON.stringify(viewed));
 }
 
-/** Whether threads that are resolved are left out, in every pull request. */
-const [hideResolved, setHidden] = createSignal(localStorage.getItem('review-hide-resolved') === 'yes');
+/** How the file list is cut down, in every pull request: what to leave out, and only what is unread. */
+const [filter, setFilterNow] = createStore<{ exclude: string; unread: boolean }>(
+  stored('review-filter', { exclude: '', unread: false }),
+);
 
-export { hideResolved };
+export { filter };
 
-export function setHideResolved(yes: boolean) {
-  localStorage.setItem('review-hide-resolved', yes ? 'yes' : 'no');
-  setHidden(yes);
+export function setFilter(next: Partial<{ exclude: string; unread: boolean }>) {
+  setFilterNow(next);
+  localStorage.setItem('review-filter', JSON.stringify(filter));
 }
 
-/** Something the agent answered you, shown where you asked. Only you see it. */
-export interface Note {
+/** Old and new side by side, in every file, until you switch it back. */
+const [split, setSplitNow] = createSignal(localStorage.getItem('review-split') === 'yes');
+
+export { split };
+
+export function setSplit(yes: boolean) {
+  localStorage.setItem('review-split', yes ? 'yes' : 'no');
+  setSplitNow(yes);
+}
+
+/** One thing you or the agent said, for you alone. */
+export interface Said {
   id: string;
-  /** The lines asked about. Undefined for a note on a thread or a run. */
-  place?: Place;
-  /** The thread it drafts a reply for. */
-  thread?: number;
-  /** The run it explains. */
-  run?: number;
-  /** It is the summary of the agent's review of the whole pull request. */
-  summary?: boolean;
-  /** What made it, when it wasn't a question of yours: `review` for a draft from the agent's review. */
-  from?: string;
-  question: string;
+  who: 'you' | 'agent';
+  /** When, in milliseconds since 1970. It places the message among a thread's comments. */
+  at: number;
   /** Undefined while the agent is still working on it. */
-  answer?: string;
+  text?: string;
   failed?: string;
 }
 
-/** Notes kept before a review's drafts were marked by `from` said so in their question. */
-function current(kept: Record<string, Note[]>) {
+/**
+ * What you and the agent said about one thing, for you alone: a thread, or
+ * lines no thread is on yet. What the agent's review finds is one of these.
+ */
+export interface Talk {
+  id: string;
+  /** The thread it is about. */
+  thread?: number;
+  /** The lines it is about, when no thread is. */
+  place?: Place;
+  /** The agent's review made it. */
+  finding?: boolean;
+  /** You are done with it. */
+  resolved?: boolean;
+  said: Said[];
+  /** A comment the agent wrote for you to post. Empty text while it is writing. */
+  draft?: { text: string; writing: boolean };
+  /** Whether Enter goes to the agent. Unset: to the agent while nothing is posted, to the thread once something is. */
+  ask?: boolean;
+}
+
+/** A message the agent never finished is not worth showing as still coming. */
+function settled(kept: Record<string, Talk[]>) {
   for (const list of Object.values(kept)) {
-    for (const note of list) {
-      if (note.question === "From the agent's review") Object.assign(note, { question: '', from: 'review' });
+    for (const talk of list) {
+      for (const said of talk.said) {
+        if (said.text === undefined && !said.failed)
+          said.failed = 'The window closed before the agent answered.';
+      }
+      if (talk.draft?.writing) talk.draft = undefined;
     }
+  }
+  // One you opened and said nothing in is not kept.
+  for (const [pull, list] of Object.entries(kept)) {
+    kept[pull] = list.filter((talk) => talk.thread !== undefined || talk.said.length > 0 || talk.draft);
   }
   return kept;
 }
 
-const [notes, setNotes] = createStore<Record<string, Note[]>>(current(stored('notes', {})));
+const [talks, setTalks] = createStore<Record<string, Talk[]>>(settled(stored('talks', {})));
 
-export const notesOf = (pull: string) => notes[pull] ?? [];
+const keep = () => localStorage.setItem('talks', JSON.stringify(talks));
 
-function keep() {
-  // One the agent never finished is not worth keeping past this window.
-  const done = Object.fromEntries(
-    Object.entries(notes).map(([pull, list]) => [pull, list.filter((note) => note.answer)]),
-  );
-  localStorage.setItem('notes', JSON.stringify(done));
+export const talksOf = (pull: string) => talks[pull] ?? [];
+
+export const threadTalk = (pull: string, thread: number) => talksOf(pull).find((t) => t.thread === thread);
+
+export function addTalk(pull: string, talk: Omit<Talk, 'id'>): string {
+  const id = crypto.randomUUID();
+  setTalks(pull, [...talksOf(pull), { ...talk, id }]);
+  keep();
+  return id;
 }
 
-export function addNote(pull: string, note: Note) {
-  setNotes(pull, [...notesOf(pull), note]);
+/** The talk about a thread, made if there is none yet. */
+export function talkFor(pull: string, thread: number): string {
+  return threadTalk(pull, thread)?.id ?? addTalk(pull, { thread, said: [] });
 }
 
-export function addNotes(pull: string, more: Note[]) {
-  setNotes(pull, [...notesOf(pull), ...more]);
+export function patchTalk(pull: string, id: string, patch: Partial<Talk>) {
+  setTalks(pull, (talk) => talk.id === id, patch);
   keep();
 }
 
-/** Drops the notes that `gone` picks. */
-export function dropNotes(pull: string, gone: (note: Note) => boolean) {
-  setNotes(
+export function dropTalk(pull: string, id: string) {
+  setTalks(
     pull,
-    notesOf(pull).filter((note) => !gone(note)),
+    talksOf(pull).filter((talk) => talk.id !== id),
   );
   keep();
 }
 
-export function settleNote(pull: string, id: string, result: { answer?: string; failed?: string }) {
-  setNotes(pull, (note) => note.id === id, result);
+/** Drops the talks that `gone` picks. */
+export function dropTalks(pull: string, gone: (talk: Talk) => boolean) {
+  setTalks(
+    pull,
+    talksOf(pull).filter((talk) => !gone(talk)),
+  );
   keep();
 }
 
-export function dropNote(pull: string, id: string) {
-  setNotes(
+export function say(pull: string, id: string, said: Omit<Said, 'id' | 'at'>): string {
+  const one: Said = { ...said, id: crypto.randomUUID(), at: Date.now() };
+  setTalks(
     pull,
-    notesOf(pull).filter((note) => note.id !== id),
+    (talk) => talk.id === id,
+    'said',
+    (list) => [...list, one],
+  );
+  keep();
+  return one.id;
+}
+
+export function settle(pull: string, id: string, said: string, result: { text?: string; failed?: string }) {
+  setTalks(
+    pull,
+    (talk) => talk.id === id,
+    'said',
+    (one) => one.id === said,
+    result,
   );
   keep();
 }

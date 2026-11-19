@@ -188,6 +188,22 @@ pub enum Call {
         title: Option<String>,
         description: Option<String>,
     },
+    /// A pull request's description as it was written: its pictures are the links they are.
+    #[serde(rename = "pull.description")]
+    PullDescription {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+    },
+    /// Keeps a picture in a file, so a description can name it and dova can send it.
+    /// Answers with the file's path.
+    #[serde(rename = "pull.picture")]
+    PullPicture {
+        /// What the file was called. Only its ending is kept.
+        name: String,
+        /// The picture, in base64.
+        data: String,
+    },
     /// Completes, abandons or reopens a pull request, or moves it in or out of draft.
     #[serde(rename = "pull.set")]
     PullSet {
@@ -245,6 +261,49 @@ pub enum Call {
         state: Option<String>,
         mine: Option<bool>,
     },
+    /// Changes a ticket's title, parts of its text, or both.
+    #[serde(rename = "ticket.edit")]
+    TicketEdit {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        title: Option<String>,
+        parts: Vec<PartEdit>,
+    },
+    /// Sets one field of a ticket, by Azure DevOps' own name for it. With no value, the field is emptied.
+    #[serde(rename = "ticket.field")]
+    TicketField {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        field: String,
+        value: Option<String>,
+    },
+    /// Files a ticket under another one, of the type that goes under it.
+    #[serde(rename = "ticket.child")]
+    TicketChild {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        title: String,
+    },
+    /// Takes a ticket out from under another one. Neither is deleted.
+    #[serde(rename = "ticket.unlink")]
+    TicketUnlink {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        #[ts(type = "number")]
+        child: u64,
+    },
+    /// Ticks a ticket off, or takes the tick back.
+    #[serde(rename = "ticket.done")]
+    TicketDone {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        done: bool,
+    },
     /// Says something in a ticket's discussion.
     #[serde(rename = "ticket.comment")]
     TicketComment {
@@ -259,6 +318,8 @@ pub enum Call {
         dir: String,
         title: String,
         kind: String,
+        /// The team whose area and sprint it goes in. With none, the one dova remembers for the folder.
+        team: Option<String>,
     },
     /// Starts work on a ticket in a folder: a new branch from the repo's
     /// main one, linked to the ticket, and the ticket assigned to you.

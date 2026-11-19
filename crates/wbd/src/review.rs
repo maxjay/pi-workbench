@@ -190,6 +190,15 @@ impl Reviews {
         Ok((own.display().to_string(), brief(&review, &runs)))
     }
 
+    /// A pull request's description as it was written.
+    pub async fn description(&self, dova: &Dova, dir: &str, pr: u64) -> Result<String, Error> {
+        let at = self.at(dova, dir, pr).await?;
+        // Asked plainly: with its pictures put in place, it could not be written back.
+        let path = format!("{at}?api-version=7.1");
+        let raw = dova.call("api", dir, json!({ "path": path })).await?;
+        Ok(text(&raw["description"]))
+    }
+
     /// A pull request's whole diff. It only changes with a push, so it is
     /// kept until the pull request ends at another commit.
     async fn whole_diff(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Value, Error> {
@@ -321,6 +330,29 @@ pub async fn rerun(dova: &Dova, dir: &str, run: u64) -> Result<(), Error> {
 
 /// A REST call through dova. A picture kept on Azure DevOps that the
 /// answer links to comes back as the picture itself.
+/// Keeps a picture in a file under `data`, so a description can name it. Gives the file's path.
+pub fn keep_picture(data: &Path, name: &str, base64: &str) -> Result<String, Error> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64)
+        .map_err(|err| Error::Io(format!("The picture did not arrive whole: {err}")))?;
+    // Only the ending is kept, and only if it is plain: the name came from outside.
+    let ending = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    let folder = data.join("pictures");
+    std::fs::create_dir_all(&folder).map_err(|err| Error::io(&folder, err))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let path = folder.join(format!("picture-{stamp}.{ending}"));
+    std::fs::write(&path, bytes).map_err(|err| Error::io(&path, err))?;
+    Ok(path.display().to_string())
+}
+
 /// Changes a pull request's title, its description, or both.
 pub async fn edit(
     dova: &Dova,
@@ -688,7 +720,9 @@ fn brief(review: &Review, runs: &[CheckRun]) -> String {
          and `dova pipeline log <run>` reads why a run failed.\n\
          Do not post comments, vote, or push unless you are asked to: the person posts from the Workbench.\n\
          When you are asked about lines of a file, answer about those lines. \
-         When you are asked to draft a comment or a reply, answer with only the text to post.\n",
+         When you are asked to draft a comment or a reply, answer with only the text to post.\n\
+         A message may start with an `<about>` block. It says what the person is looking at as they ask: \
+         lines of a file, a review thread, or a pipeline run. It is not part of what they wrote.\n",
         id = pr.id,
         title = pr.title,
         repo = pr.repo,

@@ -2,6 +2,7 @@
 
 import { createResource, createSignal } from 'solid-js';
 import { ask, status } from '../daemon';
+import type { PartEdit } from '../protocol/PartEdit';
 import { health } from './health';
 
 /** What Home's list is narrowed to. Nothing: your own tickets that are not finished. */
@@ -47,14 +48,45 @@ export async function setTicket(dir: string, id: number, to: { state?: string; m
   wrote();
 }
 
+/** Changes a ticket's title, parts of its text, or both. */
+export async function editTicket(dir: string, id: number, title: string | null, parts: PartEdit[]) {
+  await ask({ method: 'ticket.edit', params: { dir, id, title, parts } }, 'done');
+  wrote();
+}
+
+/** Sets one field of a ticket. With no value, the field is emptied. */
+export async function setField(dir: string, id: number, field: string, value: string | null) {
+  await ask({ method: 'ticket.field', params: { dir, id, field, value } }, 'done');
+  wrote();
+}
+
+/** Files a ticket under another one, of the type that goes under it. */
+export async function addChild(dir: string, id: number, title: string) {
+  const filed = await ask({ method: 'ticket.child', params: { dir, id, title } }, 'filed');
+  wrote();
+  return filed.id;
+}
+
+/** Takes a ticket out from under another one. Neither is deleted. */
+export async function unlinkChild(dir: string, id: number, child: number) {
+  await ask({ method: 'ticket.unlink', params: { dir, id, child } }, 'done');
+  wrote();
+}
+
+/** Ticks a ticket off, or takes the tick back. */
+export async function tickOff(dir: string, id: number, done: boolean) {
+  await ask({ method: 'ticket.done', params: { dir, id, done } }, 'done');
+  wrote();
+}
+
 export async function commentOnTicket(dir: string, id: number, text: string) {
   await ask({ method: 'ticket.comment', params: { dir, id, text } }, 'done');
   wrote();
 }
 
 /** Files a ticket. Its number is the answer. */
-export async function fileTicket(dir: string, title: string, kind: string) {
-  const filed = await ask({ method: 'ticket.create', params: { dir, title, kind } }, 'filed');
+export async function fileTicket(dir: string, title: string, kind: string, team: string | null = null) {
+  const filed = await ask({ method: 'ticket.create', params: { dir, title, kind, team } }, 'filed');
   wrote();
   return filed.id;
 }

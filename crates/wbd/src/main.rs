@@ -38,6 +38,7 @@ struct Ctx {
     dova: dova::Dova,
     pulls: pulls::Pulls,
     reviews: review::Reviews,
+    forms: tickets::Forms,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -78,6 +79,7 @@ async fn main() {
         dova: dova::Dova::default(),
         pulls: pulls::Pulls::default(),
         reviews: review::Reviews::default(),
+        forms: tickets::Forms::default(),
     });
     ctx.terminals.start();
 
@@ -281,6 +283,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             review::edit(&ctx.dova, &dir, pr, title, description).await?;
             Answer::Done
         }
+        Call::PullDescription { dir, pr } => Answer::Printed {
+            text: ctx.reviews.description(&ctx.dova, &dir, pr).await?,
+        },
+        Call::PullPicture { name, data } => Answer::Printed {
+            text: review::keep_picture(&data_dir(), &name, &data)?,
+        },
         Call::PullSet { dir, pr, to } => {
             ctx.reviews.set(&ctx.dova, &dir, pr, to).await?;
             Answer::Done
@@ -303,7 +311,36 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             rows: tickets::list(&ctx.dova, ctx.workspaces.all(), &words).await?,
         },
         Call::TicketOpen { dir, id } => {
-            Answer::Ticket(tickets::open(&ctx.dova, &ctx.reviews, &dir, id).await?)
+            Answer::Ticket(tickets::open(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id).await?)
+        }
+        Call::TicketEdit {
+            dir,
+            id,
+            title,
+            parts,
+        } => {
+            tickets::edit(&ctx.dova, &dir, id, title, parts).await?;
+            Answer::Done
+        }
+        Call::TicketField {
+            dir,
+            id,
+            field,
+            value,
+        } => {
+            tickets::set_field(&ctx.dova, &dir, id, &field, value).await?;
+            Answer::Done
+        }
+        Call::TicketChild { dir, id, title } => Answer::Filed {
+            id: tickets::child(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id, &title).await?,
+        },
+        Call::TicketUnlink { dir, id, child } => {
+            tickets::unlink(&ctx.dova, &dir, id, child).await?;
+            Answer::Done
+        }
+        Call::TicketDone { dir, id, done } => {
+            tickets::done(&ctx.dova, &ctx.forms, &dir, id, done).await?;
+            Answer::Done
         }
         Call::TicketSet {
             dir,
@@ -318,14 +355,19 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             tickets::comment(&ctx.dova, &dir, id, &text).await?;
             Answer::Done
         }
-        Call::TicketCreate { dir, title, kind } => Answer::Filed {
-            id: tickets::create(&ctx.dova, &dir, &title, &kind).await?,
+        Call::TicketCreate {
+            dir,
+            title,
+            kind,
+            team,
+        } => Answer::Filed {
+            id: tickets::create(&ctx.dova, &dir, &title, &kind, team.as_deref()).await?,
         },
         Call::TicketStart { dir, id } => Answer::Started {
-            branch: tickets::start(&ctx.dova, &ctx.reviews, &dir, id).await?,
+            branch: tickets::start(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id).await?,
         },
         Call::TicketSession { dir, id } => Answer::Session {
-            brief: tickets::brief(&ctx.dova, &ctx.reviews, &dir, id).await?,
+            brief: tickets::brief(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id).await?,
             cwd: dir,
         },
         Call::PullSession { dir, pr } => {

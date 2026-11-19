@@ -37,6 +37,12 @@ function withReachablePictures(html: string) {
   return box.innerHTML;
 }
 
+/** HTML that came from somewhere else, drawn: a ticket's text as Azure DevOps keeps it. Made safe first. */
+export function Html(props: { html: string }) {
+  const html = () => withReachablePictures(DOMPurify.sanitize(props.html));
+  return <div class="markdown" innerHTML={html()} ref={keepLinksHere} />;
+}
+
 export function Markdown(props: { text: string }) {
   const html = () =>
     withReachablePictures(DOMPurify.sanitize(marked.parse(props.text, { async: false, breaks: true })));

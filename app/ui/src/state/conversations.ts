@@ -98,23 +98,6 @@ export function turnEnd(id: string, from: number): Promise<string> {
   });
 }
 
-/**
- * Says something in a conversation, or starts one in `cwd` when there is
- * none. Gives the conversation's id at once, and what the agent ends its
- * turn on when it has.
- */
-export async function converse(cwd: string, brief: string | null, id: string | undefined, text: string) {
-  if (!id) {
-    const started = await start(defaultAgent(), cwd, text, brief);
-    return { id: started, answer: turnEnd(started, 0) };
-  }
-  await show(id);
-  if (open[id]?.state.busy) throw new Error('The agent is busy. Wait for it, or stop it.');
-  const from = open[id]?.entries.length ?? 0;
-  await send(id, text);
-  return { id, answer: turnEnd(id, from) };
-}
-
 export const stop = (id: string) => ask({ method: 'conversation.stop', params: { id } }, 'done');
 
 /** Answers what the agent asked. `answer` is null when you dismiss the question. */
