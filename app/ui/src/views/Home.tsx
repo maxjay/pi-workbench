@@ -21,16 +21,9 @@ function reposOf(view: WorkspaceView) {
   return main ? [main, ...view.repos.filter((name) => name !== main)] : view.repos;
 }
 
-/**
- * What a workspace is on. With several repos, how many: pointing at it lists them. One the
- * workbench made is called after its main repo, so that one is not said again. A folder you
- * opened has its branch.
- */
+/** What a workspace with no repo in it is on: its branch, or why it has none. */
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
-  if (view.repos.length > 1) return `${view.repos.length} repos`;
-  if (view.workspace.main) return '';
-  if (view.repos.length === 1) return view.repos[0];
   if (view.workspace.scratch) return 'scratchpad';
   return view.branch ?? 'not a git folder';
 }
@@ -158,13 +151,16 @@ export function Home() {
                     <span class="table-aside">{shortPath(view.workspace.path)}</span>
                   </Show>
                 </span>
+                {/* The repos in it, as a list over the rest of the row. One that does not fit is
+                    cut, and pointing at the list shows them all. */}
                 <span
-                  class="dim table-clip"
-                  title={view.repos.length > 1 ? reposOf(view).join('\n') : undefined}
+                  class="dim table-clip table-rest"
+                  title={view.repos.length > 0 ? reposOf(view).join('\n') : undefined}
                 >
-                  {standing(view)}
+                  <For each={view.exists ? reposOf(view) : []} fallback={standing(view)}>
+                    {(name) => <span class="table-item">{name}</span>}
+                  </For>
                 </span>
-                <span />
               </button>
             )}
           </For>

@@ -459,6 +459,16 @@ svg.glyph {
   white-space: nowrap;
 }
 
+/* A cell that has the rest of its row, where the row has nothing after it. */
+.table-rest {
+  grid-column: 3 / -1;
+}
+
+/* One of several things listed in a cell. */
+.table-item + .table-item {
+  margin-left: 20px;
+}
+
 .tree-row {
   height: 26px;
   padding: 0 20px;
