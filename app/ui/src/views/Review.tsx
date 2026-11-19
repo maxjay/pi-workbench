@@ -383,18 +383,27 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       { label: 'Abandon', sure: 'Yes, abandon it', run: () => setting.run('abandon') },
     ];
   };
-  const more = (): Choice[] => [
-    ...(activeNow()
-      ? [
-          { label: 'Approve with suggestions', run: () => voting.run(5) },
-          { label: 'Wait for the author', run: () => voting.run(-5) },
-          { label: 'Reject', run: () => voting.run(-10) },
-          ...(mine() !== 0 ? [{ label: 'Take my vote back', run: () => voting.run(0) }] : []),
-          RULE,
-        ]
-      : []),
-    ...options(),
+  const votes = (): Choice[] => [
+    { label: 'Approve with suggestions', run: () => voting.run(5) },
+    { label: 'Wait for the author', run: () => voting.run(-5) },
+    { label: 'Reject', run: () => voting.run(-10) },
+    ...(mine() !== 0 ? [RULE, { label: 'Take my vote back', run: () => voting.run(0) }] : []),
   ];
+  // The first of what can become of it is the button. The rest are in its list.
+  const first = () => options()[0];
+  const [sure, setSure] = createSignal(false);
+  const decide = () => {
+    const choice = first();
+    if (!choice) return;
+    // What can't be undone is clicked twice.
+    if (choice.sure && !sure()) {
+      setSure(true);
+      setTimeout(() => setSure(false), 4000);
+      return;
+    }
+    setSure(false);
+    void choice.run();
+  };
   return (
     <>
       <Show when={voting.error() ?? setting.error()}>
@@ -406,18 +415,38 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
         </span>
       </Show>
       <Show when={activeNow()}>
-        <button
-          type="button"
-          class="button"
-          classList={{ 'button-accent': mine() < 10, 'button-done': mine() >= 10 }}
-          disabled={voting.busy()}
-          title={mine() >= 10 ? 'Click to take your vote back' : undefined}
-          onClick={() => void voting.run(mine() >= 10 ? 0 : 10)}
-        >
-          {mine() >= 10 ? 'Approved' : 'Approve'}
-        </button>
+        <div class="split" data-tone={mine() >= 10 ? 'done' : 'accent'}>
+          <button
+            type="button"
+            class="button"
+            disabled={voting.busy()}
+            title={mine() >= 10 ? 'Click to take your vote back' : undefined}
+            onClick={() => void voting.run(mine() >= 10 ? 0 : 10)}
+          >
+            {mine() >= 10 ? 'Approved' : 'Approve'}
+          </button>
+          <Menu label="Other votes" arrow choices={votes()} busy={voting.busy()} />
+        </div>
       </Show>
-      <Menu label="More" choices={more()} busy={setting.busy() || voting.busy()} />
+      <Show when={first()}>
+        {(choice) => (
+          <div class="split">
+            <button
+              type="button"
+              class="button"
+              classList={{ 'note-failed': sure() }}
+              title={choice().detail}
+              disabled={setting.busy()}
+              onClick={decide}
+            >
+              {sure() ? 'Sure?' : choice().label}
+            </button>
+            <Show when={options().length > 1}>
+              <Menu label="More" arrow choices={options().slice(1)} busy={setting.busy()} />
+            </Show>
+          </div>
+        )}
+      </Show>
     </>
   );
 }

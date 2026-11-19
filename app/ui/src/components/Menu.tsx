@@ -19,6 +19,8 @@ export function Menu(props: {
   label: string;
   /** Show the label as words. Without it the button is three dots. */
   words?: boolean;
+  /** Only an arrow: it is the second half of a button beside it. */
+  arrow?: boolean;
   choices: Choice[];
   busy?: boolean;
   classList?: Record<string, boolean>;
@@ -45,7 +47,7 @@ export function Menu(props: {
         disabled={props.busy}
         onClick={() => setOpen(!open())}
       >
-        {props.words ? `${props.label} ▾` : '···'}
+        {props.arrow ? '▾' : props.words ? `${props.label} ▾` : '···'}
       </button>
       <Show when={open()}>
         <div class="menu-list">

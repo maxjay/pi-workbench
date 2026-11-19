@@ -61,7 +61,7 @@ export function ThreadBox(props: {
         {(c) => (
           <div class="said">
             <span class="said-who">
-              {c.author ?? 'Someone'} · {when(c.publishedAt)}
+              <span class="said-name">{c.author ?? 'Someone'}</span> · {when(c.publishedAt)}
             </span>
             <Markdown text={c.text} />
           </div>

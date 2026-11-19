@@ -245,7 +245,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                         {(c) => (
                           <div class="said ticket-said">
                             <span class="said-who">
-                              {c.author ?? 'Someone'} · {when(c.publishedAt)}
+                              <span class="said-name">{c.author ?? 'Someone'}</span> · {when(c.publishedAt)}
                             </span>
                             <Markdown text={c.text} />
                           </div>

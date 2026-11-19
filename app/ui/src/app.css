@@ -1349,11 +1349,30 @@ svg.glyph {
 
 .split {
   display: flex;
-  gap: 1px;
 }
 
-.split .menu .button {
+.review .split .button {
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.review .split .menu > .button {
   padding: 0 8px;
+  border-left: 0;
+}
+
+.review .split[data-tone="accent"] .button {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.review .split[data-tone="done"] .button {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.review .split .button:hover:enabled {
+  background: var(--hover);
 }
 
 .menu {
@@ -1750,20 +1769,43 @@ svg.glyph {
 
 /* What is drawn under a line: a thread, a note, the box you write in. */
 .diff-under {
-  margin: 0;
-  padding: 14px 20px 16px 126px;
+  padding: 8px 20px 12px 126px;
   line-height: 1.5;
-  background: var(--hover);
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-.diff-under + .diff-under {
-  border-top: 0;
 }
 
 .diff-under > * {
-  max-width: 760px;
+  max-width: 720px;
+}
+
+.diff-under .thread,
+.diff-under .note,
+.diff-under .diff-write {
+  padding: 12px 14px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--dim);
+}
+
+.diff-under .thread[data-open="true"] {
+  border-left-color: var(--asking);
+}
+
+.diff-under .note,
+.diff-under .diff-write {
+  border-left-color: var(--accent);
+}
+
+/* A thread's comments are divided inside its card, and the line to reply on is its foot. */
+.diff-under .said + .said {
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.diff-under .thread-foot {
+  margin: 2px -14px -12px;
+  padding: 6px 8px 6px 14px;
+  border-top: 1px solid var(--line);
 }
 
 /* Side by side: the old file on the left, the new on the right */
@@ -1865,6 +1907,11 @@ svg.glyph {
 .said-who {
   color: var(--dim);
   font-size: 12px;
+}
+
+.said-name {
+  color: var(--ink);
+  font-weight: 500;
 }
 
 .thread-foot {

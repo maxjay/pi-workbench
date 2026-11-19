@@ -7,6 +7,9 @@
   --dim: #8b897e;
   --line: #2a2b27;
 
+  /* A card that sits on top of something else: a comment on a line of code. */
+  --raised: #171815;
+
   /* A row under the pointer, and the row that is picked. */
   --hover: rgb(236 235 228 / 0.05);
   --picked: rgb(236 235 228 / 0.07);
