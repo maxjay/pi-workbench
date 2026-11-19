@@ -1885,9 +1885,8 @@ svg.glyph {
   gap: 8px;
 }
 
-.overview-out {
-  align-self: flex-start;
-  color: var(--dim);
+.overview-foot {
+  font-size: 12px;
 }
 
 .review .pull-open {

@@ -15,6 +15,8 @@ import type { PullView } from "./PullView";
 import type { Review } from "./Review";
 import type { Step } from "./Step";
 import type { Terminal } from "./Terminal";
+import type { Ticket } from "./Ticket";
+import type { TicketRow } from "./TicketRow";
 import type { WorkspaceView } from "./WorkspaceView";
 
 /**
@@ -53,4 +55,4 @@ errors: Array<string>, } | { "kind": "session",
 /**
  * The folder the agent works in.
  */
-cwd: string, brief: string, };
+cwd: string, brief: string, } | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, };

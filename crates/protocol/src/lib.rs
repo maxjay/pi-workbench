@@ -15,6 +15,7 @@
 mod conversation;
 mod pulls;
 mod review;
+mod tickets;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ use ts_rs::TS;
 pub use conversation::*;
 pub use pulls::*;
 pub use review::*;
+pub use tickets::*;
 pub use workspace::*;
 
 /// What the page can ask.
@@ -215,6 +217,55 @@ pub enum Call {
         #[ts(type = "number")]
         run: u64,
     },
+    /// Your tickets that are not finished. With `words`, every ticket whose title has them.
+    #[serde(rename = "tickets.list")]
+    TicketsList { words: String },
+    /// A ticket, with what it is linked to and the states it can move to.
+    #[serde(rename = "ticket.open")]
+    TicketOpen {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+    },
+    /// Moves a ticket to a state, or assigns it to you (`mine`) or to nobody.
+    #[serde(rename = "ticket.set")]
+    TicketSet {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        state: Option<String>,
+        mine: Option<bool>,
+    },
+    /// Says something in a ticket's discussion.
+    #[serde(rename = "ticket.comment")]
+    TicketComment {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+        text: String,
+    },
+    /// Files a ticket of a type, such as `Bug` or `Task`, in the folder's project.
+    #[serde(rename = "ticket.create")]
+    TicketCreate {
+        dir: String,
+        title: String,
+        kind: String,
+    },
+    /// Starts work on a ticket in a folder: a new branch from the repo's
+    /// main one, linked to the ticket, and the ticket assigned to you.
+    #[serde(rename = "ticket.start")]
+    TicketStart {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+    },
+    /// What to tell the agent about a ticket. It works in the folder asked from.
+    #[serde(rename = "ticket.session")]
+    TicketSession {
+        dir: String,
+        #[ts(type = "number")]
+        id: u64,
+    },
     /// Gets a pull request's own folder ready for the agent: a separate
     /// checkout of its branch. Answers with the folder and what to tell the agent.
     #[serde(rename = "pull.session")]
@@ -349,6 +400,19 @@ pub enum Answer {
         /// The folder the agent works in.
         cwd: String,
         brief: String,
+    },
+    Tickets {
+        rows: Vec<TicketRow>,
+    },
+    Ticket(Ticket),
+    /// The ticket that was filed.
+    Filed {
+        #[ts(type = "number")]
+        id: u64,
+    },
+    /// Work was started on a ticket, on this branch.
+    Started {
+        branch: String,
     },
 }
 

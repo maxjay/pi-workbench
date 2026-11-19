@@ -103,9 +103,11 @@ export function ThreadBox(props: {
           value={text()}
           onInput={(e) => setText(e.currentTarget.value)}
         />
-        <button type="submit" class="quiet" disabled={replying.busy() || !text().trim()}>
-          Reply
-        </button>
+        <Show when={text().trim()}>
+          <button type="submit" class="quiet" disabled={replying.busy()}>
+            Reply
+          </button>
+        </Show>
         <button type="button" class="quiet" disabled={Boolean(props.draft)} onClick={askForReply}>
           Ask the agent
         </button>
@@ -220,9 +222,11 @@ export function NewComment(props: { r: Reviewing }) {
             value={text()}
             onInput={(e) => setText(e.currentTarget.value)}
           />
-          <button type="submit" class="quiet" disabled={posting.busy() || !text().trim()}>
-            Comment
-          </button>
+          <Show when={text().trim()}>
+            <button type="submit" class="quiet" disabled={posting.busy()}>
+              Comment
+            </button>
+          </Show>
         </form>
       </div>
       <Show when={posting.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>

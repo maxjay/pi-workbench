@@ -13,6 +13,7 @@ mod health;
 mod pulls;
 mod review;
 mod terminals;
+mod tickets;
 mod workspaces;
 
 use std::path::{Path, PathBuf};
@@ -289,6 +290,35 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             review::rerun(&ctx.dova, &dir, run).await?;
             Answer::Done
         }
+        Call::TicketsList { words } => Answer::Tickets {
+            rows: tickets::list(&ctx.dova, ctx.workspaces.all(), &words).await?,
+        },
+        Call::TicketOpen { dir, id } => {
+            Answer::Ticket(tickets::open(&ctx.dova, &ctx.reviews, &dir, id).await?)
+        }
+        Call::TicketSet {
+            dir,
+            id,
+            state,
+            mine,
+        } => {
+            tickets::set(&ctx.dova, &dir, id, state.as_deref(), mine).await?;
+            Answer::Done
+        }
+        Call::TicketComment { dir, id, text } => {
+            tickets::comment(&ctx.dova, &dir, id, &text).await?;
+            Answer::Done
+        }
+        Call::TicketCreate { dir, title, kind } => Answer::Filed {
+            id: tickets::create(&ctx.dova, &dir, &title, &kind).await?,
+        },
+        Call::TicketStart { dir, id } => Answer::Started {
+            branch: tickets::start(&ctx.dova, &ctx.reviews, &dir, id).await?,
+        },
+        Call::TicketSession { dir, id } => Answer::Session {
+            brief: tickets::brief(&ctx.dova, &ctx.reviews, &dir, id).await?,
+            cwd: dir,
+        },
         Call::PullSession { dir, pr } => {
             let (cwd, brief) = ctx
                 .reviews

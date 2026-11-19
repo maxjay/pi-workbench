@@ -42,7 +42,7 @@ pub struct Reviews {
 impl Reviews {
     /// A pull request to review.
     pub async fn open(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
-        let id = json!({ "idOrUrl": pr.to_string() });
+        let id = json!({ "idOrUrl": pr.to_string(), "inlineImages": true });
         let at = self.at(dova, dir, pr).await?;
         let (view, raw, threads, diff, me) = tokio::join!(
             dova.call("pr.view", dir, id),
@@ -226,7 +226,7 @@ impl Reviews {
     }
 
     /// Who you are to the organization `dir` is cloned from. Asked once.
-    async fn me(&self, dova: &Dova, dir: &str) -> Result<String, Error> {
+    pub async fn me(&self, dova: &Dova, dir: &str) -> Result<String, Error> {
         if let Some(known) = self.me.lock().expect("not poisoned").get(dir) {
             return Ok(known.clone());
         }
@@ -306,8 +306,11 @@ pub async fn rerun(dova: &Dova, dir: &str, run: u64) -> Result<(), Error> {
     send(dova, dir, "PATCH", path, &json!({})).await
 }
 
+/// A REST call through dova. A picture kept on Azure DevOps that the
+/// answer links to comes back as the picture itself.
 async fn get(dova: &Dova, dir: &str, path: String) -> Result<Value, Error> {
-    dova.call("api", dir, json!({ "path": path })).await
+    dova.call("api", dir, json!({ "path": path, "inlineImages": true }))
+        .await
 }
 
 async fn send(
