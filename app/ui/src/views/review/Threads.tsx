@@ -205,24 +205,26 @@ export function NewComment(props: { r: Reviewing }) {
   });
   return (
     <>
-      <form
-        class="thread-box thread-foot"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void posting.run();
-        }}
-      >
-        <input
-          class="thread-input"
-          placeholder="Write a comment on the pull request"
-          aria-label="Write a comment on the pull request"
-          value={text()}
-          onInput={(e) => setText(e.currentTarget.value)}
-        />
-        <button type="submit" class="quiet" disabled={posting.busy() || !text().trim()}>
-          Comment
-        </button>
-      </form>
+      <div class="thread-box">
+        <form
+          class="thread-foot thread-alone"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void posting.run();
+          }}
+        >
+          <input
+            class="thread-input"
+            placeholder="Write a comment on the pull request"
+            aria-label="Write a comment on the pull request"
+            value={text()}
+            onInput={(e) => setText(e.currentTarget.value)}
+          />
+          <button type="submit" class="quiet" disabled={posting.busy() || !text().trim()}>
+            Comment
+          </button>
+        </form>
+      </div>
       <Show when={posting.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
     </>
   );

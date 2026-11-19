@@ -35,6 +35,8 @@ pub struct Reviews {
     me: Mutex<HashMap<String, String>>,
     /// Each pull request's place in Azure DevOps' REST paths, by folder and number.
     paths: Mutex<HashMap<(String, u64), String>>,
+    /// Each pull request's whole diff, as dova last gave it.
+    diffs: Mutex<HashMap<(String, u64), Value>>,
 }
 
 impl Reviews {
@@ -46,7 +48,7 @@ impl Reviews {
             dova.call("pr.view", dir, id),
             get(dova, dir, format!("{at}?api-version=7.1")),
             get(dova, dir, format!("{at}/threads?api-version=7.1")),
-            dova.call("pr.diff", dir, json!({ "pr": pr.to_string() })),
+            self.whole_diff(dova, dir, pr),
             self.me(dova, dir),
         );
         let (view, raw, threads, diff, me) = (view?, raw?, threads?, diff?, me?);
@@ -173,6 +175,28 @@ impl Reviews {
         checkout(folder, &own, &review.pr.source_branch, &review.head).await?;
         let runs = self.checks(dova, dir, pr).await.unwrap_or_default();
         Ok((own.display().to_string(), brief(&review, &runs)))
+    }
+
+    /// A pull request's whole diff. It only changes with a push, so it is
+    /// kept until the pull request ends at another commit.
+    async fn whole_diff(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Value, Error> {
+        let key = (dir.to_string(), pr);
+        // Which files changed says which push this is, and costs one request.
+        let asked = json!({ "pr": pr.to_string(), "names": true });
+        let names = dova.call("pr.diff", dir, asked).await?;
+        let kept = self.diffs.lock().expect("not poisoned").get(&key).cloned();
+        let same = |kept: &Value| kept["head"] == names["head"] && kept["base"] == names["base"];
+        if let Some(kept) = kept.filter(same) {
+            return Ok(kept);
+        }
+        let diff = dova
+            .call("pr.diff", dir, json!({ "pr": pr.to_string() }))
+            .await?;
+        self.diffs
+            .lock()
+            .expect("not poisoned")
+            .insert(key, diff.clone());
+        Ok(diff)
     }
 
     /// Where a pull request is in Azure DevOps' REST paths. A pull request

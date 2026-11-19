@@ -289,7 +289,7 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
     if (review.pr.status === 'abandoned')
       return [{ label: 'Make it active again', run: () => setting.run('reactivate') }];
     if (!activeNow()) return [];
-    return [
+    const complete: Choice[] = [
       {
         label: 'Complete now',
         detail: `Squash into ${review.pr.targetBranch}, delete the branch, close the work items`,
@@ -303,6 +303,10 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
             detail: 'Sets auto-complete',
             run: () => setting.run('autoComplete'),
           },
+    ];
+    return [
+      // A draft can't be completed. It is made ready first.
+      ...(review.pr.isDraft ? [] : complete),
       review.pr.isDraft
         ? { label: 'Ready for review', detail: 'Takes it out of draft', run: () => setting.run('ready') }
         : { label: 'Put back into draft', run: () => setting.run('draft') },
@@ -346,7 +350,7 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       </Show>
       <Show when={options().length > 0}>
         <Menu
-          label={activeNow() ? 'Complete' : 'Abandoned'}
+          label={!activeNow() ? 'Abandoned' : props.review.pr.isDraft ? 'Draft' : 'Complete'}
           words
           choices={options()}
           busy={setting.busy()}

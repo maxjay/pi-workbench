@@ -182,7 +182,6 @@ export function Checks(props: {
                   {r().name} · run {r().id}
                   <Show when={step()}>{(s) => <> › {s().name}</>}</Show>
                 </span>
-                <span class="top-gap" />
                 <Show when={r().result === 'failed'}>
                   <button
                     type="button"

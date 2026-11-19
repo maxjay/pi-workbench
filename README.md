@@ -4,9 +4,9 @@ A window on Claude Code or Pi, on Windows, with the agent, your code and your te
 
 - **The scratchpad**: ask something from Home, with no repo needed.
 - **Workspaces**: a folder in WSL with its files, an editor, terminals, and the agent beside them.
-- **Pull requests**: yours on Home, and each one inside its workspace, through [dova](https://dova.maxjay.dev).
+- **Pull requests**: yours on Home, and each one in a tab of its own where you review it, through [dova](https://dova.maxjay.dev) 0.4.3 or newer.
 
-**Status:** version 2, written from nothing. All 8 steps of the plan are built: the window, `wbd` in WSL, the look, workspaces with their files and an editor, terminals, the agent (Pi or Claude Code) with the scratchpad, the installer, your pull requests on Home, each pull request inside its workspace with its runs and review threads, and creating a pull request from a branch. The design is the canvas [Workbench: pull requests first](https://claude.ai/artifact/MZ8HA4JYAe6RkNRzP4NKni).
+**Status:** version 2, written from nothing. All 8 steps of the plan are built: the window, `wbd` in WSL, the look, workspaces with their files and an editor, terminals, the agent (Pi or Claude Code) with the scratchpad, the installer, your pull requests on Home, and creating a pull request from a branch. After the plan, the pull request got a tab of its own: its diff with each thread under its line, comments on lines, your vote, completing it, its checks down to a step's log, and the agent in a session that is told the pull request first. The design is the canvas [Workbench: pull requests first](https://claude.ai/artifact/MZ8HA4JYAe6RkNRzP4NKni).
 
 ## How it's built
 

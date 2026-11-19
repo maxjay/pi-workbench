@@ -114,6 +114,10 @@ svg.glyph {
   align-items: center;
   gap: 8px;
   padding: 0 14px;
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .top-gap {
@@ -1127,62 +1131,7 @@ svg.glyph {
   white-space: nowrap;
 }
 
-/* A thread, and a run's log, in the middle */
-
-.thread,
-.log-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 24px;
-}
-
-.thread > * {
-  width: min(760px, 100%);
-}
-
-.thread-head {
-  display: flex;
-  gap: 12px;
-}
-
-.thread-head > :first-child {
-  white-space: nowrap;
-}
-
-.thread-comment {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.log {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.log-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 24px;
-  border-bottom: 1px solid var(--line);
-}
-
-/* What happened takes its own line when the buttons don't fit beside it. */
-.log-head > :first-child {
-  flex: 1 1 260px;
-}
-
-.log-pad {
-  padding: 24px;
-}
+/* A step's log */
 
 .log-text {
   font: inherit;
@@ -1807,6 +1756,11 @@ svg.glyph {
   gap: 4px;
   padding: 6px 8px 6px 14px;
   border-top: 1px solid var(--line);
+}
+
+/* The box for a new comment has nothing above it to be ruled off from. */
+.thread-alone {
+  border-top: 0;
 }
 
 .thread-input {
