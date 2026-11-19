@@ -8,7 +8,7 @@
 import { createEffect, createResource, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { createStore, reconcile } from 'solid-js/store';
 import { createAction } from '../components/action';
-import { openUrl } from '../components/open';
+import { type Choice, Menu, RULE } from '../components/Menu';
 import type { PullTo } from '../protocol/PullTo';
 import type { Review } from '../protocol/Review';
 import { open as conversations, defaultAgent, send, show, start, turnEnd } from '../state/conversations';
@@ -26,7 +26,7 @@ import {
   settleNote,
   vote,
 } from '../state/review';
-import { active, type TabId } from '../state/tabs';
+import { active, open, type TabId } from '../state/tabs';
 import { workspaceById } from '../state/workspaces';
 import { FROM_REVIEW, readReview, reviewPrompt } from './review/agentReview';
 import { Checks, outcome } from './review/Checks';
@@ -50,12 +50,12 @@ export function ReviewPage(props: { tab: TabId; workspace: string; pr: number })
         </p>
       }
     >
-      {(view) => <Page tab={props.tab} dir={view.workspace.path} pr={props.pr} />}
+      {(view) => <Page tab={props.tab} workspace={props.workspace} dir={view.workspace.path} pr={props.pr} />}
     </Show>
   );
 }
 
-function Page(props: { tab: TabId; dir: string; pr: number }) {
+function Page(props: { tab: TabId; workspace: string; dir: string; pr: number }) {
   const { dir, pr } = props;
   const pull = `${dir}#${pr}`;
   // Kept in a store and merged into, so a line that didn't change stays the
@@ -275,10 +275,8 @@ function Page(props: { tab: TabId; dir: string; pr: number }) {
                     <button
                       type="button"
                       class="row review-ticket"
-                      title={`${item.title ?? ''} · opens in your browser`}
-                      onClick={() =>
-                        openUrl(`${review().pr.url.split('/_git/')[0]}/_workitems/edit/${item.id}`)
-                      }
+                      title={item.title ?? undefined}
+                      onClick={() => open(`wi:${props.workspace}:${item.id}`)}
                     >
                       <span class="accent">#{item.id}</span>
                       <span class="tree-name">{item.title}</span>
@@ -385,7 +383,6 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       { label: 'Abandon', sure: 'Yes, abandon it', run: () => setting.run('abandon') },
     ];
   };
-  const rule: Choice = { rule: true, label: '', run: () => undefined };
   const more = (): Choice[] => [
     ...(activeNow()
       ? [
@@ -393,7 +390,7 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
           { label: 'Wait for the author', run: () => voting.run(-5) },
           { label: 'Reject', run: () => voting.run(-10) },
           ...(mine() !== 0 ? [{ label: 'Take my vote back', run: () => voting.run(0) }] : []),
-          rule,
+          RULE,
         ]
       : []),
     ...options(),
@@ -422,78 +419,5 @@ function Decide(props: { review: Review; dir: string; pr: number }) {
       </Show>
       <Menu label="More" choices={more()} busy={setting.busy() || voting.busy()} />
     </>
-  );
-}
-
-interface Choice {
-  /** A thin line between groups of choices, and nothing to pick. */
-  rule?: boolean;
-  label: string;
-  detail?: string;
-  /** What the choice says once clicked, when it must be clicked twice to be done. */
-  sure?: string;
-  run: () => unknown;
-}
-
-/** A button that opens a short list of things to do. */
-function Menu(props: {
-  label: string;
-  /** Show the label as words. Without it the button is only an arrow. */
-  words?: boolean;
-  choices: Choice[];
-  busy?: boolean;
-  classList?: Record<string, boolean>;
-}) {
-  const [open, setOpen] = createSignal(false);
-  const [armed, setArmed] = createSignal<string>();
-  let box!: HTMLDivElement;
-  const away = (e: PointerEvent) => {
-    if (!box.contains(e.target as Node)) setOpen(false);
-  };
-  createEffect(() => {
-    if (!open()) return setArmed();
-    document.addEventListener('pointerdown', away);
-    onCleanup(() => document.removeEventListener('pointerdown', away));
-  });
-  return (
-    <div class="menu" ref={box}>
-      <button
-        type="button"
-        class="button"
-        classList={props.classList}
-        aria-label={props.words ? undefined : props.label}
-        aria-expanded={open()}
-        disabled={props.busy}
-        onClick={() => setOpen(!open())}
-      >
-        {props.words ? `${props.label} ▾` : '···'}
-      </button>
-      <Show when={open()}>
-        <div class="menu-list">
-          <For each={props.choices}>
-            {(choice) => (
-              <Show when={!choice.rule} fallback={<span class="menu-rule" />}>
-                <button
-                  type="button"
-                  class="row menu-choice"
-                  onClick={() => {
-                    if (choice.sure && armed() !== choice.label) return setArmed(choice.label);
-                    setOpen(false);
-                    void choice.run();
-                  }}
-                >
-                  <span classList={{ 'note-failed': armed() === choice.label }}>
-                    {armed() === choice.label ? choice.sure : choice.label}
-                  </span>
-                  <Show when={choice.detail && armed() !== choice.label}>
-                    <span class="dim">{choice.detail}</span>
-                  </Show>
-                </button>
-              </Show>
-            )}
-          </For>
-        </div>
-      </Show>
-    </div>
   );
 }

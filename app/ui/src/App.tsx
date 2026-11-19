@@ -5,11 +5,12 @@ import { For, onCleanup, onMount, Show } from 'solid-js';
 import { OpenFolder, openFolderDialog } from './components/OpenFolder';
 import { type Item, openPalette, Palette } from './components/Palette';
 import { TopBar, titleOf } from './components/TopBar';
-import { active, close, open, pullOf, tabs, workspaceOf } from './state/tabs';
+import { active, close, open, pullOf, tabs, ticketOf, workspaceOf } from './state/tabs';
 import { workspaces } from './state/workspaces';
 import { Home } from './views/Home';
 import { ReviewPage } from './views/Review';
 import { Settings } from './views/Settings';
+import { TicketPage } from './views/Ticket';
 import { WorkspacePage } from './views/Workspace';
 
 /** Ctrl K's list: the open tabs, every workspace, and what you can do. */
@@ -63,6 +64,13 @@ export function App() {
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
               <ReviewPage tab={tab} workspace={pullOf(tab)?.workspace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
+            </div>
+          )}
+        </For>
+        <For each={tabs().filter((tab) => ticketOf(tab))}>
+          {(tab) => (
+            <div class="page" hidden={active() !== tab}>
+              <TicketPage tab={tab} workspace={ticketOf(tab)?.workspace ?? ''} id={ticketOf(tab)?.id ?? 0} />
             </div>
           )}
         </For>

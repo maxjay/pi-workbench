@@ -11,6 +11,7 @@ import { agentName, defaultAgent, start } from '../state/conversations';
 import { open } from '../state/tabs';
 import { refreshWorkspaces, workspaces } from '../state/workspaces';
 import { Pulls } from './home/Pulls';
+import { Tickets } from './home/Tickets';
 import { setConversation } from './workspace/ui';
 
 /** Where a workspace's git stands, in a few words. */
@@ -73,6 +74,7 @@ export function Home() {
         </Show>
       </form>
 
+      <Tickets />
       <Pulls />
 
       <section class="section" aria-labelledby="workspaces">

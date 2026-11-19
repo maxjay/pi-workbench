@@ -1,10 +1,15 @@
 // The open tabs. Home is always first and can't close. Settings, every
-// workspace you have open, and every pull request you are reviewing has a
-// tab of its own.
+// workspace you have open, every pull request you are reviewing and every
+// ticket you have open has a tab of its own.
 
 import { createSignal } from 'solid-js';
 
-export type TabId = 'home' | 'settings' | `ws:${string}` | `pr:${string}:${number}`;
+export type TabId =
+  | 'home'
+  | 'settings'
+  | `ws:${string}`
+  | `pr:${string}:${number}`
+  | `wi:${string}:${number}`;
 
 const [tabs, setTabs] = createSignal<TabId[]>(['home']);
 const [active, setActive] = createSignal<TabId>('home');
@@ -19,6 +24,13 @@ export function pullOf(id: TabId) {
   if (!id.startsWith('pr:')) return undefined;
   const [, workspace, pr] = id.split(':');
   return { workspace, pr: Number(pr) };
+}
+
+/** The ticket a tab shows, and the workspace it is asked from, if it shows one. */
+export function ticketOf(id: TabId) {
+  if (!id.startsWith('wi:')) return undefined;
+  const [, workspace, ticket] = id.split(':');
+  return { workspace, id: Number(ticket) };
 }
 
 /** Opens a tab, or goes to it if it is open. */

@@ -42,6 +42,8 @@ export function Chat(props: {
   plain?: boolean;
   /** Hides the agent's column, where it can be hidden. */
   onHide?: () => void;
+  /** It has a conversation of its own: don't start on the folder's latest one. */
+  own?: boolean;
 }) {
   const conversation = () => (props.shown ? open[props.shown] : undefined);
   const [agent, setAgent] = createSignal<Agent>(defaultAgent());
@@ -52,7 +54,7 @@ export function Chat(props: {
     await refreshList(props.cwd).catch(() => {});
     // Something is shown from the start: the latest conversation here, if there is one.
     const latest = lists[props.cwd]?.[0];
-    if (!props.shown && latest) props.onShow(latest.id);
+    if (!props.shown && latest && !props.own) props.onShow(latest.id);
   });
   createEffect(
     on(

@@ -6,17 +6,17 @@ import { For, Show } from 'solid-js';
 import { status, stopReason } from '../daemon';
 import { standing } from '../state/conversations';
 import { titles } from '../state/review';
-import { active, close, open, pullOf, type TabId, tabs, workspaceOf } from '../state/tabs';
+import { active, close, open, pullOf, type TabId, tabs, ticketOf, workspaceOf } from '../state/tabs';
 import { workspaceById } from '../state/workspaces';
 import { Glyph } from './Glyph';
 
 const words = () => (status() === 'connecting' ? 'Starting wbd' : (stopReason() ?? 'wbd stopped'));
 
-/** What a tab is called: Home, its workspace's name, or its pull request's number and title. */
+/** What a tab is called: Home, its workspace's name, or its pull request's or ticket's number and title. */
 export function titleOf(tab: TabId) {
   if (tab === 'settings') return 'Settings';
-  const pull = pullOf(tab);
-  if (pull) return titles[tab] ? `#${pull.pr} ${titles[tab]}` : `#${pull.pr}`;
+  const numbered = pullOf(tab)?.pr ?? ticketOf(tab)?.id;
+  if (numbered !== undefined) return titles[tab] ? `#${numbered} ${titles[tab]}` : `#${numbered}`;
   const id = workspaceOf(tab);
   return id ? (workspaceById(id)?.workspace.name ?? 'Workspace') : 'Home';
 }
