@@ -790,6 +790,15 @@ svg.glyph {
   overflow-wrap: anywhere;
 }
 
+/* HTML from somewhere else can have words with no paragraph around them: they stay in one line. */
+.markdown.html {
+  display: block;
+}
+
+.markdown.html > * + * {
+  margin-top: 10px;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3 {
