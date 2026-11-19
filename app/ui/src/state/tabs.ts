@@ -3,6 +3,7 @@
 // ticket you have open has a tab of its own.
 
 import { createSignal } from 'solid-js';
+import { createStore } from 'solid-js/store';
 
 export type TabId =
   | 'home'
@@ -15,6 +16,18 @@ const [tabs, setTabs] = createSignal<TabId[]>(['home']);
 const [active, setActive] = createSignal<TabId>('home');
 
 export { active, tabs };
+
+/** What a tab's page says about itself for the row of tabs: its colour, and where its agent stands. */
+export interface TabMark {
+  hue?: string;
+  standing?: 'asking' | 'working';
+}
+
+const [marks, setMarks] = createStore<Record<string, TabMark>>({});
+
+export { marks };
+
+export const markTab = (tab: TabId, mark: TabMark) => setMarks(tab, mark);
 
 /** The workspace a tab shows, if it shows one. */
 export const workspaceOf = (id: TabId) => (id.startsWith('ws:') ? id.slice(3) : undefined);

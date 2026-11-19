@@ -3,6 +3,7 @@
 // branch is ahead and the way to open one.
 
 import { createResource, onCleanup, onMount, Show } from 'solid-js';
+import { pullHue } from '../../components/hues';
 import { health } from '../../state/health';
 import { pullBefore, pullStatus, written } from '../../state/pull';
 
@@ -56,7 +57,7 @@ export function BranchPull(props: {
               title="Opens the pull request"
               onClick={() => props.onOpen(pr().id)}
             >
-              <span class="dim">#{pr().id}</span>
+              <span style={{ color: pullHue(pr().id) }}>#{pr().id}</span>
               <span class="tree-name">{pr().title}</span>
               <span class="dim">{pr().isDraft ? 'draft' : pr().status}</span>
             </button>

@@ -30,7 +30,7 @@ import {
   talksOf,
   vote,
 } from '../../state/review';
-import { active, open, type TabId } from '../../state/tabs';
+import { active, markTab, open, type TabId } from '../../state/tabs';
 import { workspaceById } from '../../state/workspaces';
 import { Chat, type Dress } from '../workspace/Chat';
 import {
@@ -47,7 +47,7 @@ import {
 import { Checks, outcome } from './Checks';
 import { Diff } from './Diff';
 import { Overview } from './Overview';
-import { type About, hue, hueOf, type Pull, placeName, voteWord } from './parts';
+import { type About, type Pull, placeName, pullHue, voteWord } from './parts';
 import { Tree } from './Tree';
 import { createTalker, why } from './talker';
 
@@ -105,6 +105,9 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
   const placing = session(dir, pr);
   const [place] = createResource(() => placing);
   const talker = createTalker(placing);
+  // The tab says when the agent is working, or waiting on you.
+  createEffect(() => markTab(props.tab, { standing: talker.standing() }));
+  onCleanup(() => markTab(props.tab, { standing: undefined }));
   const { conversation, setConversation, agent, setAgent, tell } = talker;
   const talkingTo = talker.name;
 
@@ -286,7 +289,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
         // The store keeps the review the same object while it is merged into, so this is made once.
         const p = pull(review());
         return (
-          <div class="pr" style={{ '--accent': hue(hueOf(`${review().pr.repo}#${review().pr.id}`)) }}>
+          <div class="pr" style={{ '--accent': pullHue(pr) }}>
             <div class="pr-bar">
               <div class="pr-name">
                 <h1>{review().pr.title}</h1>

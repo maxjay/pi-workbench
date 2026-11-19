@@ -3,6 +3,7 @@
 // When dova is missing or signed out, the section says what to run.
 
 import { createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
+import { pullHue } from '../../components/hues';
 import { openFolderDialog } from '../../components/OpenFolder';
 import { DaemonError } from '../../daemon';
 import type { PullRow } from '../../protocol/PullRow';
@@ -47,7 +48,7 @@ function Row(props: { row: PullRow }) {
           open(`pr:${workspace}:${row().id}`);
         }}
       >
-        <span class="dim">#{row().id}</span>
+        <span style={{ color: pullHue(row().id) }}>#{row().id}</span>
         <span class="pull-title">{row().title}</span>
         <span>{row().repo}</span>
         <span class="dim">

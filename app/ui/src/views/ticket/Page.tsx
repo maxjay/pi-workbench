@@ -17,7 +17,7 @@ import type { Field } from '../../protocol/Field';
 import type { Part } from '../../protocol/Part';
 import type { Ticket } from '../../protocol/Ticket';
 import { patchTalk, say, setTitle, settle, talksOf, threadTalk } from '../../state/review';
-import { active, open, type TabId } from '../../state/tabs';
+import { active, markTab, open, type TabId } from '../../state/tabs';
 import {
   addChild,
   commentOnTicket,
@@ -35,7 +35,7 @@ import {
 } from '../../state/tickets';
 import { refreshWorkspaces, workspaceById } from '../../state/workspaces';
 import { header, shown as shownText } from '../pull/agent';
-import { ticketHue } from '../pull/parts';
+import { pullHue, ticketHue } from '../pull/parts';
 import { Said } from '../pull/Said';
 import { createTalker, type Host, why } from '../pull/talker';
 import { Chat, type Dress } from '../workspace/Chat';
@@ -99,6 +99,14 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
   const placing = ticketSession(dir, id);
   const [place] = createResource(() => placing);
   const talker = createTalker(placing);
+  // The tab has the colour of the ticket's type, and says when the agent is working or waiting on you.
+  createEffect(() =>
+    markTab(props.tab, {
+      hue: data.ticket ? ticketHue(data.ticket.type, data.ticket.color) : undefined,
+      standing: talker.standing(),
+    }),
+  );
+  onCleanup(() => markTab(props.tab, { standing: undefined }));
   talker.setConversation(sessionOf(key));
   createEffect(on(talker.conversation, (shown) => keepSession(key, shown), { defer: true }));
   /** The discussion as the agent is told it, when you ask from there. */
@@ -310,7 +318,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                       class="row ticket-link"
                       onClick={() => open(`pr:${props.workspace}:${pull}`)}
                     >
-                      #{pull}
+                      <span style={{ color: pullHue(pull) }}>#{pull}</span>
                     </button>
                   )}
                 </For>

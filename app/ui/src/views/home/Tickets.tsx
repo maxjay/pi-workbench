@@ -4,6 +4,7 @@
 
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
+import { ticketHue } from '../../components/hues';
 import { pulls } from '../../state/pulls';
 import { open } from '../../state/tabs';
 import { fileTicket, findTickets, tickets, words } from '../../state/tickets';
@@ -72,7 +73,7 @@ export function Tickets() {
               class="row ticket-row"
               onClick={() => open(`wi:${row.workspace}:${row.id}`)}
             >
-              <span class="dim">#{row.id}</span>
+              <span style={{ color: ticketHue(row.type) }}>#{row.id}</span>
               <span class="dim">{row.type}</span>
               <span class="pull-title">{row.title}</span>
               <span class="dim">{row.state}</span>

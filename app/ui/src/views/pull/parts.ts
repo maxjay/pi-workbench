@@ -6,6 +6,8 @@ import type { Place } from '../../protocol/Place';
 import type { Review } from '../../protocol/Review';
 import type { Host } from './talker';
 
+export { hue, pullHue, ticketHue } from '../../components/hues';
+
 /** What the agent is told you are on. Nothing means the whole pull request. */
 export type About =
   | { kind: 'thread'; thread: number }
@@ -109,48 +111,6 @@ export function excluder(patterns: string): (path: string) => boolean {
       return (path: string) => path.split('/').some((part) => name.test(part));
     });
   return (path) => tests.some((test) => test(path));
-}
-
-/** A colour for a kind of thing: every one has the same lightness and strength, only the hue differs. */
-export const hue = (degrees: number) => `oklch(0.8 0.15 ${degrees})`;
-
-/** A pull request's own hue, from its name: one of twelve, the same every time. */
-export function hueOf(name: string) {
-  let sum = 0;
-  for (const letter of name) sum = (sum * 31 + letter.charCodeAt(0)) % 9973;
-  // Not the hues that already mean something here: red, orange, yellow, green and the blue of threads.
-  const free = [330, 300, 280, 210, 190, 170];
-  return free[sum % free.length];
-}
-
-/** The hue of a colour written as six hex digits, on the wheel the app's colours are on. */
-function hexHue(hex: string) {
-  const digits = hex.replace('#', '').slice(-6);
-  if (!/^[0-9a-f]{6}$/i.test(digits)) return undefined;
-  const [r, g, b] = [0, 2, 4]
-    .map((at) => Number.parseInt(digits.slice(at, at + 2), 16) / 255)
-    .map((c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-  const a = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
-  const yellow = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
-  return Math.round(((Math.atan2(yellow, a) * 180) / Math.PI + 360) % 360);
-}
-
-/**
- * The colour of a kind of ticket: the hue Azure DevOps gives the type when
- * it is known, and else the hue it gives the types every project has.
- */
-export function ticketHue(type: string | null | undefined, azure?: string | null) {
-  const known = azure ? hexHue(azure) : undefined;
-  if (known !== undefined) return hue(known);
-  const kind = (type ?? '').toLowerCase();
-  if (kind.includes('bug') || kind.includes('issue') || kind.includes('impediment')) return hue(25);
-  if (kind.includes('epic')) return hue(45);
-  if (kind.includes('feature')) return hue(300);
-  if (kind.includes('task')) return hue(95);
-  return hue(230);
 }
 
 /** A vote, as the word on its button and the state it reads as. */

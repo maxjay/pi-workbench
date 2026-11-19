@@ -6,26 +6,45 @@ import { For, Show } from 'solid-js';
 import { status, stopReason } from '../daemon';
 import { standing } from '../state/conversations';
 import { titles } from '../state/review';
-import { active, close, open, pullOf, type TabId, tabs, ticketOf, workspaceOf } from '../state/tabs';
+import { active, close, marks, open, pullOf, type TabId, tabs, ticketOf, workspaceOf } from '../state/tabs';
+import { tickets } from '../state/tickets';
 import { workspaceById } from '../state/workspaces';
 import { Glyph } from './Glyph';
+import { pullHue, ticketHue } from './hues';
 
 const words = () => (status() === 'connecting' ? 'Starting wbd' : (stopReason() ?? 'wbd stopped'));
+
+/** The number of the pull request or the ticket a tab shows. */
+const numberOf = (tab: TabId) => pullOf(tab)?.pr ?? ticketOf(tab)?.id;
 
 /** What a tab is called: Home, its workspace's name, or its pull request's or ticket's number and title. */
 export function titleOf(tab: TabId) {
   if (tab === 'settings') return 'Settings';
-  const numbered = pullOf(tab)?.pr ?? ticketOf(tab)?.id;
+  const numbered = numberOf(tab);
   if (numbered !== undefined) return titles[tab] ? `#${numbered} ${titles[tab]}` : `#${numbered}`;
   const id = workspaceOf(tab);
   return id ? (workspaceById(id)?.workspace.name ?? 'Workspace') : 'Home';
 }
 
-/** Where a workspace tab's conversations stand: waiting on you, or working. */
+/**
+ * A tab's own colour: a pull request's is its own, a ticket's is its type's. Its number is written
+ * in it, and it is the line under the tab while you are on it. The other tabs keep the app's.
+ */
+function hueOfTab(tab: TabId) {
+  const pull = pullOf(tab);
+  if (pull) return pullHue(pull.pr);
+  const ticket = ticketOf(tab);
+  if (!ticket) return undefined;
+  // Until its page has read it, Home's list may already know its type.
+  const listed = tickets.latest?.find((row) => row.id === ticket.id);
+  return marks[tab]?.hue ?? (listed ? ticketHue(listed.type) : undefined);
+}
+
+/** Where a tab's agent stands: waiting on you, or working. */
 function dotOf(tab: TabId) {
   const id = workspaceOf(tab);
   const view = id ? workspaceById(id) : undefined;
-  return view ? standing(view.workspace.path) : undefined;
+  return view ? standing(view.workspace.path) : marks[tab]?.standing;
 }
 
 export function TopBar() {
@@ -37,7 +56,7 @@ export function TopBar() {
       <nav class="tabs" aria-label="Open tabs">
         <For each={tabs()}>
           {(tab) => (
-            <span class="tab" data-current={active() === tab}>
+            <span class="tab" data-current={active() === tab} style={{ '--accent': hueOfTab(tab) }}>
               <button
                 type="button"
                 class="tab-open"
@@ -47,7 +66,10 @@ export function TopBar() {
                 <Show when={workspaceOf(tab)}>
                   <Glyph name={titleOf(tab)} size={10} />
                 </Show>
-                {titleOf(tab)}
+                <Show when={numberOf(tab) !== undefined} fallback={titleOf(tab)}>
+                  <span class="tab-id">#{numberOf(tab)}</span>
+                  <span class="tab-name">{titles[tab]}</span>
+                </Show>
                 <Show when={dotOf(tab)}>
                   {(state) => (
                     <span

@@ -121,6 +121,23 @@ svg.glyph {
   text-overflow: ellipsis;
 }
 
+/* A pull request's or a ticket's number is in its own colour, on the tab as everywhere else. */
+.tab-id {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab .dot {
+  flex-shrink: 0;
+  margin-left: 0;
+}
+
 .top-gap {
   flex: 1;
 }

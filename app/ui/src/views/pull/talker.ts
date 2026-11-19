@@ -69,6 +69,12 @@ export function createTalker(session: Promise<{ cwd: string; brief: string }>) {
       const id = conversation();
       return agentName[(id ? conversations[id]?.state.agent : undefined) ?? agent()];
     },
+    /** Where the conversation stands, for the tab: waiting on you beats working. */
+    standing: (): 'asking' | 'working' | undefined => {
+      const id = conversation();
+      const state = id ? conversations[id]?.state : undefined;
+      return state?.ask ? 'asking' : state?.busy ? 'working' : undefined;
+    },
     tell,
   };
 }
