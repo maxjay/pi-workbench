@@ -1,4 +1,4 @@
-// A workspace's tab. On the left a list: Files or Changes. In the middle the
+// A workspace's tab. On the left a list: Files, Changes, or the branch's pull request. In the middle the
 // one thing you picked, with the terminals under it. On the right the agent.
 // While nothing is open in the middle, the agent has the middle.
 
@@ -6,17 +6,15 @@ import { createMemo, For, onCleanup, onMount, Show } from 'solid-js';
 import { openPalette } from '../components/Palette';
 import type { GitMark } from '../protocol/GitMark';
 import type { WorkspaceView } from '../protocol/WorkspaceView';
-import { defaultAgent, send, start } from '../state/conversations';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { refreshRepo, repos } from '../state/repo';
+import { open } from '../state/tabs';
 import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
 import { createEditor } from './workspace/Editor';
-import { LogView } from './workspace/LogView';
 import { NewPull } from './workspace/NewPull';
 import { Pull } from './workspace/Pull';
 import { Terminals } from './workspace/Terminals';
-import { ThreadView } from './workspace/ThreadView';
 import { marks, Tree } from './workspace/Tree';
 import { closeTab, isFile, labelOf, nameOf, openTab, setConversation, setLeft, uiOf } from './workspace/ui';
 
@@ -67,21 +65,6 @@ function Page(props: { view: WorkspaceView }) {
     gitKey: () => JSON.stringify(repo()?.git?.summary ?? null),
     onSaved: () => void refreshRepo(root),
   });
-
-  /** Opens a file of this workspace at a line. */
-  const openAt = (path: string, line: number | null) => {
-    const full = absolute(path.replace(/^\//, ''));
-    if (line) editor.goToLine(full, line);
-    openTab(id, full);
-  };
-  /** Says something to the agent here: in the conversation shown, or a new one. */
-  const tell = async (text: string) => {
-    const shown = ui().conversation;
-    if (shown) await send(shown, text);
-    else setConversation(id, await start(defaultAgent(), root, text));
-  };
-  /** The ids in a tab that isn't a file: `log:6` is [6], `thread:1:4` is [1, 4]. */
-  const ids = (tab: string) => tab.split(':').slice(1).map(Number);
 
   const close = (tab: string) => {
     closeTab(id, tab);
@@ -205,14 +188,7 @@ function Page(props: { view: WorkspaceView }) {
             </Show>
           </Show>
           <Show when={ui().left === 'pull'}>
-            <Pull
-              dir={root}
-              pr={ui().pull}
-              current={ui().current}
-              onNew={() => openTab(id, 'newpr')}
-              onLog={(run) => openTab(id, `log:${run}`)}
-              onThread={(pr, thread) => openTab(id, `thread:${pr}:${thread}`)}
-            />
+            <Pull dir={root} onNew={() => openTab(id, 'newpr')} onOpen={(pr) => open(`pr:${id}:${pr}`)} />
           </Show>
         </div>
       </aside>
@@ -249,20 +225,6 @@ function Page(props: { view: WorkspaceView }) {
               )}
             </For>
           </div>
-        </Show>
-        <Show when={ui().current?.startsWith('log:') && ui().current} keyed>
-          {(tab) => (
-            <LogView
-              dir={root}
-              run={ids(tab)[0]}
-              files={repo()?.files ?? []}
-              onOpenAt={openAt}
-              onAsk={(text) => void tell(text)}
-            />
-          )}
-        </Show>
-        <Show when={ui().current?.startsWith('thread:') && ui().current} keyed>
-          {(tab) => <ThreadView dir={root} pr={ids(tab)[0]} thread={ids(tab)[1]} onOpenAt={openAt} />}
         </Show>
         <Show when={ui().current === 'newpr'}>
           <NewPull dir={root} onDone={() => close('newpr')} />

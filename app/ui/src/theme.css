@@ -17,6 +17,11 @@
   --working: oklch(0.82 0.14 85);
   --asking: oklch(0.78 0.12 250);
 
+  /* A pull request's own colour, the way a page of maxjay.dev has one: the
+     same lightness and strength as the states, a hue none of them uses. It
+     marks what is picked, what posts, and what the agent wrote. */
+  --accent: oklch(0.8 0.15 310);
+
   /* Code, in the editor: one lightness and strength, only the hue differs. */
   --syn-keyword: oklch(0.8 0.1 310);
   --syn-string: oklch(0.8 0.1 150);

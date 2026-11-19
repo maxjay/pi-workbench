@@ -14,6 +14,7 @@
 
 mod conversation;
 mod pulls;
+mod review;
 mod workspace;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ use ts_rs::TS;
 
 pub use conversation::*;
 pub use pulls::*;
+pub use review::*;
 pub use workspace::*;
 
 /// What the page can ask.
@@ -101,6 +103,9 @@ pub enum Call {
         text: String,
         model: Option<String>,
         effort: Option<String>,
+        /// What the agent is told before anything you write, and again each
+        /// time it starts. A pull request's session gives the pull request here.
+        brief: Option<String>,
     },
     /// Picks a conversation's model and effort. None leaves the agent's own.
     #[serde(rename = "conversation.set")]
@@ -140,14 +145,83 @@ pub enum Call {
         #[ts(type = "number | null")]
         pr: Option<u64>,
     },
-    /// A review thread, with everything said in it.
-    #[serde(rename = "pull.thread")]
-    PullThread {
+    /// A pull request to review: its votes, its threads, its changed files.
+    #[serde(rename = "pull.open")]
+    PullOpen {
         dir: String,
         #[ts(type = "number")]
         pr: u64,
+    },
+    /// One changed file's diff with every line of the file, not only the changes.
+    #[serde(rename = "pull.diff")]
+    PullDiff {
+        dir: String,
         #[ts(type = "number")]
-        thread: u64,
+        pr: u64,
+        path: String,
+    },
+    /// Starts a thread: on lines of a file, or on the whole pull request.
+    #[serde(rename = "pull.comment")]
+    PullComment {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        text: String,
+        place: Option<Place>,
+    },
+    /// Your vote. See `Reviewer.vote` for the numbers.
+    #[serde(rename = "pull.vote")]
+    PullVote {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        vote: i8,
+    },
+    /// Completes, abandons or reopens a pull request, or moves it in or out of draft.
+    #[serde(rename = "pull.set")]
+    PullSet {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+        to: PullTo,
+    },
+    /// The pipeline runs on a pull request's branch, the newest first.
+    #[serde(rename = "pull.checks")]
+    PullChecks {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+    },
+    /// A run's jobs and their steps.
+    #[serde(rename = "pull.run")]
+    PullRun {
+        dir: String,
+        #[ts(type = "number")]
+        run: u64,
+    },
+    /// What one step of a run printed.
+    #[serde(rename = "pull.steplog")]
+    PullStepLog {
+        dir: String,
+        #[ts(type = "number")]
+        run: u64,
+        #[ts(type = "number")]
+        log: u64,
+    },
+    /// Runs a run's failed jobs again.
+    #[serde(rename = "pull.rerun")]
+    PullRerun {
+        dir: String,
+        #[ts(type = "number")]
+        run: u64,
+    },
+    /// Gets a pull request's own folder ready for the agent: a separate
+    /// checkout of its branch. Answers with the folder and what to tell the agent.
+    #[serde(rename = "pull.session")]
+    PullSession {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
     },
     /// Answers a thread, and resolves it too with `resolve`.
     #[serde(rename = "pull.reply")]
@@ -160,7 +234,7 @@ pub enum Call {
         text: String,
         resolve: bool,
     },
-    /// Resolves a thread without saying anything.
+    /// Sets a thread's status without saying anything: `resolved`, or `active` to open it again.
     #[serde(rename = "pull.resolve")]
     PullResolve {
         dir: String,
@@ -168,6 +242,7 @@ pub enum Call {
         pr: u64,
         #[ts(type = "number")]
         thread: u64,
+        status: String,
     },
     /// What a pull request from a folder's branch would hold.
     #[serde(rename = "pull.before")]
@@ -186,13 +261,6 @@ pub enum Call {
         dir: String,
         #[ts(type = "Array<number>")]
         ids: Vec<u64>,
-    },
-    /// Why a run failed.
-    #[serde(rename = "pull.log")]
-    PullLog {
-        dir: String,
-        #[ts(type = "number")]
-        run: u64,
     },
 }
 
@@ -263,10 +331,25 @@ pub enum Answer {
         rows: Vec<PullRow>,
     },
     Pull(PullView),
-    Thread(Thread),
-    Log(RunLog),
     Before(PullBefore),
     Created(PullRequest),
+    Review(Review),
+    FileDiff {
+        lines: Vec<DiffLine>,
+    },
+    Checks {
+        runs: Vec<CheckRun>,
+    },
+    Run {
+        steps: Vec<Step>,
+        /// What the pipeline itself said went wrong, outside any step.
+        errors: Vec<String>,
+    },
+    Session {
+        /// The folder the agent works in.
+        cwd: String,
+        brief: String,
+    },
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.

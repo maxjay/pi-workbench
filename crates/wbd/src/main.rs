@@ -11,6 +11,7 @@ mod fold;
 mod git;
 mod health;
 mod pulls;
+mod review;
 mod terminals;
 mod workspaces;
 
@@ -35,6 +36,7 @@ struct Ctx {
     conversations: Conversations,
     dova: dova::Dova,
     pulls: pulls::Pulls,
+    reviews: review::Reviews,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -74,6 +76,7 @@ async fn main() {
         conversations: Conversations::new(&data_dir(), out.clone()),
         dova: dova::Dova::default(),
         pulls: pulls::Pulls::default(),
+        reviews: review::Reviews::default(),
     });
     ctx.terminals.start();
 
@@ -229,8 +232,11 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             text,
             model,
             effort,
+            brief,
         } => {
-            let started = ctx.conversations.start(agent, &cwd, &text, model, effort);
+            let started = ctx
+                .conversations
+                .start(agent, &cwd, &text, model, effort, brief);
             Answer::Conversation(started.await?)
         }
         Call::ConversationSet { id, model, effort } => {
@@ -248,8 +254,47 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::PullStatus { dir, pr } => Answer::Pull(pulls::status(&ctx.dova, &dir, pr).await?),
-        Call::PullThread { dir, pr, thread } => {
-            Answer::Thread(pulls::thread(&ctx.dova, &dir, pr, thread).await?)
+        Call::PullOpen { dir, pr } => Answer::Review(ctx.reviews.open(&ctx.dova, &dir, pr).await?),
+        Call::PullDiff { dir, pr, path } => Answer::FileDiff {
+            lines: review::diff(&ctx.dova, &dir, pr, &path).await?,
+        },
+        Call::PullComment {
+            dir,
+            pr,
+            text,
+            place,
+        } => {
+            review::comment(&ctx.dova, &dir, pr, &text, place).await?;
+            Answer::Done
+        }
+        Call::PullVote { dir, pr, vote } => {
+            ctx.reviews.vote(&ctx.dova, &dir, pr, vote).await?;
+            Answer::Done
+        }
+        Call::PullSet { dir, pr, to } => {
+            ctx.reviews.set(&ctx.dova, &dir, pr, to).await?;
+            Answer::Done
+        }
+        Call::PullChecks { dir, pr } => Answer::Checks {
+            runs: ctx.reviews.checks(&ctx.dova, &dir, pr).await?,
+        },
+        Call::PullRun { dir, run } => {
+            let (steps, errors) = review::steps(&ctx.dova, &dir, run).await?;
+            Answer::Run { steps, errors }
+        }
+        Call::PullStepLog { dir, run, log } => Answer::Printed {
+            text: review::step_log(&ctx.dova, &dir, run, log).await?,
+        },
+        Call::PullRerun { dir, run } => {
+            review::rerun(&ctx.dova, &dir, run).await?;
+            Answer::Done
+        }
+        Call::PullSession { dir, pr } => {
+            let (cwd, brief) = ctx
+                .reviews
+                .session(&ctx.dova, &data_dir(), &dir, pr)
+                .await?;
+            Answer::Session { cwd, brief }
         }
         Call::PullReply {
             dir,
@@ -261,8 +306,13 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::reply(&ctx.dova, &dir, pr, thread, &text, resolve).await?;
             Answer::Done
         }
-        Call::PullResolve { dir, pr, thread } => {
-            pulls::resolve(&ctx.dova, &dir, pr, thread).await?;
+        Call::PullResolve {
+            dir,
+            pr,
+            thread,
+            status,
+        } => {
+            pulls::resolve(&ctx.dova, &dir, pr, thread, &status).await?;
             Answer::Done
         }
         Call::PullBefore { dir } => Answer::Before(pulls::before(&ctx.dova, &dir).await?),
@@ -276,7 +326,6 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::link(&ctx.dova, &dir, &ids).await?;
             Answer::Done
         }
-        Call::PullLog { dir, run } => Answer::Log(pulls::log(&ctx.dova, &dir, run).await?),
         Call::PullsList => Answer::Pulls {
             rows: ctx.pulls.list(&ctx.dova, ctx.workspaces.all()).await?,
         },

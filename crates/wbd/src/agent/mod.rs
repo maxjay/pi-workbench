@@ -31,6 +31,7 @@ pub fn name(agent: Agent) -> &'static str {
 
 /// The process for a conversation. `resume` when the agent has it already.
 /// `model` and `effort` are what you picked for it, where you picked.
+/// `brief` is told to the agent before anything you write.
 pub fn command(
     agent: Agent,
     id: &str,
@@ -38,11 +39,16 @@ pub fn command(
     resume: bool,
     model: Option<&str>,
     effort: Option<&str>,
+    brief: Option<&str>,
 ) -> Command {
     let mut command = match agent {
         Agent::Pi => pi::command(id, model, effort),
         Agent::Claude => claude::command(id, resume, model, effort),
     };
+    // Both agents take it the same way: added to what they are told about themselves.
+    if let Some(brief) = brief {
+        command.args(["--append-system-prompt", brief]);
+    }
     command
         .current_dir(cwd)
         .stdin(Stdio::piped())

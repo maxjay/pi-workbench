@@ -3,9 +3,7 @@
 // while the app runs.
 //
 // A middle tab is a string. A file's tab is its absolute path, which always
-// starts with `/`. The other kinds have a prefix: `log:<run>` is a pipeline
-// run's log, `thread:<pull request>:<thread>` is a review thread, and
-// `newpr` is the form for a new pull request.
+// starts with `/`. `newpr` is the form for a new pull request.
 
 import { createStore } from 'solid-js/store';
 
@@ -20,8 +18,6 @@ export interface WorkspaceUi {
   current: string | undefined;
   /** The conversation with the agent that is shown. Undefined for a new one. */
   conversation: string | undefined;
-  /** The pull request asked for from Home. Undefined for the branch's own. */
-  pull: number | undefined;
 }
 
 const [uis, setUis] = createStore<Record<string, WorkspaceUi>>({});
@@ -34,7 +30,6 @@ export function uiOf(id: string): WorkspaceUi {
       tabs: [],
       current: undefined,
       conversation: undefined,
-      pull: undefined,
     });
   return uis[id];
 }
@@ -46,10 +41,7 @@ export const nameOf = (path: string) => path.split('/').pop() ?? path;
 
 /** What a middle tab is called on its tab. */
 export function labelOf(tab: string) {
-  if (isFile(tab)) return nameOf(tab);
-  if (tab === 'newpr') return 'New pull request';
-  const [kind, ...ids] = tab.split(':');
-  return kind === 'log' ? `Run ${ids[0]}` : `Thread #${ids[1]}`;
+  return isFile(tab) ? nameOf(tab) : 'New pull request';
 }
 
 export function setLeft(id: string, left: Left) {
@@ -81,10 +73,4 @@ export function setConversation(id: string, conversation: string | undefined) {
   // Home sets this for a scratchpad before its tab has ever been shown.
   uiOf(id);
   setUis(id, 'conversation', conversation);
-}
-
-/** Shows a pull request in a workspace's left list: the one asked for, or the branch's own. */
-export function showPull(id: string, pull: number | undefined) {
-  uiOf(id);
-  setUis(id, { left: 'pull', pull });
 }

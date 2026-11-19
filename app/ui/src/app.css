@@ -1299,3 +1299,701 @@ svg.glyph {
   background: var(--paper);
   color: var(--ink);
 }
+
+/* A pull request's tab: a bar that stays, then its parts, the one picked, and the agent */
+
+.review {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.review-pad {
+  padding: 24px;
+}
+
+.accent {
+  color: var(--accent);
+}
+
+.review-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.review-name {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.review-name h1 {
+  font-size: 17px;
+}
+
+.review-name > * {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.review-state {
+  color: var(--ink);
+}
+
+.review-votes {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.review-late {
+  font-size: 12px;
+  max-width: 320px;
+}
+
+.mark[data-state="none"] {
+  color: var(--dim);
+}
+
+.quiet {
+  height: 28px;
+  padding: 0 8px;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.quiet:hover:enabled {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.quiet:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.button-accent {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--paper);
+  font-weight: 500;
+}
+
+.button-accent:hover {
+  background: var(--accent);
+}
+
+.button-accent:disabled {
+  background: none;
+  border-color: var(--line);
+}
+
+.button-done {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.split {
+  display: flex;
+  gap: 1px;
+}
+
+.split .menu .button {
+  padding: 0 8px;
+}
+
+.menu {
+  position: relative;
+}
+
+.menu-list {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  z-index: 5;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+
+.menu-choice {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 8px 14px;
+  white-space: nowrap;
+}
+
+.menu-choice .dim {
+  font-size: 12px;
+}
+
+.review-cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 400px;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.review-cols[data-agent="false"] {
+  grid-template-columns: 280px minmax(0, 1fr);
+}
+
+.review-cols[data-agent] > .chat {
+  grid-area: auto;
+  border-left: 1px solid var(--line);
+}
+
+.review-nochat {
+  padding: 20px;
+}
+
+.review-left {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  border-right: 1px solid var(--line);
+}
+
+.review-part {
+  height: 32px;
+  padding: 0 10px;
+  flex-shrink: 0;
+}
+
+.review-part > :last-child {
+  font-size: 12px;
+}
+
+/* What is picked in a pull request's lists carries its colour at the left. */
+.review .row[aria-current="true"],
+.files-row[data-current="true"] {
+  background: linear-gradient(90deg, var(--accent) 2px, var(--picked) 2px);
+}
+
+.review-middle {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* The changed files */
+
+.files {
+  display: flex;
+  flex-direction: column;
+}
+
+.files-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 2px 4px 10px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.files-exclude {
+  height: 26px;
+  margin: 0 10px 10px;
+  padding: 0 8px;
+  background: none;
+  border: 1px solid var(--line);
+  outline: 0;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.files-exclude:focus {
+  border-color: var(--dim);
+}
+
+.files-exclude::placeholder,
+.thread-input::placeholder,
+.diff-write-text::placeholder {
+  color: var(--dim);
+}
+
+.files-none {
+  padding: 6px 10px;
+}
+
+.files-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.files-folder,
+.files-file {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+}
+
+.files-folder {
+  gap: 6px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.files-folder svg {
+  flex-shrink: 0;
+}
+
+.files-folder[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+.files-file {
+  padding-left: 28px;
+}
+
+.files-file.files-top {
+  padding-left: 10px;
+}
+
+.files-folder:hover,
+.files-file:hover {
+  background: var(--hover);
+}
+
+.files-open {
+  color: var(--asking);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.files-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.files-count [data-state="ok"] {
+  color: var(--ok);
+}
+
+.files-count [data-state="failed"] {
+  color: var(--failed);
+}
+
+.viewed-box {
+  width: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewed-box span {
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--dim);
+}
+
+.viewed-box[aria-pressed="true"] span {
+  background: var(--dim);
+}
+
+.viewed-box:hover span {
+  border-color: var(--ink);
+}
+
+/* A file's diff */
+
+.diff {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 0 20px;
+}
+
+.diff-head > .dim {
+  font-size: 12px;
+}
+
+.diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 0 40px;
+  line-height: 22px;
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 48px 48px 20px minmax(0, 1fr);
+  cursor: pointer;
+}
+
+.diff-line[data-kind="added"] {
+  background-color: oklch(0.8 0.15 150 / 0.1);
+}
+
+.diff-line[data-kind="removed"] {
+  background-color: oklch(0.74 0.16 25 / 0.1);
+}
+
+.diff-line:hover {
+  background-image: linear-gradient(var(--hover), var(--hover));
+}
+
+.diff-line[data-picked] {
+  box-shadow: inset 3px 0 0 var(--accent);
+  background-image: linear-gradient(var(--picked), var(--picked));
+}
+
+.diff-num {
+  padding-right: 10px;
+  text-align: right;
+  color: var(--dim);
+  font-size: 12px;
+  user-select: none;
+}
+
+.diff-mark {
+  text-align: center;
+  color: var(--dim);
+  user-select: none;
+}
+
+.diff-line[data-kind="added"] .diff-mark {
+  color: var(--ok);
+}
+
+.diff-line[data-kind="removed"] .diff-mark {
+  color: var(--failed);
+}
+
+.diff-text {
+  padding: 0 16px 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff-gap {
+  display: block;
+  width: 100%;
+  padding: 2px 0 2px 116px;
+  margin: 4px 0;
+  color: var(--dim);
+  font-size: 12px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.diff-gap:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+/* What is drawn under a line: a thread, a note, the box you write in. */
+.diff-under {
+  margin: 8px 20px 10px 116px;
+  line-height: 1.5;
+  max-width: 760px;
+}
+
+.diff-write {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--accent);
+}
+
+.diff-write-where {
+  padding: 10px 14px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.diff-write-text,
+.note-edit {
+  padding: 6px 14px 10px;
+  background: none;
+  border: 0;
+  outline: 0;
+  resize: vertical;
+  color: var(--ink);
+  font: inherit;
+}
+
+.diff-write-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.review .diff-write-foot .button,
+.review .note-buttons .button {
+  height: 28px;
+}
+
+/* A thread, and what the agent answered */
+
+.thread-box {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+}
+
+.thread-said {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.thread-state {
+  color: var(--dim);
+}
+
+.thread-state[data-open="true"] {
+  color: var(--asking);
+}
+
+.thread-place {
+  color: var(--dim);
+}
+
+.thread-place:hover {
+  color: var(--ink);
+}
+
+.said {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.said-who {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.thread-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.thread-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  font: inherit;
+}
+
+.note-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: rgb(236 235 228 / 0.03);
+}
+
+.thread-box > .note-box {
+  border-width: 1px 0 0;
+}
+
+.note-label {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.note-working {
+  color: var(--working);
+}
+
+.note-edit {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+}
+
+.note-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The overview */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding: 24px 28px 40px;
+  max-width: 760px;
+}
+
+.overview-part {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.overview-part > .thread-box {
+  margin-top: 4px;
+}
+
+.overview-line {
+  width: auto;
+  margin: 0 -10px;
+  padding: 5px 10px;
+}
+
+.overview-out {
+  align-self: flex-start;
+  color: var(--dim);
+}
+
+.review .pull-open {
+  text-decoration-color: var(--accent);
+}
+
+/* The checks: the runs and the picked run's steps, then the picked step's log */
+
+.checks {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr);
+}
+
+.checks-list {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  border-right: 1px solid var(--line);
+}
+
+.checks-label {
+  padding: 4px 10px 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.checks-label-next {
+  padding-top: 18px;
+}
+
+.checks-note {
+  padding: 6px 10px;
+}
+
+.checks-run {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 7px 10px;
+}
+
+.checks-run .dim {
+  font-size: 12px;
+}
+
+.checks-run-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.checks-job {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  color: var(--dim);
+}
+
+.checks-step {
+  height: 28px;
+  padding: 0 10px 0 16px;
+}
+
+.checks-step:disabled {
+  cursor: default;
+  color: var(--dim);
+}
+
+.checks-step .dim {
+  font-size: 12px;
+}
+
+.dot[data-state="ok"] {
+  background: var(--ok);
+}
+
+.dot[data-state="failed"] {
+  background: var(--failed);
+}
+
+.dot[data-state="none"] {
+  background: var(--dim);
+}
+
+.checks-step .dot {
+  margin-left: 0;
+  flex-shrink: 0;
+}
+
+.checks-shown {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.checks-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 40px;
+}
+
+.checks-log {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+}

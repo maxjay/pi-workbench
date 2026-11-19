@@ -6,8 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    PipelineRun, PullBefore, PullRequest, PullRow, PullView, RunLog, Thread, ThreadSummary,
-    WorkItemRef, Workspace,
+    PipelineRun, PullBefore, PullRequest, PullRow, PullView, ThreadSummary, WorkItemRef, Workspace,
 };
 use serde_json::{Value, json};
 
@@ -128,11 +127,6 @@ pub async fn status(dova: &Dova, dir: &str, pr: Option<u64>) -> Result<PullView,
     })
 }
 
-pub async fn thread(dova: &Dova, dir: &str, pr: u64, thread: u64) -> Result<Thread, Error> {
-    let params = json!({ "pr": pr.to_string(), "thread": thread.to_string() });
-    shape(dova.call("pr.thread", dir, params).await?)
-}
-
 /// Answers a thread. With `resolve`, the same call resolves it.
 pub async fn reply(
     dova: &Dova,
@@ -149,9 +143,15 @@ pub async fn reply(
     dova.call("pr.reply", dir, params).await.map(|_| ())
 }
 
-pub async fn resolve(dova: &Dova, dir: &str, pr: u64, thread: u64) -> Result<(), Error> {
-    let params =
-        json!({ "pr": pr.to_string(), "thread": thread.to_string(), "status": "resolved" });
+/// Sets a thread's status: `resolved`, or `active` to open it again.
+pub async fn resolve(
+    dova: &Dova,
+    dir: &str,
+    pr: u64,
+    thread: u64,
+    status: &str,
+) -> Result<(), Error> {
+    let params = json!({ "pr": pr.to_string(), "thread": thread.to_string(), "status": status });
     dova.call("pr.resolve", dir, params).await.map(|_| ())
 }
 
@@ -178,26 +178,6 @@ pub async fn link(dova: &Dova, dir: &str, ids: &[u64]) -> Result<(), Error> {
     dova.call("link", dir, json!({ "ids": ids }))
         .await
         .map(|_| ())
-}
-
-/// No more of a task's log than this is sent: the end of it, where it failed.
-const LOG_LIMIT: usize = 200_000;
-
-pub async fn log(dova: &Dova, dir: &str, run: u64) -> Result<RunLog, Error> {
-    let mut log: RunLog = shape(
-        dova.call("pipeline.log", dir, json!({ "run": run.to_string() }))
-            .await?,
-    )?;
-    for task in &mut log.logs {
-        if task.text.len() > LOG_LIMIT {
-            let mut cut = task.text.len() - LOG_LIMIT;
-            while !task.text.is_char_boundary(cut) {
-                cut += 1;
-            }
-            task.text.drain(..cut);
-        }
-    }
-    Ok(log)
 }
 
 /// What dova returned, read as the shape the page is sent.
@@ -230,7 +210,7 @@ fn home(clones: &[Clone], project: &str, row: &PullRow) -> Option<String> {
 
 /// A remote on Azure Repos, as its project's part and the repo's name.
 /// None for a remote anywhere else.
-fn azure(remote: &str) -> Option<(String, String)> {
+pub fn azure(remote: &str) -> Option<(String, String)> {
     let remote = remote.trim().trim_end_matches('/').trim_end_matches(".git");
     if !remote.contains("dev.azure.com") && !remote.contains("visualstudio.com") {
         return None;

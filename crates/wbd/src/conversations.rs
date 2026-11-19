@@ -41,6 +41,8 @@ struct Live {
     folded: Mutex<Folded>,
     /// What each open question's driver needs to send its answer.
     asks: Mutex<HashMap<String, Value>>,
+    /// What the agent was told before anything you wrote.
+    brief: Option<String>,
 }
 
 /// A conversation as its file holds it.
@@ -48,6 +50,9 @@ struct Live {
 struct Saved {
     state: Conversation,
     entries: Vec<Entry>,
+    /// What the agent is told each time it starts, before anything you write.
+    #[serde(default)]
+    brief: Option<String>,
 }
 
 impl Conversations {
@@ -88,6 +93,7 @@ impl Conversations {
         text: &str,
         model: Option<String>,
         effort: Option<String>,
+        brief: Option<String>,
     ) -> Result<ConversationView, Error> {
         if !Path::new(cwd).is_dir() {
             return Err(Error::NotFound(format!("no folder at {cwd}")));
@@ -105,7 +111,7 @@ impl Conversations {
             effort,
         };
         let id = state.id.clone();
-        let live = self.run(Folded::new(state, Vec::new()), false)?;
+        let live = self.run(Folded::new(state, Vec::new()), false, brief)?;
         self.say(&id, &live, text).await?;
         Ok(live.folded.lock().expect("not poisoned").view())
     }
@@ -128,7 +134,7 @@ impl Conversations {
             Some(live) => live,
             None => {
                 let saved = self.saved(id)?;
-                self.run(Folded::new(saved.state, saved.entries), true)?
+                self.run(Folded::new(saved.state, saved.entries), true, saved.brief)?
             }
         };
         self.say(id, &live, text).await
@@ -215,11 +221,11 @@ impl Conversations {
     }
 
     /// Starts the agent's process for a conversation, and hears it until it ends.
-    fn run(&self, folded: Folded, resume: bool) -> Result<Arc<Live>, Error> {
+    fn run(&self, folded: Folded, resume: bool, brief: Option<String>) -> Result<Arc<Live>, Error> {
         let state = &folded.state;
-        let (id, agent) = (state.id.clone(), state.agent);
+        let (id, agent, cwd) = (state.id.clone(), state.agent, Path::new(&state.cwd));
         let (model, effort) = (state.model.as_deref(), state.effort.as_deref());
-        let mut child = agent::command(agent, &id, Path::new(&state.cwd), resume, model, effort)
+        let mut child = agent::command(agent, &id, cwd, resume, model, effort, brief.as_deref())
             .spawn()
             .map_err(|err| Error::Agent(format!("couldn't start {}: {err}", name(agent))))?;
         let live = Arc::new(Live {
@@ -227,6 +233,7 @@ impl Conversations {
             stdin: tokio::sync::Mutex::new(child.stdin.take().expect("stdin is piped")),
             folded: Mutex::new(folded),
             asks: Mutex::default(),
+            brief,
         });
         self.live
             .lock()
@@ -315,6 +322,7 @@ impl Conversations {
             Saved {
                 state: folded.state.clone(),
                 entries: folded.entries.clone(),
+                brief: live.brief.clone(),
             }
         };
         self.store(&saved);

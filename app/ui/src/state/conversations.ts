@@ -46,9 +46,12 @@ export async function refreshList(cwd: string) {
   setLists(cwd, list);
 }
 
-/** Starts a conversation with what you wrote, on the model and effort last picked. Returns its id. */
-export async function start(agent: Agent, cwd: string, text: string) {
-  const params = { agent, cwd, text, ...picks[agent] };
+/**
+ * Starts a conversation with what you wrote, on the model and effort last picked. Returns its id.
+ * `brief` is what the agent is told before anything you write.
+ */
+export async function start(agent: Agent, cwd: string, text: string, brief: string | null = null) {
+  const params = { agent, cwd, text, ...picks[agent], brief };
   const view = await ask({ method: 'conversation.start', params }, 'conversation');
   setOpen(view.state.id, { state: view.state, entries: view.entries });
   setLists(cwd, [view.state, ...(lists[cwd] ?? [])]);
@@ -64,6 +67,36 @@ export async function show(id: string) {
 
 export const send = (id: string, text: string) =>
   ask({ method: 'conversation.send', params: { id, text } }, 'done');
+
+/**
+ * What the agent ends its turn with: the last thing it wrote after entry `from`.
+ * Resolves when the turn is over. Rejects if the agent stopped.
+ */
+export function turnEnd(id: string, from: number): Promise<string> {
+  const last = () =>
+    open[id]?.entries
+      .slice(from)
+      .filter((entry) => entry.kind === 'text')
+      .at(-1)?.text ?? '';
+  return new Promise((resolve, reject) => {
+    // The turn may have started, or even ended, before this listens.
+    let started = open[id]?.state.busy ?? false;
+    if (!started && last()) return resolve(last());
+    const off = onEvent((event) => {
+      if (event.event !== 'conversation' || event.id !== id) return;
+      const state = open[id]?.state;
+      if (!state) return;
+      started ||= state.busy;
+      if (state.stopped) {
+        off();
+        reject(new Error(state.stopped));
+      } else if (started && !state.busy && !state.ask) {
+        off();
+        resolve(last());
+      }
+    });
+  });
+}
 
 export const stop = (id: string) => ask({ method: 'conversation.stop', params: { id } }, 'done');
 

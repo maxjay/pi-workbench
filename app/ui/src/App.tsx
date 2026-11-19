@@ -5,9 +5,10 @@ import { For, onCleanup, onMount, Show } from 'solid-js';
 import { OpenFolder, openFolderDialog } from './components/OpenFolder';
 import { type Item, openPalette, Palette } from './components/Palette';
 import { TopBar, titleOf } from './components/TopBar';
-import { active, close, open, tabs, workspaceOf } from './state/tabs';
+import { active, close, open, pullOf, tabs, workspaceOf } from './state/tabs';
 import { workspaces } from './state/workspaces';
 import { Home } from './views/Home';
+import { ReviewPage } from './views/Review';
 import { Settings } from './views/Settings';
 import { WorkspacePage } from './views/Workspace';
 
@@ -54,6 +55,14 @@ export function App() {
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
               <WorkspacePage id={workspaceOf(tab) as string} />
+            </div>
+          )}
+        </For>
+        {/* So does a pull request's, so its diff and its session keep theirs. */}
+        <For each={tabs().filter((tab) => pullOf(tab))}>
+          {(tab) => (
+            <div class="page" hidden={active() !== tab}>
+              <ReviewPage tab={tab} workspace={pullOf(tab)?.workspace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
             </div>
           )}
         </For>

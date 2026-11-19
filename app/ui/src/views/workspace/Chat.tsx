@@ -36,6 +36,8 @@ export function Chat(props: {
   onShow: (id: string | undefined) => void;
   /** Opens a file the agent touched. */
   onOpenFile: (path: string) => void;
+  /** What a new conversation here tells the agent before anything you write. */
+  brief?: string;
 }) {
   const conversation = () => (props.shown ? open[props.shown] : undefined);
   const [agent, setAgent] = createSignal<Agent>(defaultAgent());
@@ -73,7 +75,7 @@ export function Chat(props: {
   const say = createAction(async (text: string) => {
     const id = props.shown;
     if (id) return send(id, text);
-    props.onShow(await start(agent(), props.cwd, text));
+    props.onShow(await start(agent(), props.cwd, text, props.brief));
   });
 
   return (
