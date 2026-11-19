@@ -13,7 +13,16 @@ import { openFolderDialog } from '../../components/OpenFolder';
 import { DaemonError } from '../../daemon';
 import type { PullRow } from '../../protocol/PullRow';
 import { health, recheck } from '../../state/health';
-import { asked, pulls, refreshPulls, repos, searched, setRepos, toReview } from '../../state/pulls';
+import {
+  asked,
+  yours as listed,
+  pulls,
+  refreshPulls,
+  repos,
+  searched,
+  setRepos,
+  toReview,
+} from '../../state/pulls';
 import { open } from '../../state/tabs';
 
 const INSTALL = 'curl -LO https://dova.maxjay.dev/dova.deb && sudo apt install ./dova.deb';
@@ -151,7 +160,7 @@ export function Pulls() {
   };
   /** Yours, then the ones to review that are not also yours. */
   const all = createMemo(() => {
-    const mine = pulls.latest ?? [];
+    const mine = listed() ?? [];
     const same = (a: PullRow) => (b: PullRow) =>
       a.id === b.id && a.repo === b.repo && a.project === b.project;
     return [...mine, ...(toReview.latest ?? []).filter((row) => !mine.some(same(row)))];
@@ -211,7 +220,7 @@ export function Pulls() {
             </button>
           </div>
         </Match>
-        <Match when={pulls.latest}>
+        <Match when={listed()}>
           {(_) => (
             <div class="rows">
               <div class="pull-row pull-head dim">

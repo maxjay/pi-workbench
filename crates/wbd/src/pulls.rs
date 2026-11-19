@@ -35,13 +35,14 @@ impl Pulls {
     /// The pull requests you opened, or with `review` the ones you were asked to review, in
     /// the whole of each organization a workspace is cloned from: its other projects too. With
     /// them, every folder that was looked at and every project that was asked, so an empty
-    /// list can say why.
+    /// list can say why. With `quick`, the rows without what is asked for one row at a time.
     pub async fn list(
         &self,
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
         review: bool,
+        quick: bool,
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let mut clones = Vec::new();
         let mut looked = Vec::new();
@@ -124,7 +125,7 @@ impl Pulls {
                     row.workspace = home(&clones, &row);
                     // Why a check failed and which thread is open are asked for one row at a
                     // time. They are for your own: a team can be asked to review a great many.
-                    if !review {
+                    if !review && !quick {
                         let failed = |run: &PipelineRun| run.result.as_deref() == Some("failed");
                         if row.check.as_ref().is_some_and(failed) {
                             row.failed = self.why(dova, cwd, &row).await;

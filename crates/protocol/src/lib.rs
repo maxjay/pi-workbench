@@ -138,11 +138,15 @@ pub enum Call {
 
     /// The pull requests you opened, in every project your workspaces are in.
     /// With `review`, the ones you were asked to review instead. They are two
-    /// calls so that yours show without waiting for the others.
+    /// calls so that yours show without waiting for the others. With `quick`,
+    /// the rows as dova lists them, without why a check failed and which
+    /// thread is open: those are asked for one row at a time and take longer.
     #[serde(rename = "pulls.list")]
     PullsList {
         #[serde(default)]
         review: bool,
+        #[serde(default)]
+        quick: bool,
     },
     /// A folder's branch and its pull request. With `pr`, that pull request
     /// whatever branch the folder is on.
