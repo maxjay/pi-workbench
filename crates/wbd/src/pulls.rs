@@ -6,13 +6,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    PipelineRun, PullBefore, PullRequest, PullRow, PullView, ThreadSummary, WorkItemRef, Workspace,
+    Asked, PipelineRun, PullBefore, PullRequest, PullRow, PullView, Reviewing, ThreadSummary,
+    WorkItemRef, Workspace,
 };
 use serde_json::{Value, json};
 
 use crate::dova::Dova;
 use crate::error::Error;
 use crate::git;
+use crate::review::Reviews;
 
 #[derive(Default)]
 pub struct Pulls {
@@ -30,16 +32,27 @@ struct Clone {
 }
 
 impl Pulls {
-    /// The pull requests you opened, across every project your workspaces are in.
+    /// The pull requests you opened and the ones you were asked to review, in the whole of
+    /// each organization a workspace is cloned from: its other projects too. With them, every
+    /// folder that was looked at and every project that was asked, so an empty list can say why.
     pub async fn list(
         &self,
         dova: &Dova,
+        reviews: &Reviews,
         workspaces: Vec<Workspace>,
-    ) -> Result<Vec<PullRow>, Error> {
+    ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let mut clones = Vec::new();
+        let mut looked = Vec::new();
         for workspace in workspaces.into_iter().filter(|w| !w.scratch) {
             let dir = std::path::Path::new(&workspace.path);
-            let Some((project, repo)) = git::origin(dir).await.as_deref().and_then(azure) else {
+            let remote = git::origin(dir).await;
+            let on_azure = remote.as_deref().and_then(azure);
+            looked.push(Asked {
+                name: workspace.name.clone(),
+                remote: remote.as_deref().map(without_sign_in),
+                project: on_azure.as_ref().map(|(project, _)| project_name(project)),
+            });
+            let Some((project, repo)) = on_azure else {
                 continue;
             };
             let branch = git::status(dir).await.map(|status| status.summary.branch);
@@ -52,32 +65,82 @@ impl Pulls {
         }
 
         let mut rows: Vec<PullRow> = Vec::new();
-        let mut asked = HashSet::new();
+        let mut searched = Vec::new();
+        let mut organizations = HashSet::new();
         for clone in &clones {
-            // dova lists a whole project at once, so each project is asked once.
-            if !asked.insert(clone.project.to_lowercase()) {
+            // One folder is enough to ask about its whole organization, so each is asked once.
+            if !organizations.insert(organization(&clone.project).to_lowercase()) {
                 continue;
             }
             let cwd = &clone.workspace.path;
-            let listed = dova.call("pr.list", cwd, json!({})).await?;
-            let listed: Vec<PullRow> = serde_json::from_value(listed)
-                .map_err(|err| Error::Dova(format!("couldn't read dova's list: {err}")))?;
-            for mut row in listed {
-                row.workspace = home(&clones, &clone.project, &row);
-                if row
-                    .check
-                    .as_ref()
-                    .is_some_and(|run| run.result.as_deref() == Some("failed"))
+            // The projects of the folders open here, which must answer, and then every other
+            // project that has a pull request of yours, found by asking the organization.
+            let mut projects: Vec<(String, bool)> = Vec::new();
+            for open in clones.iter().filter(|other| {
+                organization(&other.project).eq_ignore_ascii_case(organization(&clone.project))
+            }) {
+                let name = project_name(&open.project);
+                if !projects
+                    .iter()
+                    .any(|(known, _)| known.eq_ignore_ascii_case(&name))
                 {
-                    row.failed = self.why(dova, cwd, &row).await;
+                    projects.push((name, true));
                 }
-                if row.open_threads > 0 {
-                    row.thread = first_open(dova, cwd, row.pr.id).await;
+            }
+            for name in elsewhere(dova, reviews, cwd).await {
+                if !projects
+                    .iter()
+                    .any(|(known, _)| known.eq_ignore_ascii_case(&name))
+                {
+                    projects.push((name, false));
                 }
-                rows.push(row);
+            }
+
+            for (project, must) in projects {
+                // The ones you opened, then the ones you were asked to review.
+                for review in [false, true] {
+                    let asked = json!({ "project": project, "review": review });
+                    let listed = match dova.call("pr.list", cwd, asked).await {
+                        Ok(listed) => listed,
+                        Err(err) if must => return Err(err),
+                        // A project found by the search that will not list is left out.
+                        Err(_) => continue,
+                    };
+                    let listed: Vec<PullRow> = serde_json::from_value(listed)
+                        .map_err(|err| Error::Dova(format!("couldn't read dova's list: {err}")))?;
+                    for mut row in listed {
+                        if rows.iter().any(|known| known.pr.id == row.pr.id) {
+                            continue;
+                        }
+                        // The ones you opened are listed as yours, even where you are a reviewer too.
+                        if !review {
+                            row.review = None;
+                        } else if row.review.is_none() {
+                            row.review = Some(Reviewing {
+                                vote: "none".into(),
+                                team: None,
+                            });
+                        }
+                        row.workspace = home(&clones, &row);
+                        // Why a check failed and which thread is open are asked for one row at a
+                        // time. They are for your own: a team can be asked to review a great many.
+                        if !review {
+                            let failed =
+                                |run: &PipelineRun| run.result.as_deref() == Some("failed");
+                            if row.check.as_ref().is_some_and(failed) {
+                                row.failed = self.why(dova, cwd, &row).await;
+                            }
+                            if row.open_threads > 0 {
+                                row.thread = first_open(dova, cwd, row.pr.id).await;
+                            }
+                        }
+                        rows.push(row);
+                    }
+                }
+                searched.push(project);
             }
         }
-        Ok(rows)
+        Ok((rows, looked, searched))
     }
 
     /// Why a row's check failed, in a line. Asked once for each run.
@@ -196,16 +259,72 @@ async fn first_open(dova: &Dova, cwd: &str, pr: u64) -> Option<ThreadSummary> {
     threads.into_iter().find(|thread| thread.unresolved)
 }
 
+/// The projects, anywhere in the organization `cwd` is cloned from, that have an open pull
+/// request you opened or are a reviewer of. Nothing when the organization will not say.
+async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str) -> Vec<String> {
+    let Ok(me) = reviews.me(dova, cwd).await else {
+        return Vec::new();
+    };
+    let mut projects: Vec<String> = Vec::new();
+    for who in ["creatorId", "reviewerId"] {
+        // A path that starts with a slash is asked of the organization, not of the folder's project.
+        let path = format!(
+            "/_apis/git/pullrequests?searchCriteria.{who}={me}&searchCriteria.status=active&$top=500&api-version=7.1"
+        );
+        let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
+            continue;
+        };
+        for pull in found["value"].as_array().into_iter().flatten() {
+            let name = pull["repository"]["project"]["name"].as_str();
+            if let Some(name) = name.filter(|name| !projects.iter().any(|known| known == name)) {
+                projects.push(name.to_string());
+            }
+        }
+    }
+    projects
+}
+
+/// A project's organization, from the project's part of a remote: what is left without its name.
+fn organization(project: &str) -> &str {
+    let named = project.trim_end_matches("/_git");
+    named
+        .rsplit_once(['/', ':'])
+        .map_or(named, |(organization, _)| organization)
+}
+
 /// The workspace that has a pull request's repo: the one on its branch, if
 /// there are several.
-fn home(clones: &[Clone], project: &str, row: &PullRow) -> Option<String> {
+fn home(clones: &[Clone], row: &PullRow) -> Option<String> {
     let mut here = clones.iter().filter(|clone| {
-        clone.project.eq_ignore_ascii_case(project) && clone.repo.eq_ignore_ascii_case(&row.pr.repo)
+        project_name(&clone.project).eq_ignore_ascii_case(&row.pr.project)
+            && clone.repo.eq_ignore_ascii_case(&row.pr.repo)
     });
     let first = here.clone().next()?;
     let on_branch =
         here.find(|clone| clone.branch.as_deref() == Some(row.pr.source_branch.as_str()));
     Some(on_branch.unwrap_or(first).workspace.id.clone())
+}
+
+/// A project as people call it, from its part of a remote: `Shop` from
+/// `https://dev.azure.com/contoso/Shop/_git`.
+fn project_name(project: &str) -> String {
+    let named = project.trim_end_matches("/_git");
+    let name = named.rsplit(['/', ':']).next().unwrap_or(named);
+    name.replace("%20", " ")
+}
+
+/// A remote without the name or token that was written in it to sign in.
+fn without_sign_in(remote: &str) -> String {
+    match remote.split_once("://") {
+        Some((scheme, rest)) => {
+            let host_on = rest.split('/').next().unwrap_or_default();
+            match host_on.rsplit_once('@') {
+                Some((sign_in, _)) => format!("{scheme}://{}", &rest[sign_in.len() + 1..]),
+                None => remote.to_string(),
+            }
+        }
+        None => remote.to_string(),
+    }
 }
 
 /// A remote on Azure Repos, as its project's part and the repo's name.
@@ -247,6 +366,46 @@ mod tests {
             Some(("git@ssh.dev.azure.com:v3/contoso/Shop".into(), "web".into()))
         );
         assert_eq!(azure("https://github.com/maxjay/dova.git"), None);
+    }
+
+    #[test]
+    fn names_a_project_and_hides_a_sign_in() {
+        assert_eq!(
+            organization("https://dev.azure.com/contoso/Shop/_git"),
+            "https://dev.azure.com/contoso"
+        );
+        assert_eq!(
+            organization("git@ssh.dev.azure.com:v3/contoso/Shop"),
+            "git@ssh.dev.azure.com:v3/contoso"
+        );
+        assert_eq!(
+            project_name("https://dev.azure.com/contoso/Shop/_git"),
+            "Shop"
+        );
+        assert_eq!(
+            project_name("git@ssh.dev.azure.com:v3/contoso/Web%20Shop"),
+            "Web Shop"
+        );
+        assert_eq!(
+            project_name("https://contoso.visualstudio.com/DefaultCollection/Shop/_git"),
+            "Shop"
+        );
+        assert_eq!(
+            without_sign_in("https://max:s3cret@dev.azure.com/contoso/Shop/_git/web"),
+            "https://dev.azure.com/contoso/Shop/_git/web"
+        );
+        assert_eq!(
+            without_sign_in("https://contoso@dev.azure.com/contoso/Shop/_git/web"),
+            "https://dev.azure.com/contoso/Shop/_git/web"
+        );
+        assert_eq!(
+            without_sign_in("git@github.com:maxjay/dova.git"),
+            "git@github.com:maxjay/dova.git"
+        );
+        assert_eq!(
+            without_sign_in("https://github.com/maxjay/dova"),
+            "https://github.com/maxjay/dova"
+        );
     }
 
     #[test]
@@ -297,16 +456,14 @@ mod tests {
             failed: None,
             thread: None,
             workspace: None,
+            author: None,
+            review: None,
         };
-        let project = "https://dev.azure.com/contoso/Shop/_git";
         assert_eq!(
-            home(&clones, project, &row("web", "fix/login")).as_deref(),
+            home(&clones, &row("web", "fix/login")).as_deref(),
             Some("b")
         );
-        assert_eq!(
-            home(&clones, project, &row("web", "other")).as_deref(),
-            Some("a")
-        );
-        assert_eq!(home(&clones, project, &row("docs", "main")), None);
+        assert_eq!(home(&clones, &row("web", "other")).as_deref(), Some("a"));
+        assert_eq!(home(&clones, &row("docs", "main")), None);
     }
 }

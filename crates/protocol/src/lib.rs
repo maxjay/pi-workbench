@@ -450,6 +450,11 @@ pub enum Answer {
     Offer(Offer),
     Pulls {
         rows: Vec<PullRow>,
+        /// Every folder that was looked at, so an empty list can say why it is empty.
+        asked: Vec<Asked>,
+        /// Every project whose pull requests were asked for: the ones of the folders, and the
+        /// others in their organizations that have a pull request of yours.
+        searched: Vec<String>,
     },
     Pull(PullView),
     Before(PullBefore),

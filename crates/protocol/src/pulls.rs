@@ -80,6 +80,36 @@ pub struct PullRow {
     /// The workspace that has this pull request's repo, if one does.
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Who opened it.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Set when you or a team of yours were asked to review it: how you stand on it.
+    #[serde(default)]
+    pub review: Option<Reviewing>,
+}
+
+/// How you stand on a pull request you were asked to review.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct Reviewing {
+    /// Your vote, in dova's word: `none`, `approved`, `approved with suggestions`,
+    /// `waiting for author`, `rejected`.
+    pub vote: String,
+    /// The team of yours that was asked, when it was a team and not you by name.
+    pub team: Option<String>,
+}
+
+/// A folder Home's list of pull requests was made from, and what was done with it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export)]
+pub struct Asked {
+    /// The workspace's name.
+    pub name: String,
+    /// Where it is cloned from, when it has a remote. Without any sign-in that was written in it.
+    pub remote: Option<String>,
+    /// The project its pull requests were asked for in. None when its remote is not on
+    /// Azure Repos: it was passed over.
+    pub project: Option<String>,
 }
 
 /// A work item a pull request is for.

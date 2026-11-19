@@ -407,9 +407,17 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::link(&ctx.dova, &dir, &ids).await?;
             Answer::Done
         }
-        Call::PullsList => Answer::Pulls {
-            rows: ctx.pulls.list(&ctx.dova, ctx.workspaces.all()).await?,
-        },
+        Call::PullsList => {
+            let (rows, asked, searched) = ctx
+                .pulls
+                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .await?;
+            Answer::Pulls {
+                rows,
+                asked,
+                searched,
+            }
+        }
         Call::ConversationAnswer { id, ask, answer } => {
             ctx.conversations
                 .answer(&id, &ask, answer.as_deref())

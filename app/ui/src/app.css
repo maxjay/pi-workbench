@@ -1514,3 +1514,17 @@ svg.glyph {
   gap: 6px;
   padding-top: 8px;
 }
+
+/* Home's pull requests: the ones to review under their own word, and why a list is empty. */
+.pull-group {
+  padding: 22px 0 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.pulls-why {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
