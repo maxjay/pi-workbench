@@ -1,13 +1,19 @@
 // A workspace's tab. On the left a list: Files or Changes. In the middle the
 // one thing you picked, with the terminals under it. On the right the agent.
 // While nothing is open in the middle, the agent has the middle.
+//
+// A workspace is one repo, or a folder that holds several: each a folder
+// inside it, a worktree of one of your clones on a branch of its own. Changes
+// then lists each repo by itself, and Add repo puts one more in.
 
-import { createMemo, For, onCleanup, onMount, Show } from 'solid-js';
+import { createMemo, createResource, For, onCleanup, onMount, Show } from 'solid-js';
+import { createAction } from '../components/action';
 import { openPalette } from '../components/Palette';
+import { ask } from '../daemon';
 import type { GitMark } from '../protocol/GitMark';
 import type { WorkspaceView } from '../protocol/WorkspaceView';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
-import { allFiles, readFolder, refreshRepo, repos } from '../state/repo';
+import { allFiles, readFolder, refreshGit, refreshRepo, repos } from '../state/repo';
 import { open } from '../state/tabs';
 import { forget, workspaceById } from '../state/workspaces';
 import { Chat } from './workspace/Chat';
@@ -24,6 +30,7 @@ import {
   openTab,
   setConversation,
   setLeft,
+  shortPath,
   toggleFolder,
   uiOf,
 } from './workspace/ui';
@@ -60,22 +67,66 @@ function Page(props: { view: WorkspaceView }) {
   const repo = () => repos[root];
   /** The workspace's own folder, as last read. */
   const top = () => repo()?.folders[''];
-  const refresh = () => refreshRepo(root, ui().expanded);
   const absolute = (relative: string) => `${root}/${relative}`;
   const relative = (path: string) => path.slice(root.length + 1);
+
+  // A workspace that is not a repo itself takes repos: the folders directly inside it that
+  // are one. They are looked for again whenever the folders in it change.
+  const takes = props.view.branch === null;
+  const [inside] = createResource(
+    () => (takes ? `in:${top()?.folders.join('/') ?? ''}` : undefined),
+    async () => (await ask({ method: 'workspace.repos', params: { dir: root } }, 'folders')).folders,
+  );
+  /** Where git is asked: each repo inside, or the workspace's own folder. */
+  const parts = createMemo(() => {
+    const found = inside.latest ?? [];
+    return found.length > 0
+      ? found.map((repo) => ({ name: repo.name, path: repo.path }))
+      : [{ name: '', path: root }];
+  });
+  const refresh = () => {
+    for (const part of parts()) if (part.name) void refreshGit(part.path);
+    return refreshRepo(root, ui().expanded);
+  };
+
+  const adding = createAction(async (clone: string) => {
+    await ask({ method: 'workspace.add', params: { dir: root, clone, branch: null } }, 'done');
+    await refresh();
+  });
+  /** Lists your clones, to pick the one to put in. */
+  const pickRepo = createAction(async () => {
+    const { dir, folders } = await ask({ method: 'repos.list' }, 'folders');
+    const here = new Set(parts().map((part) => part.name));
+    openPalette(
+      folders
+        .filter((clone) => !here.has(clone.name))
+        .map((clone) => ({
+          group: 'Repo',
+          title: clone.name,
+          detail: shortPath(clone.path),
+          run: () => void adding.run(clone.path),
+        })),
+      `Add a repo from ${shortPath(dir)}`,
+    );
+  });
 
   /** The file shown, when the tab shown is a file. */
   const file = () => {
     const tab = ui().current;
     return tab && isFile(tab) ? tab : undefined;
   };
-  const changed = createMemo(
-    () => new Map<string, GitMark>((repo()?.git?.files ?? []).map((f) => [f.path, f.mark])),
-  );
+  /** Each changed file by its path in the workspace, in whichever repo it is. */
+  const changed = createMemo(() => {
+    const all = new Map<string, GitMark>();
+    for (const part of parts())
+      for (const f of repos[part.path]?.git?.files ?? [])
+        all.set(part.name ? `${part.name}/${f.path}` : f.path, f.mark);
+    return all;
+  });
 
   const editor = createEditor({
     path: file,
-    gitKey: () => JSON.stringify(repo()?.git?.summary ?? null),
+    gitKey: () => JSON.stringify(parts().map((part) => repos[part.path]?.git?.summary ?? null)),
     onSaved: () => void refresh(),
   });
 
@@ -146,10 +197,27 @@ function Page(props: { view: WorkspaceView }) {
             onClick={() => setLeft(id, 'changes')}
           >
             Changes
-            <Show when={repo()?.git?.summary.files}>{(n) => <span class="dim">{n()}</span>}</Show>
+            <Show when={changed().size}>{(n) => <span class="dim">{n()}</span>}</Show>
           </button>
+          <Show when={takes}>
+            <span class="top-gap" />
+            <button
+              type="button"
+              class="strip-tab"
+              title="Puts a worktree of one of your clones into this workspace, on a branch of its own"
+              onClick={() => void pickRepo.run()}
+            >
+              Add repo
+            </button>
+          </Show>
         </div>
         <div class="left-body">
+          <Show when={adding.busy()}>
+            <p class="left-note dim">Adding the repo</p>
+          </Show>
+          <Show when={adding.error() ?? pickRepo.error()}>
+            {(error) => <p class="left-note note-failed">{error()}</p>}
+          </Show>
           <Show when={ui().left === 'files'}>
             <Show when={repo()} fallback={<p class="left-note dim">Reading the folder</p>}>
               {(r) => (
@@ -173,40 +241,55 @@ function Page(props: { view: WorkspaceView }) {
             </Show>
           </Show>
           <Show when={ui().left === 'changes'}>
-            <Show
-              when={repo()?.git}
-              fallback={
-                <p class="left-note dim">{repo()?.git === undefined ? 'Asking git' : 'Not a git folder.'}</p>
-              }
-            >
-              {(git) => (
+            <For each={parts()}>
+              {(part) => (
                 <>
-                  <p class="left-note dim">
-                    {git().summary.branch} · +{git().summary.added} -{git().summary.removed}
-                  </p>
-                  <BranchPull
-                    dir={root}
-                    onNew={() => openTab(id, 'newpr')}
-                    onOpen={(pr) => open(`pr:${id}:${pr}`)}
-                  />
-                  <For each={git().files} fallback={<p class="left-note dim">Nothing changed.</p>}>
-                    {(f) => (
-                      <button
-                        type="button"
-                        class="row tree-row"
-                        aria-current={file() === absolute(f.path) ? 'true' : undefined}
-                        onClick={() => openTab(id, absolute(f.path))}
-                      >
-                        <span class="tree-name">{f.path}</span>
-                        <span class="mark" data-state={marks[f.mark].state}>
-                          {marks[f.mark].letter}
-                        </span>
-                      </button>
+                  <Show when={part.name}>
+                    <p class="left-group">{part.name}</p>
+                  </Show>
+                  <Show
+                    when={repos[part.path]?.git}
+                    fallback={
+                      <p class="left-note dim">
+                        {repos[part.path]?.git === undefined
+                          ? 'Asking git'
+                          : takes
+                            ? 'No repo in this workspace yet.'
+                            : 'Not a git folder.'}
+                      </p>
+                    }
+                  >
+                    {(git) => (
+                      <>
+                        <p class="left-note dim">
+                          {git().summary.branch} · +{git().summary.added} -{git().summary.removed}
+                        </p>
+                        <BranchPull
+                          dir={part.path}
+                          onNew={() => openTab(id, part.name ? `newpr:${part.path}` : 'newpr')}
+                          onOpen={(pr) => open(`pr:${part.name ? part.path : id}:${pr}`)}
+                        />
+                        <For each={git().files} fallback={<p class="left-note dim">Nothing changed.</p>}>
+                          {(f) => (
+                            <button
+                              type="button"
+                              class="row tree-row"
+                              aria-current={file() === `${part.path}/${f.path}` ? 'true' : undefined}
+                              onClick={() => openTab(id, `${part.path}/${f.path}`)}
+                            >
+                              <span class="tree-name">{f.path}</span>
+                              <span class="mark" data-state={marks[f.mark].state}>
+                                {marks[f.mark].letter}
+                              </span>
+                            </button>
+                          )}
+                        </For>
+                      </>
                     )}
-                  </For>
+                  </Show>
                 </>
               )}
-            </Show>
+            </For>
           </Show>
         </div>
       </aside>
@@ -244,8 +327,10 @@ function Page(props: { view: WorkspaceView }) {
             </For>
           </div>
         </Show>
-        <Show when={ui().current === 'newpr'}>
-          <NewPull dir={root} onDone={() => close('newpr')} />
+        <Show when={ui().current?.startsWith('newpr') && ui().current} keyed>
+          {(tab) => (
+            <NewPull dir={tab === 'newpr' ? root : tab.slice('newpr:'.length)} onDone={() => close(tab)} />
+          )}
         </Show>
         {editor.view}
       </section>

@@ -12,12 +12,15 @@ mod git;
 mod health;
 mod places;
 mod pulls;
+mod repos;
 mod review;
 mod terminals;
 mod tickets;
+mod wb;
 mod workspaces;
 
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use conversations::Conversations;
@@ -44,10 +47,16 @@ struct Ctx {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
+async fn main() -> ExitCode {
+    // Under the name `wb` it is the command an agent runs, not the workbench's own process.
+    let args: Vec<String> = std::env::args().collect();
+    let named = args.first().map(|name| repos::name_of(Path::new(name)));
+    if named.as_deref() == Some("wb") {
+        return wb::client(&args[1..]);
+    }
+    if args.get(1).map(String::as_str) == Some("--version") {
         println!("{VERSION}");
-        return;
+        return ExitCode::SUCCESS;
     }
     // Everything wbd says goes through this one writer, a line at a time.
     // It stops when told to, after writing what was already said: the
@@ -74,17 +83,26 @@ async fn main() {
         }
     });
 
+    // Where `wb` reaches this wbd. Without it the agents run as before.
+    let door = wb::open(&data_dir());
+    let (env, socket) = match &door {
+        Some(door) => (door.env.clone(), Some(door.socket.clone())),
+        None => (Vec::new(), None),
+    };
     let ctx = Arc::new(Ctx {
         workspaces: Workspaces::new(&data_dir()),
         places: places::Places::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
-        conversations: Conversations::new(&data_dir(), out.clone()),
+        conversations: Conversations::new(&data_dir(), out.clone(), env),
         dova: dova::Dova::default(),
         pulls: pulls::Pulls::default(),
         reviews: review::Reviews::default(),
         forms: tickets::Forms::default(),
     });
     ctx.terminals.start();
+    if let Some(door) = door {
+        tokio::spawn(wb::serve(door.listener, ctx.clone()));
+    }
 
     // The checkouts of pull requests that ended are removed: a while after starting, then
     // each hour.
@@ -130,8 +148,12 @@ async fn main() {
     while answering.join_next().await.is_some() {}
     ctx.conversations.shutdown();
     ctx.terminals.shutdown();
+    if let Some(socket) = socket {
+        let _ = std::fs::remove_file(socket);
+    }
     let _ = stop.send(());
     let _ = writer.await;
+    ExitCode::SUCCESS
 }
 
 async fn write(stdout: &mut tokio::io::Stdout, mut line: String) -> std::io::Result<()> {
@@ -181,7 +203,40 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             ctx.workspaces.forget(&id)?;
             Answer::Done
         }
-        Call::ScratchNew { text } => Answer::Workspace(view(ctx.workspaces.scratch(&text)?)),
+        Call::ScratchNew { text } => {
+            let under = ctx.places.own().join("workspaces");
+            Answer::Workspace(view(ctx.workspaces.scratch(&under, &text)?))
+        }
+        Call::ReposList => {
+            let found = ctx.places.found().await;
+            let folder = |one: &places::Found| {
+                let path = Path::new(&one.path);
+                protocol::Folder {
+                    name: repos::name_of(path),
+                    path: one.path.clone(),
+                    branch: workspaces::branch(path),
+                }
+            };
+            Answer::Folders {
+                dir: ctx.places.repos().display().to_string(),
+                folders: found.iter().map(folder).collect(),
+            }
+        }
+        Call::WorkspaceRepos { dir } => Answer::Folders {
+            folders: repos::inside(Path::new(&dir)),
+            dir,
+        },
+        Call::WorkspaceAdd { dir, clone, branch } => {
+            let folder = Path::new(&dir);
+            if !repos::takes(folder) {
+                return Err(Error::Conflict(
+                    "this workspace is a repo itself. A repo is added to one that is not".into(),
+                ));
+            }
+            let branch = branch.unwrap_or_else(|| repos::branch_for(folder));
+            repos::add(Path::new(&clone), folder, &branch).await?;
+            Answer::Done
+        }
         Call::FoldersList { dir } => {
             let (dir, folders) = workspaces::folders(&dir)?;
             Answer::Folders { dir, folders }
@@ -560,8 +615,15 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
 fn view(workspace: protocol::Workspace) -> WorkspaceView {
     let path = Path::new(&workspace.path);
     let exists = path.is_dir();
+    let branch = exists.then(|| workspaces::branch(path)).flatten();
+    // A folder that is a repo is not looked into for more.
+    let inside = match exists && branch.is_none() {
+        true => repos::inside(path),
+        false => Vec::new(),
+    };
     WorkspaceView {
-        branch: exists.then(|| workspaces::branch(path)).flatten(),
+        branch,
+        repos: inside.into_iter().map(|repo| repo.name).collect(),
         workspace,
         exists,
     }

@@ -34,6 +34,9 @@ pub struct WorkspaceView {
     /// The branch it is on, read from the folder without running git: listing and opening a
     /// workspace never wait for git. None outside git.
     pub branch: Option<String>,
+    /// The repos in it, by name, when its folder is not a repo itself: each a folder of its
+    /// own directly inside.
+    pub repos: Vec<String>,
 }
 
 /// Where things are kept, and what the workbench keeps there.

@@ -52,6 +52,21 @@ pub enum Call {
     /// The folders in `dir`, to pick one to open. `~` is your home folder.
     #[serde(rename = "folders.list")]
     FoldersList { dir: String },
+    /// The clones in your repos folder, to pick one to put into a workspace.
+    #[serde(rename = "repos.list")]
+    ReposList,
+    /// The repos directly inside a workspace's folder, each with its branch.
+    #[serde(rename = "workspace.repos")]
+    WorkspaceRepos { dir: String },
+    /// Puts a worktree of `clone` into the workspace at `dir`, in a folder named after the
+    /// clone. Its branch is `branch`. Without one it is the branch the repos already there
+    /// are on, or one named after the workspace.
+    #[serde(rename = "workspace.add")]
+    WorkspaceAdd {
+        dir: String,
+        clone: String,
+        branch: Option<String>,
+    },
 
     /// The folders and files directly inside `dir`, for the tree.
     #[serde(rename = "folder.read")]

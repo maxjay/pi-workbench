@@ -12,17 +12,15 @@ import { open } from '../state/tabs';
 import { refreshWorkspaces, workspaces } from '../state/workspaces';
 import { Pulls } from './home/Pulls';
 import { Tickets } from './home/Tickets';
-import { setConversation } from './workspace/ui';
+import { setConversation, shortPath } from './workspace/ui';
 
-/** What a workspace is on: its branch, or why it has none. */
+/** What a workspace is on: its branch, the repos in it, or why it has neither. */
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
+  if (view.repos.length > 0) return view.repos.join(', ');
   if (view.workspace.scratch) return 'scratchpad';
   return view.branch ?? 'not a git folder';
 }
-
-/** A folder's path with the home folder as `~`. */
-const short = (path: string) => path.replace(/^\/home\/[^/]+/, '~');
 
 export function Home() {
   const [text, setText] = createSignal('');
@@ -98,10 +96,10 @@ export function Home() {
                 <span class="table-name" title={view.workspace.path}>
                   {view.workspace.name}
                   <Show when={!view.workspace.scratch}>
-                    <span class="table-aside">{short(view.workspace.path)}</span>
+                    <span class="table-aside">{shortPath(view.workspace.path)}</span>
                   </Show>
                 </span>
-                <span class="dim">{standing(view)}</span>
+                <span class="dim table-clip">{standing(view)}</span>
                 <span />
               </button>
             )}

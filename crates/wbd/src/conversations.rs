@@ -11,17 +11,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use protocol::{Agent, Conversation, ConversationView, Entry, Event};
+use protocol::{Agent, Ask, Conversation, ConversationView, Entry, Event};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 
 use crate::agent::{self, name};
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
+use crate::{repos, wb};
 
 /// How often what an agent says goes to the page. A reply streaming word
 /// by word is then a couple of dozen events a second, not hundreds.
@@ -35,6 +37,8 @@ pub struct Conversations {
     live: Arc<Mutex<HashMap<String, Arc<Live>>>>,
     /// wbd's one writer: lines for the page.
     out: UnboundedSender<String>,
+    /// What every agent's environment gets, so it can run `wb`. Empty without it.
+    env: Arc<Vec<(String, String)>>,
 }
 
 /// A conversation whose agent is running.
@@ -44,6 +48,8 @@ struct Live {
     folded: Mutex<Folded>,
     /// What each open question's driver needs to send its answer.
     asks: Mutex<HashMap<String, Value>>,
+    /// The questions the workbench itself asked here, and where each answer goes.
+    own: Mutex<HashMap<String, oneshot::Sender<Option<String>>>>,
     /// What the agent was told before anything you wrote.
     brief: Option<String>,
 }
@@ -59,12 +65,56 @@ struct Saved {
 }
 
 impl Conversations {
-    pub fn new(data_dir: &Path, out: UnboundedSender<String>) -> Self {
+    pub fn new(data_dir: &Path, out: UnboundedSender<String>, env: Vec<(String, String)>) -> Self {
         Conversations {
             dir: data_dir.join("conversations"),
             live: Arc::default(),
             out,
+            env: Arc::new(env),
         }
+    }
+
+    /// The folder a running conversation is in.
+    pub fn cwd(&self, id: &str) -> Option<String> {
+        let live = self.get(id)?;
+        let folded = live.folded.lock().expect("not poisoned");
+        Some(folded.state.cwd.clone())
+    }
+
+    /// Asks you something in a running conversation, from the workbench itself and not from
+    /// the agent. It shows where the agent's own questions show. What comes back gives your
+    /// answer: nothing when you dismissed it.
+    pub fn ask(&self, id: &str, ask: Ask) -> Result<oneshot::Receiver<Option<String>>, Error> {
+        let live = self
+            .get(id)
+            .ok_or_else(|| Error::NotFound(format!("conversation {id} isn't running")))?;
+        let (answer, answered) = oneshot::channel();
+        live.own
+            .lock()
+            .expect("not poisoned")
+            .insert(ask.id.clone(), answer);
+        let detail = Value::Null;
+        live.folded
+            .lock()
+            .expect("not poisoned")
+            .apply(Update::Ask { ask, detail }, now());
+        self.tell(id, &live);
+        Ok(answered)
+    }
+
+    /// Takes back a question the workbench asked, when nothing waits for its answer any more.
+    pub fn withdraw(&self, id: &str, ask: &str) {
+        let Some(live) = self.get(id) else { return };
+        if live.own.lock().expect("not poisoned").remove(ask).is_none() {
+            return;
+        }
+        {
+            let mut folded = live.folded.lock().expect("not poisoned");
+            if folded.state.ask.as_ref().is_some_and(|open| open.id == ask) {
+                folded.answered();
+            }
+        }
+        self.tell(id, &live);
     }
 
     /// The conversations in a folder, the latest first.
@@ -199,6 +249,14 @@ impl Conversations {
             let Some(asked) = asked else {
                 return Err(Error::NotFound("that question is no longer open".into()));
             };
+            // One the workbench asked is answered to the workbench, not to the agent.
+            if let Some(own) = live.own.lock().expect("not poisoned").remove(ask) {
+                folded.answered();
+                drop(folded);
+                self.tell(id, &live);
+                let _ = own.send(answer.map(str::to_string));
+                return Ok(());
+            }
             let detail = live
                 .asks
                 .lock()
@@ -282,7 +340,15 @@ impl Conversations {
         let state = &folded.state;
         let (id, agent, cwd) = (state.id.clone(), state.agent, Path::new(&state.cwd));
         let (model, effort) = (state.model.as_deref(), state.effort.as_deref());
-        let mut child = agent::command(agent, &id, cwd, resume, model, effort, brief.as_deref())
+        // In a workspace that takes repos the agent is told about `wb`, each time it starts.
+        let note = (!self.env.is_empty() && repos::takes(cwd)).then_some(wb::NOTE);
+        let told = match (brief.as_deref(), note) {
+            (Some(brief), Some(note)) => Some(format!("{brief}\n\n{note}")),
+            (brief, note) => brief.or(note).map(str::to_string),
+        };
+        let mut child = agent::command(agent, &id, cwd, resume, model, effort, told.as_deref())
+            .envs(self.env.iter().cloned())
+            .env("WB_CONVERSATION", &id)
             .spawn()
             .map_err(|err| Error::Agent(format!("couldn't start {}: {err}", name(agent))))?;
         let live = Arc::new(Live {
@@ -290,6 +356,7 @@ impl Conversations {
             stdin: tokio::sync::Mutex::new(child.stdin.take().expect("stdin is piped")),
             folded: Mutex::new(folded),
             asks: Mutex::default(),
+            own: Mutex::default(),
             brief,
         });
         self.live

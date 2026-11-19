@@ -16,8 +16,6 @@ use crate::files;
 
 pub struct Workspaces {
     file: PathBuf,
-    /// Where scratchpads' folders are made.
-    scratch: PathBuf,
     list: Mutex<Vec<Workspace>>,
     /// Where Pi's own workspaces are: `~/.pi/workspaces`, or what `WB_PI_WORKSPACES` names.
     pi: Option<PathBuf>,
@@ -51,7 +49,6 @@ impl Workspaces {
             .unwrap_or_default();
         Workspaces {
             file,
-            scratch: data_dir.join("scratch"),
             list: Mutex::new(list),
             pi,
             adopted_file,
@@ -67,14 +64,14 @@ impl Workspaces {
         list
     }
 
-    /// Makes an empty folder named after what you asked, and opens it as a
+    /// Makes an empty folder in `under`, named after what you asked, and opens it as a
     /// workspace marked as a scratchpad.
-    pub fn scratch(&self, text: &str) -> Result<Workspace, Error> {
+    pub fn scratch(&self, under: &Path, text: &str) -> Result<Workspace, Error> {
         let name = slug(text);
         let folder = (1..)
             .map(|n| match n {
-                1 => self.scratch.join(&name),
-                n => self.scratch.join(format!("{name}-{n}")),
+                1 => under.join(&name),
+                n => under.join(format!("{name}-{n}")),
             })
             .find(|folder| !folder.exists())
             .expect("some number is free");
@@ -398,14 +395,15 @@ mod tests {
     fn a_scratchpad_gets_a_folder_named_after_what_you_asked() {
         let data = tempfile::tempdir().unwrap();
         let workspaces = Workspaces::beside(data.path(), None);
+        let under = data.path().join("workspaces");
         let first = workspaces
-            .scratch("Why does checkout crash on run?")
+            .scratch(&under, "Why does checkout crash on run?")
             .unwrap();
         assert_eq!(first.name, "why-does-checkout-crash-on");
         assert!(first.scratch && Path::new(&first.path).is_dir());
         // The same question again gets a folder of its own.
         let second = workspaces
-            .scratch("Why does checkout crash on run?")
+            .scratch(&under, "Why does checkout crash on run?")
             .unwrap();
         assert_eq!(second.name, "why-does-checkout-crash-on-2");
         assert_eq!(slug("¿?"), "scratch");

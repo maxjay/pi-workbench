@@ -35,6 +35,9 @@ fn program() -> Command {
         "--include-partial-messages",
         "--permission-prompt-tool",
         "stdio",
+        // `wb` asks you itself before it does anything, so it is not asked about twice.
+        "--allowedTools",
+        "Bash(wb:*)",
     ]);
     command
 }

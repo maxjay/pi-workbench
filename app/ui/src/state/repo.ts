@@ -1,5 +1,6 @@
 // What a workspace's folder holds, as last asked: the folders read for the
-// tree, and where its git stands.
+// tree, and where its git stands. A repo inside a workspace is kept here too,
+// by its own folder, for where its git stands.
 
 import { createStore, reconcile, unwrap } from 'solid-js/store';
 import { ask } from '../daemon';
@@ -63,11 +64,11 @@ const changes = <T>(fresh: T) => reconcile(fresh, { key: null, merge: true });
 const gitting = new Map<string, { busy: boolean; done: number; took: number }>();
 
 /**
- * Asks git where a workspace stands, apart from its tree. It is not asked again while it is
+ * Asks git where a folder stands, apart from its tree. It is not asked again while it is
  * being asked, nor sooner after an answer than the answer took: where `git status` takes ten
  * seconds, it does not run all the time.
  */
-async function refreshGit(dir: string) {
+export async function refreshGit(dir: string) {
   const last = gitting.get(dir);
   if (last && (last.busy || Date.now() - last.done < last.took)) return;
   const started = Date.now();
@@ -77,6 +78,7 @@ async function refreshGit(dir: string) {
     // The tree is first: git's answer is put with a folder that was read.
     await asking.get(dir);
     if (repos[dir]) setRepos(dir, 'git', changes(git.status));
+    else setRepos(dir, { folders: {}, git: git.status });
   } catch {
     // wbd went away. The next time is asked as any other.
   } finally {

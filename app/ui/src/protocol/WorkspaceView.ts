@@ -13,4 +13,9 @@ exists: boolean,
  * The branch it is on, read from the folder without running git: listing and opening a
  * workspace never wait for git. None outside git.
  */
-branch: string | null, };
+branch: string | null, 
+/**
+ * The repos in it, by name, when its folder is not a repo itself: each a folder of its
+ * own directly inside.
+ */
+repos: Array<string>, };

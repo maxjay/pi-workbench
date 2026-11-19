@@ -14,10 +14,10 @@ use protocol::{
     PullTo, Review, Reviewer, Step, Thread, WorkItemRef,
 };
 use serde_json::{Value, json};
-use tokio::process::Command;
 
 use crate::dova::Dova;
 use crate::error::Error;
+use crate::git::run;
 use crate::places::Found;
 use crate::{files, git, pulls};
 
@@ -880,30 +880,6 @@ fn slug(origin: &str) -> String {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     named.trim_matches('-').to_string()
-}
-
-/// Runs git in `dir`, giving what it printed, or why it failed.
-async fn run(dir: &Path, args: &[&str], patience: Option<Duration>) -> Result<Vec<u8>, String> {
-    let going = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let output = match patience {
-        Some(patience) => tokio::time::timeout(patience, going)
-            .await
-            .map_err(|_| "git took too long".to_string())?,
-        None => going.await,
-    }
-    .map_err(|err| format!("couldn't run git: {err}"))?;
-    match output.status.success() {
-        true => Ok(output.stdout),
-        false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-    }
 }
 
 /// Puts a pull request's last commit in a folder of its own, beside the

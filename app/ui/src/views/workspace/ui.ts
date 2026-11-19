@@ -3,7 +3,8 @@
 // while the app runs.
 //
 // A middle tab is a string. A file's tab is its absolute path, which always
-// starts with `/`. `newpr` is the form for a new pull request.
+// starts with `/`. `newpr` is the form for a new pull request, and `newpr:` with a folder
+// after it the form for one repo of a workspace that holds several.
 
 import { createStore } from 'solid-js/store';
 
@@ -35,6 +36,9 @@ export function uiOf(id: string): WorkspaceUi {
 }
 
 export const isFile = (tab: string) => tab.startsWith('/');
+
+/** A folder's path with the home folder as `~`. */
+export const shortPath = (path: string) => path.replace(/^\/home\/[^/]+/, '~');
 
 /** The last part of a path. */
 export const nameOf = (path: string) => path.split('/').pop() ?? path;

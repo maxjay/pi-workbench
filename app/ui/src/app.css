@@ -446,6 +446,19 @@ svg.glyph {
   padding: 6px 20px;
 }
 
+/* A repo's name over its changes, in a workspace that holds several. */
+.left-group {
+  padding: 12px 20px 0;
+  font-weight: 600;
+}
+
+/* A cell whose words are cut where the column ends. */
+.table-clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tree-row {
   height: 26px;
   padding: 0 20px;

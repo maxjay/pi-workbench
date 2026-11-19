@@ -23,6 +23,35 @@ async fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
     output.status.success().then_some(output.stdout)
 }
 
+/// Runs git in `dir`, giving what it printed, or why it failed. With `patience`, it is given
+/// up on after that long.
+pub async fn run(
+    dir: &Path,
+    args: &[&str],
+    patience: Option<std::time::Duration>,
+) -> Result<Vec<u8>, String> {
+    let going = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = match patience {
+        Some(patience) => tokio::time::timeout(patience, going)
+            .await
+            .map_err(|_| "git took too long".to_string())?,
+        None => going.await,
+    }
+    .map_err(|err| format!("couldn't run git: {err}"))?;
+    match output.status.success() {
+        true => Ok(output.stdout),
+        false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+    }
+}
+
 /// Where the repository `dir` is in stands, with changed files relative to
 /// `dir`. None outside git.
 pub async fn status(dir: &Path) -> Option<GitStatus> {
