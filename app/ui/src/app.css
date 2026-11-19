@@ -1648,7 +1648,7 @@ svg.glyph {
 
 .diff-line {
   display: grid;
-  grid-template-columns: 48px 48px 20px minmax(0, 1fr);
+  grid-template-columns: 18px 44px 44px 20px minmax(0, 1fr);
   cursor: pointer;
 }
 
@@ -1667,6 +1667,43 @@ svg.glyph {
 .diff-line[data-picked] {
   box-shadow: inset 3px 0 0 var(--accent);
   background-image: linear-gradient(var(--picked), var(--picked));
+}
+
+/* The marker of a line that has comments. Filled while they are open, hollow while closed. */
+.diff-flag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.diff-flag .flag {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--dim);
+}
+
+.diff-flag:hover .flag {
+  border-color: var(--ink);
+}
+
+.diff-flag[data-what="open"] .flag {
+  border-color: var(--asking);
+}
+
+.diff-flag[data-what="note"] .flag {
+  border-color: var(--accent);
+}
+
+.diff-flag[aria-expanded="true"] .flag {
+  background: var(--dim);
+}
+
+.diff-flag[data-what="open"][aria-expanded="true"] .flag {
+  background: var(--asking);
+}
+
+.diff-flag[data-what="note"][aria-expanded="true"] .flag {
+  background: var(--accent);
 }
 
 .diff-num {
@@ -1700,7 +1737,7 @@ svg.glyph {
 .diff-gap {
   display: block;
   width: 100%;
-  padding: 2px 0 2px 116px;
+  padding: 2px 0 2px 126px;
   margin: 4px 0;
   color: var(--dim);
   font-size: 12px;
@@ -1716,7 +1753,7 @@ svg.glyph {
 /* What is drawn under a line: a thread, a note, the box you write in. */
 .diff-under {
   margin: 0;
-  padding: 14px 20px 16px 116px;
+  padding: 14px 20px 16px 126px;
   line-height: 1.5;
   background: var(--hover);
   border-top: 1px solid var(--line);
@@ -1743,7 +1780,7 @@ svg.glyph {
 }
 
 .diff-line[data-side] {
-  grid-template-columns: 48px 20px minmax(0, 1fr);
+  grid-template-columns: 18px 44px 20px minmax(0, 1fr);
 }
 
 .diff-blank {

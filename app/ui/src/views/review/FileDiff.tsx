@@ -1,8 +1,9 @@
 // One changed file's diff, in the middle: old and new in one column, or
-// side by side. A thread is drawn under the line it is on. Click a line to
-// comment on it or to ask the agent about it; shift-click another line to
-// cover every line between. What the agent answers shows under those
-// lines, for you alone.
+// side by side. A line that has comments carries a marker at its left,
+// which opens and closes them: a thread still open starts open, resolved
+// ones start closed. Click a line to comment on it or to ask the agent
+// about it; shift-click another line to cover every line between. What
+// the agent answers shows under those lines, for you alone.
 
 import { createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
 import { createAction } from '../../components/action';
@@ -16,7 +17,6 @@ import {
   markViewed,
   type Note,
   notesOf,
-  setHideResolved,
   wholeFile,
 } from '../../state/review';
 import { placeName, type Reviewing } from './parts';
@@ -120,13 +120,8 @@ export function FileDiff(props: {
     setText('');
   };
 
-  /** This file's threads, without the resolved ones while those are hidden. */
-  const here = () =>
-    props.r.review.threads.filter(
-      (thread) => thread.place?.file === props.path && !(hideResolved() && !thread.unresolved),
-    );
-  const resolved = () =>
-    props.r.review.threads.filter((thread) => thread.place?.file === props.path && !thread.unresolved).length;
+  /** This file's threads. */
+  const here = () => props.r.review.threads.filter((thread) => thread.place?.file === props.path);
   // Threads and notes are found by the line they end on, so a line draws its own.
   const threads = createMemo(() => {
     const at = new Map<string, Thread[]>();
@@ -156,8 +151,28 @@ export function FileDiff(props: {
   /** Threads on this file that no line shown draws: on the whole file, on lines gone, or on lines not shown. */
   const loose = createMemo(() => {
     const drawn = new Set(lines().flatMap((line) => under(threads(), line)));
-    return here().filter((thread) => !drawn.has(thread));
+    // With no line to carry a marker, a resolved one follows the overview's switch.
+    return here().filter((thread) => !drawn.has(thread) && (thread.unresolved || !hideResolved()));
   });
+
+  /** What a line has under it: a thread still open, the agent's notes, or only resolved threads. */
+  const flag = (row: number) => {
+    const line = lines()[row];
+    const found = under(threads(), line);
+    if (found.some((thread) => thread.unresolved)) return 'open';
+    if (under(notes(), line).length > 0) return 'note';
+    return found.length > 0 ? 'resolved' : undefined;
+  };
+  // The lines whose comments you opened or closed yourself. The rest follow what is under them.
+  const [byHand, setByHand] = createSignal<Record<string, boolean>>({});
+  const rowKey = (row: number) => `${lines()[row]?.old ?? ''}:${lines()[row]?.new ?? ''}`;
+  const isOpen = (row: number) => byHand()[rowKey(row)] ?? flag(row) !== 'resolved';
+  const toggle = (row: number) => setByHand({ ...byHand(), [rowKey(row)]: !isOpen(row) });
+  /** A line's threads that are drawn: the open ones while the line is open, and the resolved ones only once you open the line yourself. */
+  const shownThreads = (row: number) =>
+    isOpen(row)
+      ? under(threads(), lines()[row]).filter((thread) => thread.unresolved || byHand()[rowKey(row)] === true)
+      : [];
   /** What the agent wrote about lines of this file that are not shown. */
   const looseNotes = createMemo(() => {
     const drawn = new Set(lines().flatMap((line) => under(notes(), line)));
@@ -222,6 +237,29 @@ export function FileDiff(props: {
               pick(p.row, e.shiftKey);
             }}
           >
+            <Show
+              when={flag(p.row) && (p.side === 'old') === (p.side !== undefined && l().kind === 'removed')}
+              fallback={<span />}
+            >
+              <button
+                type="button"
+                class="diff-flag"
+                data-what={flag(p.row)}
+                aria-expanded={isOpen(p.row)}
+                aria-label={
+                  isOpen(p.row) ? 'Close the comments on this line' : 'Open the comments on this line'
+                }
+                title={
+                  flag(p.row) === 'resolved' ? 'Resolved' : flag(p.row) === 'open' ? 'Open' : 'From the agent'
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggle(p.row);
+                }}
+              >
+                <span class="flag" />
+              </button>
+            </Show>
             <Show when={p.side !== 'new'}>
               <span class="diff-num">{l().old ?? ''}</span>
             </Show>
@@ -297,14 +335,14 @@ export function FileDiff(props: {
           </form>
         </div>
       </Show>
-      <For each={under(threads(), lines()[p.row])}>
+      <For each={shownThreads(p.row)}>
         {(thread) => (
           <div class="diff-under">
             <ThreadBox r={props.r} thread={thread} draft={draftFor(thread)} />
           </div>
         )}
       </For>
-      <For each={under(notes(), lines()[p.row])}>
+      <For each={isOpen(p.row) ? under(notes(), lines()[p.row]) : []}>
         {(note) => (
           <div class="diff-under">
             <NoteBox
@@ -359,26 +397,14 @@ export function FileDiff(props: {
                 full
               </button>
             </Show>
-            <Show when={resolved() > 0}>
-              <button
-                type="button"
-                class="quiet"
-                title={`Show the ${resolved()} resolved`}
-                aria-pressed={!hideResolved()}
-                onClick={() => setHideResolved(!hideResolved())}
-              >
-                resolved
-              </button>
-            </Show>
             <button
               type="button"
-              class="viewed-box"
+              class="quiet"
+              title="You have read this file"
               aria-pressed={isViewed(props.r.pull, f())}
-              aria-label="Viewed"
-              title={isViewed(props.r.pull, f()) ? 'Viewed. Click to unmark' : 'Mark as viewed'}
               onClick={() => markViewed(props.r.pull, [f()], !isViewed(props.r.pull, f()))}
             >
-              <span />
+              viewed
             </button>
           </div>
 
