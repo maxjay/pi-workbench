@@ -3,6 +3,7 @@
 //! writes answers and events to stdout through one writer.
 
 mod agent;
+mod codespaces;
 mod conversations;
 mod dova;
 mod error;
@@ -17,20 +18,19 @@ mod review;
 mod terminals;
 mod tickets;
 mod wb;
-mod workspaces;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use codespaces::Codespaces;
 use conversations::Conversations;
 use error::Error;
-use protocol::{Answer, Call, Event, Failure, FailureKind, Request, WorkspaceView};
+use protocol::{Answer, Call, CodespaceView, Event, Failure, FailureKind, Request};
 use terminals::Terminals;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use workspaces::Workspaces;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -38,7 +38,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Ctx {
     /// wbd's one writer: lines for the page.
     out: mpsc::UnboundedSender<String>,
-    workspaces: Arc<Workspaces>,
+    codespaces: Arc<Codespaces>,
     places: places::Places,
     terminals: Terminals,
     conversations: Conversations,
@@ -91,13 +91,13 @@ async fn main() -> ExitCode {
         Some(door) => (door.env.clone(), Some(door.socket.clone())),
         None => (Vec::new(), None),
     };
-    let workspaces = Arc::new(Workspaces::new(&data_dir()));
+    let codespaces = Arc::new(Codespaces::new(&data_dir()));
     let ctx = Arc::new(Ctx {
         out: out.clone(),
-        workspaces: workspaces.clone(),
+        codespaces: codespaces.clone(),
         places: places::Places::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
-        conversations: Conversations::new(&data_dir(), out.clone(), env, workspaces),
+        conversations: Conversations::new(&data_dir(), out.clone(), env, codespaces),
         dova: dova::Dova::default(),
         pulls: pulls::Pulls::default(),
         reviews: review::Reviews::default(),
@@ -195,16 +195,16 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
     Ok(match call {
         Call::Health => Answer::Health(health::check().await),
 
-        Call::WorkspacesList => {
+        Call::CodespacesList => {
             let mut list = Vec::new();
-            for workspace in ctx.workspaces.all() {
-                list.push(view(workspace));
+            for codespace in ctx.codespaces.all() {
+                list.push(view(codespace));
             }
-            Answer::Workspaces { list }
+            Answer::Codespaces { list }
         }
-        Call::WorkspacesOpen { path } => Answer::Workspace(view(ctx.workspaces.open(&path)?)),
-        Call::WorkspacesForget { id } => {
-            ctx.workspaces.forget(&id)?;
+        Call::CodespacesOpen { path } => Answer::Codespace(view(ctx.codespaces.open(&path)?)),
+        Call::CodespacesForget { id } => {
+            ctx.codespaces.forget(&id)?;
             Answer::Done
         }
         Call::ScratchNew { text, repo } => {
@@ -212,18 +212,18 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             let main = repo
                 .as_deref()
                 .map(|clone| repos::name_of(Path::new(clone)));
-            let workspace = ctx.workspaces.scratch(&under, &text, main.as_deref())?;
+            let codespace = ctx.codespaces.scratch(&under, &text, main.as_deref())?;
             if let Some(clone) = repo {
-                let folder = Path::new(&workspace.path);
-                let work = workspace.work.clone().unwrap_or_default();
-                // A workspace whose repo could not be put in is not left behind.
+                let folder = Path::new(&codespace.path);
+                let work = codespace.work.clone().unwrap_or_default();
+                // A codespace whose repo could not be put in is not left behind.
                 if let Err(err) = repos::add(Path::new(&clone), folder, &work).await {
                     let _ = std::fs::remove_dir(folder);
-                    ctx.workspaces.forget(&workspace.id)?;
+                    ctx.codespaces.forget(&codespace.id)?;
                     return Err(err);
                 }
             }
-            Answer::Workspace(view(workspace))
+            Answer::Codespace(view(codespace))
         }
         Call::ReposList => {
             let found = ctx.places.found().await;
@@ -232,7 +232,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 protocol::Folder {
                     name: repos::name_of(path),
                     path: one.path.clone(),
-                    branch: workspaces::branch(path),
+                    branch: codespaces::branch(path),
                 }
             };
             Answer::Folders {
@@ -240,11 +240,11 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 folders: found.iter().map(folder).collect(),
             }
         }
-        Call::WorkspaceRepos { dir } => Answer::Folders {
+        Call::CodespaceRepos { dir } => Answer::Folders {
             folders: repos::inside(Path::new(&dir)),
             dir,
         },
-        Call::WorkspaceAdd { dir, clone, branch } => {
+        Call::CodespaceAdd { dir, clone, branch } => {
             let folder = Path::new(&dir);
             if !repos::takes(folder) {
                 return Err(Error::Conflict(
@@ -252,17 +252,17 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 ));
             }
             let work = ctx
-                .workspaces
+                .codespaces
                 .at(folder)
-                .and_then(|workspace| workspace.work);
+                .and_then(|codespace| codespace.work);
             let branch = branch.or(work).unwrap_or_else(|| repos::branch_for(folder));
             let added = repos::add(Path::new(&clone), folder, &branch).await?;
-            ctx.workspaces.took(folder, &added.name)?;
-            let _ = ctx.out.send(protocol::event(&Event::Workspaces));
+            ctx.codespaces.took(folder, &added.name)?;
+            let _ = ctx.out.send(protocol::event(&Event::Codespaces));
             Answer::Done
         }
         Call::FoldersList { dir } => {
-            let (dir, folders) = workspaces::folders(&dir)?;
+            let (dir, folders) = codespaces::folders(&dir)?;
             Answer::Folders { dir, folders }
         }
 
@@ -420,7 +420,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::TicketsList { words } => Answer::Tickets {
             rows: {
                 let found = ctx.places.found().await;
-                let (clones, _) = pulls::clones(ctx.workspaces.all(), &found).await;
+                let (clones, _) = pulls::clones(ctx.codespaces.all(), &found).await;
                 tickets::list(&ctx.dova, &clones, &words).await?
             },
         },
@@ -552,7 +552,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .teams_with_members(
                     &ctx.dova,
                     &ctx.reviews,
-                    ctx.workspaces.all(),
+                    ctx.codespaces.all(),
                     &ctx.places.found().await,
                 )
                 .await?,
@@ -562,7 +562,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .pulls
                 .find(
                     &ctx.dova,
-                    ctx.workspaces.all(),
+                    ctx.codespaces.all(),
                     &ctx.places.found().await,
                     &text,
                 )
@@ -583,7 +583,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .chosen(
                     &ctx.dova,
                     &ctx.reviews,
-                    ctx.workspaces.all(),
+                    ctx.codespaces.all(),
                     &ctx.places.found().await,
                     pulls::Chosen {
                         people: &people,
@@ -601,7 +601,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .mine(
                     &ctx.dova,
                     &ctx.reviews,
-                    ctx.workspaces.all(),
+                    ctx.codespaces.all(),
                     &ctx.places.found().await,
                 )
                 .await?,
@@ -614,7 +614,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .list(
                     &ctx.dova,
                     &ctx.reviews,
-                    ctx.workspaces.all(),
+                    ctx.codespaces.all(),
                     &ctx.places.found().await,
                 )
                 .await?;
@@ -633,22 +633,22 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
     })
 }
 
-/// A workspace as Home lists it: whether its folder is still there, and the branch it is on.
+/// A codespace as Home lists it: whether its folder is still there, and the branch it is on.
 /// git is not run for it. In a large repo `git status` takes seconds, on a Windows drive far
-/// longer, and nothing that lists or opens a workspace may wait for that.
-fn view(workspace: protocol::Workspace) -> WorkspaceView {
-    let path = Path::new(&workspace.path);
+/// longer, and nothing that lists or opens a codespace may wait for that.
+fn view(codespace: protocol::Codespace) -> CodespaceView {
+    let path = Path::new(&codespace.path);
     let exists = path.is_dir();
-    let branch = exists.then(|| workspaces::branch(path)).flatten();
+    let branch = exists.then(|| codespaces::branch(path)).flatten();
     // A folder that is a repo is not looked into for more.
     let inside = match exists && branch.is_none() {
         true => repos::inside(path),
         false => Vec::new(),
     };
-    WorkspaceView {
+    CodespaceView {
         branch,
         repos: inside.into_iter().map(|repo| repo.name).collect(),
-        workspace,
+        codespace,
         exists,
     }
 }

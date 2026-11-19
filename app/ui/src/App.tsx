@@ -5,23 +5,23 @@ import { For, onCleanup, onMount, Show } from 'solid-js';
 import { OpenFolder, openFolderDialog } from './components/OpenFolder';
 import { type Item, openPalette, Palette } from './components/Palette';
 import { TopBar, titleOf } from './components/TopBar';
-import { active, close, open, pullOf, tabs, ticketOf, workspaceOf } from './state/tabs';
-import { workspaces } from './state/workspaces';
+import { codespaces } from './state/codespaces';
+import { active, close, codespaceOf, open, pullOf, tabs, ticketOf } from './state/tabs';
+import { CodespacePage } from './views/Codespace';
 import { Home } from './views/Home';
 import { PullPage } from './views/pull/Page';
 import { SettingsPage } from './views/Settings';
 import { TicketPage } from './views/ticket/Page';
-import { WorkspacePage } from './views/Workspace';
 
-/** Ctrl K's list: the open tabs, every workspace, and what you can do. */
+/** Ctrl K's list: the open tabs, every codespace, and what you can do. */
 function go() {
   const items: Item[] = [
     ...tabs().map((tab) => ({ group: 'Open tabs', title: titleOf(tab), run: () => open(tab) })),
-    ...(workspaces() ?? []).map((view) => ({
+    ...(codespaces() ?? []).map((view) => ({
       group: 'Codespaces',
-      title: view.workspace.name,
-      detail: view.workspace.path,
-      run: () => open(`ws:${view.workspace.id}`),
+      title: view.codespace.name,
+      detail: view.codespace.path,
+      run: () => open(`cs:${view.codespace.id}`),
     })),
     { group: 'Do', title: 'Open folder', detail: 'as a codespace', run: openFolderDialog },
     { group: 'Do', title: 'Settings', detail: 'agents, this machine', run: () => open('settings') },
@@ -51,11 +51,11 @@ export function App() {
         <Show when={active() === 'settings'}>
           <SettingsPage />
         </Show>
-        {/* A workspace's page stays mounted while its tab is open, so its editor keeps its place. */}
-        <For each={tabs().filter((tab) => workspaceOf(tab))}>
+        {/* A codespace's page stays mounted while its tab is open, so its editor keeps its place. */}
+        <For each={tabs().filter((tab) => codespaceOf(tab))}>
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
-              <WorkspacePage id={workspaceOf(tab) as string} />
+              <CodespacePage id={codespaceOf(tab) as string} />
             </div>
           )}
         </For>
@@ -63,14 +63,14 @@ export function App() {
         <For each={tabs().filter((tab) => pullOf(tab))}>
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
-              <PullPage tab={tab} workspace={pullOf(tab)?.workspace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
+              <PullPage tab={tab} codespace={pullOf(tab)?.codespace ?? ''} pr={pullOf(tab)?.pr ?? 0} />
             </div>
           )}
         </For>
         <For each={tabs().filter((tab) => ticketOf(tab))}>
           {(tab) => (
             <div class="page" hidden={active() !== tab}>
-              <TicketPage tab={tab} workspace={ticketOf(tab)?.workspace ?? ''} id={ticketOf(tab)?.id ?? 0} />
+              <TicketPage tab={tab} codespace={ticketOf(tab)?.codespace ?? ''} id={ticketOf(tab)?.id ?? 0} />
             </div>
           )}
         </For>

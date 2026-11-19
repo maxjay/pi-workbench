@@ -71,10 +71,10 @@ pub struct PullRow {
     /// Its latest check, if it has one.
     pub check: Option<PipelineRun>,
     pub open_threads: u32,
-    /// Where it opens from: the workspace that has its repo, by its id, or else a clone of
+    /// Where it opens from: the codespace that has its repo, by its id, or else a clone of
     /// the repo in your repos folder, by its path. Nothing when neither is there.
     #[serde(default)]
-    pub workspace: Option<String>,
+    pub codespace: Option<String>,
     /// Who opened it.
     #[serde(default)]
     pub author: Option<String>,
@@ -136,7 +136,7 @@ pub struct RepoPick {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export)]
 pub struct Asked {
-    /// The workspace's name.
+    /// The codespace's name.
     pub name: String,
     /// Where it is cloned from, when it has a remote. Without any sign-in that was written in it.
     pub remote: Option<String>,
@@ -158,7 +158,7 @@ pub struct WorkItemRef {
     pub state: Option<String>,
 }
 
-/// A branch and its pull request, as the workspace shows them: what dova's
+/// A branch and its pull request, as the codespace shows them: what dova's
 /// `status` says. `pr` is None for a branch that has none yet.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

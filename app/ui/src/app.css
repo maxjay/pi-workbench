@@ -349,7 +349,7 @@ svg.glyph {
 }
 
 /* Home's tables are all one table: your tickets, your pull requests, the ones to review, your
-   workspaces. A line on top, and one under every row. A row is 44px high and has four columns: a
+   codespaces. A line on top, and one under every row. A row is 44px high and has four columns: a
    short lead, the name, and two facts about it. So the names start at one place in every table,
    and the facts stand under each other from one table to the next. No table has a head: a fact
    is a word that says what it is. A fact with nothing to say is left empty. */
@@ -373,7 +373,7 @@ svg.glyph {
   font-weight: 500;
 }
 
-/* A few quiet words after a name: that a pull request is a draft, where a workspace's folder is. */
+/* A few quiet words after a name: that a pull request is a draft, where a codespace's folder is. */
 .table-aside {
   margin-left: 12px;
   font-size: 12px;
@@ -407,7 +407,7 @@ svg.glyph {
   color: var(--working);
 }
 
-/* A workspace: lists on the left, the thing you picked in the middle */
+/* A codespace: lists on the left, the thing you picked in the middle */
 
 /* Left: lists. Middle: what you picked, terminals under it. Right: the agent.
    While nothing is open in the middle, the agent has it. */
@@ -446,7 +446,7 @@ svg.glyph {
   padding: 6px 20px;
 }
 
-/* A repo's name over its changes, in a workspace that holds several. */
+/* A repo's name over its changes, in a codespace that holds several. */
 .left-group {
   padding: 12px 20px 0;
   font-weight: 600;
@@ -1429,7 +1429,7 @@ svg.glyph {
   opacity: 0.6;
 }
 
-/* A branch's pull request, in a workspace's Changes */
+/* A branch's pull request, in a codespace's Changes */
 
 .branch-pull {
   display: flex;

@@ -5,25 +5,25 @@
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import { ticketHue } from '../../components/hues';
+import { codespaceById } from '../../state/codespaces';
 import { pulls } from '../../state/pulls';
 import { open } from '../../state/tabs';
 import { fileTicket, findTickets, tickets, words } from '../../state/tickets';
-import { workspaceById } from '../../state/workspaces';
 
 export function Tickets() {
   const [title, setTitle] = createSignal('');
   /** A folder to file a new ticket from: one that a ticket or a pull request was listed from. */
-  const from = () => tickets.latest?.[0]?.workspace ?? pulls.latest?.find((row) => row.workspace)?.workspace;
+  const from = () => tickets.latest?.[0]?.codespace ?? pulls.latest?.find((row) => row.codespace)?.codespace;
   /** The type last asked for, kept so a team can be picked for it. */
   const [kind, setKind] = createSignal('Task');
   const filing = createAction(async (type: string, team: string | null = null) => {
-    const [workspace, name] = [from(), title().trim()];
-    const dir = workspace && workspaceById(workspace)?.workspace.path;
-    if (!workspace || !dir || !name) return;
+    const [codespace, name] = [from(), title().trim()];
+    const dir = codespace && codespaceById(codespace)?.codespace.path;
+    if (!codespace || !dir || !name) return;
     setKind(type);
     const id = await fileTicket(dir, name, type, team);
     setTitle('');
-    open(`wi:${workspace}:${id}`);
+    open(`wi:${codespace}:${id}`);
   });
   /** A project with more than one team: dova says which there are, and one is picked here. */
   const teams = () => {
@@ -68,7 +68,7 @@ export function Tickets() {
           }
         >
           {(row) => (
-            <button type="button" class="row table-row" onClick={() => open(`wi:${row.workspace}:${row.id}`)}>
+            <button type="button" class="row table-row" onClick={() => open(`wi:${row.codespace}:${row.id}`)}>
               <span style={{ color: ticketHue(row.type) }}>#{row.id}</span>
               <span class="table-name">{row.title}</span>
               <span class="dim">{row.type}</span>

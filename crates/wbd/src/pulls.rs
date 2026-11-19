@@ -1,5 +1,5 @@
 //! Your pull requests, for Home: asked from dova, once for each Azure DevOps
-//! project your workspaces are cloned from, with the reason under each one
+//! project your codespaces are cloned from, with the reason under each one
 //! that needs you. And the ones of other people that you chose to see, asked
 //! from Azure DevOps itself: one call for each repo, project or person.
 
@@ -7,17 +7,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use protocol::{
-    Asked, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName, RepoPick,
-    Reviewing, Team, ThreadSummary, WorkItemRef, Workspace,
+    Asked, Codespace, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName,
+    RepoPick, Reviewing, Team, ThreadSummary, WorkItemRef,
 };
 use serde_json::{Value, json};
 
+use crate::codespaces;
 use crate::dova::Dova;
 use crate::error::Error;
 use crate::git;
 use crate::places::Found;
 use crate::review::Reviews;
-use crate::workspaces;
 
 #[derive(Default)]
 pub struct Pulls {
@@ -47,11 +47,11 @@ struct Mine {
 /// The most of each kind a search gives back.
 const FOUND: usize = 8;
 
-/// A folder cloned from Azure Repos that things can be asked from: a workspace, or a clone
+/// A folder cloned from Azure Repos that things can be asked from: a codespace, or a clone
 /// found in your repos folder.
 pub struct Clone {
-    /// What the page opens a pull request or a ticket from: a workspace's id, or for a
-    /// clone that is not a workspace its path.
+    /// What the page opens a pull request or a ticket from: a codespace's id, or for a
+    /// clone that is not a codespace its path.
     pub key: String,
     pub path: String,
     /// Its remote without the repo's name: the same for every repo in a project.
@@ -60,17 +60,17 @@ pub struct Clone {
     pub branch: Option<String>,
 }
 
-/// The folders cloned from Azure Repos: your workspaces first, then the clones found in your
-/// repos folder that are not workspaces. With them, every workspace that was looked at.
-pub async fn clones(workspaces: Vec<Workspace>, found: &[Found]) -> (Vec<Clone>, Vec<Asked>) {
+/// The folders cloned from Azure Repos: your codespaces first, then the clones found in your
+/// repos folder that are not codespaces. With them, every codespace that was looked at.
+pub async fn clones(codespaces: Vec<Codespace>, found: &[Found]) -> (Vec<Clone>, Vec<Asked>) {
     let mut clones: Vec<Clone> = Vec::new();
     let mut looked = Vec::new();
-    for workspace in workspaces.into_iter().filter(|w| !w.scratch) {
-        let dir = std::path::Path::new(&workspace.path);
+    for codespace in codespaces.into_iter().filter(|w| !w.scratch) {
+        let dir = std::path::Path::new(&codespace.path);
         let remote = git::origin(dir).await;
         let on_azure = remote.as_deref().and_then(azure);
         looked.push(Asked {
-            name: workspace.name.clone(),
+            name: codespace.name.clone(),
             remote: remote.as_deref().map(without_sign_in),
             project: on_azure.as_ref().map(|(project, _)| project_name(project)),
         });
@@ -78,10 +78,10 @@ pub async fn clones(workspaces: Vec<Workspace>, found: &[Found]) -> (Vec<Clone>,
             continue;
         };
         clones.push(Clone {
-            key: workspace.id,
+            key: codespace.id,
             // Read from the folder: `git status` takes seconds in a large repo.
-            branch: workspaces::branch(dir),
-            path: workspace.path,
+            branch: codespaces::branch(dir),
+            path: codespace.path,
             project,
             repo,
         });
@@ -95,7 +95,7 @@ pub async fn clones(workspaces: Vec<Workspace>, found: &[Found]) -> (Vec<Clone>,
         }
         clones.push(Clone {
             key: one.path.clone(),
-            branch: workspaces::branch(std::path::Path::new(&one.path)),
+            branch: codespaces::branch(std::path::Path::new(&one.path)),
             path: one.path.clone(),
             project,
             repo,
@@ -115,16 +115,16 @@ fn one_each(clones: &[Clone]) -> Vec<&Clone> {
 
 impl Pulls {
     /// The pull requests you opened, as Azure DevOps' own list has them: one request to each
-    /// organization a workspace is cloned from, whatever number of projects they are in. They
+    /// organization a codespace is cloned from, whatever number of projects they are in. They
     /// come without a check and threads, which take requests for each one.
     pub async fn mine(
         &self,
         dova: &Dova,
         reviews: &Reviews,
-        workspaces: Vec<Workspace>,
+        codespaces: Vec<Codespace>,
         found: &[Found],
     ) -> Result<Vec<PullRow>, Error> {
-        let (clones, _) = clones(workspaces, found).await;
+        let (clones, _) = clones(codespaces, found).await;
         let mut rows = Vec::new();
         for clone in one_each(&clones) {
             let cwd = &clone.path;
@@ -141,7 +141,7 @@ impl Pulls {
                 };
                 // The ones you opened are listed as yours, even where you are a reviewer too.
                 row.review = None;
-                row.workspace = home(&clones, &row);
+                row.codespace = home(&clones, &row);
                 rows.push(row);
             }
         }
@@ -149,17 +149,17 @@ impl Pulls {
     }
 
     /// The pull requests you opened, each with its check and how many threads are open, in
-    /// the whole of each organization a workspace is cloned from: its other projects
+    /// the whole of each organization a codespace is cloned from: its other projects
     /// too. With them, every folder that was looked at and every project that was asked, so
     /// an empty list can say why. This takes requests for each pull request.
     pub async fn list(
         &self,
         dova: &Dova,
         reviews: &Reviews,
-        workspaces: Vec<Workspace>,
+        codespaces: Vec<Codespace>,
         found: &[Found],
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
-        let (clones, looked) = clones(workspaces, found).await;
+        let (clones, looked) = clones(codespaces, found).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut searched = Vec::new();
         for clone in one_each(&clones) {
@@ -203,7 +203,7 @@ impl Pulls {
                     }
                     // The ones you opened are listed as yours, even where you are a reviewer too.
                     row.review = None;
-                    row.workspace = home(&clones, &row);
+                    row.codespace = home(&clones, &row);
                     rows.push(row);
                 }
                 searched.push(project);
@@ -215,14 +215,14 @@ impl Pulls {
     /// The open pull requests of other people that you chose to see: the ones in `repos`,
     /// and the ones opened by `people`, who are given by their accounts. With `both`, and
     /// with repos and people both given, only the ones by one of the people in one of the
-    /// repos. One call for each repo, project or person, in each organization a workspace is
+    /// repos. One call for each repo, project or person, in each organization a codespace is
     /// cloned from; nothing else is asked for. The rows come without a check and threads.
     /// Each says whether you or a team you are in is a reviewer, and those come first.
     pub async fn chosen(
         &self,
         dova: &Dova,
         reviews: &Reviews,
-        workspaces: Vec<Workspace>,
+        codespaces: Vec<Codespace>,
         found: &[Found],
         chosen: Chosen<'_>,
     ) -> Result<Vec<PullRow>, Error> {
@@ -253,7 +253,7 @@ impl Pulls {
             return Ok(Vec::new());
         }
 
-        let (clones, _) = clones(workspaces, found).await;
+        let (clones, _) = clones(codespaces, found).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut seen = HashSet::new();
         // A repo or person that is not in one organization is in another, so one call that
@@ -288,7 +288,7 @@ impl Pulls {
                     if !seen.insert(key) {
                         continue;
                     }
-                    row.workspace = home(&clones, &row);
+                    row.codespace = home(&clones, &row);
                     rows.push(row);
                 }
             }
@@ -336,10 +336,10 @@ impl Pulls {
         &self,
         dova: &Dova,
         reviews: &Reviews,
-        workspaces: Vec<Workspace>,
+        codespaces: Vec<Codespace>,
         found: &[Found],
     ) -> Result<Vec<Team>, Error> {
-        let (clones, _) = clones(workspaces, found).await;
+        let (clones, _) = clones(codespaces, found).await;
         let mut teams = Vec::new();
         for clone in one_each(&clones) {
             let cwd = &clone.path;
@@ -393,11 +393,11 @@ impl Pulls {
     }
 
     /// The people, repos and projects that have `text` in their name, in each organization a
-    /// workspace is cloned from. A few of each. What an organization will not give is left out.
+    /// codespace is cloned from. A few of each. What an organization will not give is left out.
     pub async fn find(
         &self,
         dova: &Dova,
-        workspaces: Vec<Workspace>,
+        codespaces: Vec<Codespace>,
         found: &[Found],
         text: &str,
     ) -> (Vec<Person>, Vec<RepoName>, Vec<String>) {
@@ -406,7 +406,7 @@ impl Pulls {
         if text.is_empty() {
             return (people, repos, projects);
         }
-        let (clones, _) = clones(workspaces, found).await;
+        let (clones, _) = clones(codespaces, found).await;
         for clone in one_each(&clones) {
             let cwd = &clone.path;
             let site = site(organization(&clone.project));
@@ -619,7 +619,7 @@ fn review_row(pull: &Value, site: &str, me: &str, teams: &[Mine]) -> Option<Pull
         },
         check: None,
         open_threads: 0,
-        workspace: None,
+        codespace: None,
         author: pull["createdBy"]["displayName"]
             .as_str()
             .map(str::to_string),
@@ -718,7 +718,7 @@ fn organization(project: &str) -> &str {
         .map_or(named, |(organization, _)| organization)
 }
 
-/// Where a pull request opens from: the folder that has its repo. A workspace comes before a
+/// Where a pull request opens from: the folder that has its repo. A codespace comes before a
 /// clone that is not one, and among several the one on its branch.
 fn home(clones: &[Clone], row: &PullRow) -> Option<String> {
     let mut here = clones.iter().filter(|clone| {
@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pull_request_belongs_to_the_workspace_on_its_branch() {
+    fn a_pull_request_belongs_to_the_codespace_on_its_branch() {
         let clone = |id: &str, repo: &str, branch: &str| Clone {
             key: id.into(),
             path: String::new(),
@@ -854,7 +854,7 @@ mod tests {
             },
             check: None,
             open_threads: 0,
-            workspace: None,
+            codespace: None,
             author: None,
             author_id: None,
             review: None,

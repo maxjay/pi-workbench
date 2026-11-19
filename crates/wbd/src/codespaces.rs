@@ -1,22 +1,22 @@
-//! The workspaces: folders opened in the workbench, kept in
-//! `workspaces.json` in wbd's data folder. Nothing is written into the
+//! The codespaces: folders opened in the workbench, kept in
+//! `codespaces.json` in wbd's data folder. Nothing is written into the
 //! folders themselves.
 //!
-//! The folders under `~/.pi/workspaces` are workspaces without being
+//! The folders under `~/.pi/workspaces` are codespaces without being
 //! opened by hand: each is taken in the first time it is seen there.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use protocol::{Folder, Workspace};
+use protocol::{Codespace, Folder};
 
 use crate::error::Error;
 use crate::files;
 
-pub struct Workspaces {
+pub struct Codespaces {
     file: PathBuf,
-    list: Mutex<Vec<Workspace>>,
+    list: Mutex<Vec<Codespace>>,
     /// Where Pi's own workspaces are: `~/.pi/workspaces`, or what `WB_PI_WORKSPACES` names.
     pi: Option<PathBuf>,
     /// The folders that were taken in from there, kept in `adopted.json`. One you take off the
@@ -25,7 +25,7 @@ pub struct Workspaces {
     adopted: Mutex<Vec<String>>,
 }
 
-impl Workspaces {
+impl Codespaces {
     pub fn new(data_dir: &Path) -> Self {
         let pi = std::env::var_os("WB_PI_WORKSPACES")
             .map(PathBuf::from)
@@ -37,7 +37,13 @@ impl Workspaces {
 
     /// The store, with `pi` as the folder Pi's own workspaces are in, if there is one.
     fn beside(data_dir: &Path, pi: Option<PathBuf>) -> Self {
-        let file = data_dir.join("workspaces.json");
+        let file = data_dir.join("codespaces.json");
+        // The list had another name when these were called workspaces. It is kept, under
+        // the new one.
+        let before = data_dir.join("workspaces.json");
+        if !file.exists() && before.exists() {
+            let _ = std::fs::rename(&before, &file);
+        }
         let list = std::fs::read_to_string(&file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
@@ -47,7 +53,7 @@ impl Workspaces {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
-        Workspaces {
+        Codespaces {
             file,
             list: Mutex::new(list),
             pi,
@@ -57,23 +63,23 @@ impl Workspaces {
     }
 
     /// The last opened first.
-    pub fn all(&self) -> Vec<Workspace> {
+    pub fn all(&self) -> Vec<Codespace> {
         self.adopt();
         let mut list = self.list.lock().expect("not poisoned").clone();
-        list.sort_by_key(|workspace| std::cmp::Reverse(workspace.opened));
+        list.sort_by_key(|codespace| std::cmp::Reverse(codespace.opened));
         list
     }
 
-    /// Makes an empty folder in `under` for what you asked, and opens it as a workspace the
+    /// Makes an empty folder in `under` for what you asked, and opens it as a codespace the
     /// workbench made. Its work is named after the first words you wrote, until it is named.
-    /// With `main`, a repo's name, the workspace is called after both: the repo is put in
+    /// With `main`, a repo's name, the codespace is called after both: the repo is put in
     /// by whoever asked.
     pub fn scratch(
         &self,
         under: &Path,
         text: &str,
         main: Option<&str>,
-    ) -> Result<Workspace, Error> {
+    ) -> Result<Codespace, Error> {
         let words = slug(text);
         let called = |work: &str| match main {
             Some(main) => format!("{main}-{work}"),
@@ -88,56 +94,56 @@ impl Workspaces {
             .expect("some number is free");
         let folder = under.join(called(&work));
         std::fs::create_dir_all(&folder).map_err(|err| Error::io(&folder, err))?;
-        self.add(&folder.display().to_string(), |workspace| {
-            workspace.scratch = true;
-            workspace.main = main.map(str::to_string);
-            workspace.work = Some(work);
+        self.add(&folder.display().to_string(), |codespace| {
+            codespace.scratch = true;
+            codespace.main = main.map(str::to_string);
+            codespace.work = Some(work);
         })
     }
 
-    /// Opens a folder as a workspace, or opens it again.
-    pub fn open(&self, path: &str) -> Result<Workspace, Error> {
+    /// Opens a folder as a codespace, or opens it again.
+    pub fn open(&self, path: &str) -> Result<Codespace, Error> {
         self.add(path, |_| {})
     }
 
-    /// The workspace whose folder is `path`.
-    pub fn at(&self, path: &Path) -> Option<Workspace> {
+    /// The codespace whose folder is `path`.
+    pub fn at(&self, path: &Path) -> Option<Codespace> {
         let list = self.list.lock().expect("not poisoned");
         list.iter()
-            .find(|workspace| Path::new(&workspace.path) == path)
+            .find(|codespace| Path::new(&codespace.path) == path)
             .cloned()
     }
 
-    /// Names the work in the workspace at `path`, and so the workspace.
+    /// Names the work in the codespace at `path`, and so the codespace.
     pub fn name(&self, path: &Path, work: &str) -> Result<(), Error> {
         self.change(|list| {
             let found = list
                 .iter_mut()
-                .find(|workspace| Path::new(&workspace.path) == path);
-            if let Some(workspace) = found {
-                workspace.work = Some(work.to_string());
-                workspace.named = true;
-                workspace.name = called(workspace);
+                .find(|codespace| Path::new(&codespace.path) == path);
+            if let Some(codespace) = found {
+                codespace.work = Some(work.to_string());
+                codespace.named = true;
+                codespace.name = called(codespace);
             }
         })
     }
 
-    /// A repo was put into the workspace at `path`. In one the workbench made that had none,
-    /// it is the main repo from now on, and the workspace is called after it.
+    /// A repo was put into the codespace at `path`. In one the workbench made that had none,
+    /// it is the main repo from now on, and the codespace is called after it.
     pub fn took(&self, path: &Path, repo: &str) -> Result<(), Error> {
         self.change(|list| {
             let found = list
                 .iter_mut()
-                .find(|workspace| Path::new(&workspace.path) == path);
-            if let Some(workspace) = found.filter(|one| one.scratch && one.main.is_none()) {
-                workspace.work.get_or_insert_with(|| workspace.name.clone());
-                workspace.main = Some(repo.to_string());
-                workspace.name = called(workspace);
+                .find(|codespace| Path::new(&codespace.path) == path);
+            if let Some(codespace) = found.filter(|one| one.scratch && one.main.is_none()) {
+                codespace.work.get_or_insert_with(|| codespace.name.clone());
+                codespace.main = Some(repo.to_string());
+                codespace.name = called(codespace);
             }
         })
     }
 
-    fn add(&self, path: &str, made: impl FnOnce(&mut Workspace)) -> Result<Workspace, Error> {
+    fn add(&self, path: &str, made: impl FnOnce(&mut Codespace)) -> Result<Codespace, Error> {
         let path = expand(path);
         if !path.is_dir() {
             return Err(Error::NotFound(format!("no folder at {}", path.display())));
@@ -148,28 +154,28 @@ impl Workspaces {
             .map_or(0, |since| since.as_millis() as u64);
         self.change(|list| {
             let path = path.display().to_string();
-            if let Some(workspace) = list.iter_mut().find(|workspace| workspace.path == path) {
-                workspace.opened = now;
-                return workspace.clone();
+            if let Some(codespace) = list.iter_mut().find(|codespace| codespace.path == path) {
+                codespace.opened = now;
+                return codespace.clone();
             }
-            let mut workspace = Workspace {
+            let mut codespace = Codespace {
                 id: new_id(list, now),
                 name: name_of(Path::new(&path)),
                 path,
                 opened: now,
-                ..Workspace::default()
+                ..Codespace::default()
             };
-            made(&mut workspace);
-            if workspace.scratch {
-                workspace.name = called(&workspace);
+            made(&mut codespace);
+            if codespace.scratch {
+                codespace.name = called(&codespace);
             }
-            list.push(workspace.clone());
-            workspace
+            list.push(codespace.clone());
+            codespace
         })
     }
 
     /// Takes in the folders under Pi's workspaces that were not seen before. A folder that is a
-    /// repo is one workspace. A folder that only holds repos gives one for each of them.
+    /// repo is one codespace. A folder that only holds repos gives one for each of them.
     fn adopt(&self) {
         let Some(found) = self.pi.as_deref().map(under) else {
             return;
@@ -193,15 +199,15 @@ impl Workspaces {
                 .map_or(0, |since| since.as_millis() as u64);
             let path = folder.display().to_string();
             let _ = self.change(|list| {
-                if list.iter().any(|workspace| workspace.path == path) {
+                if list.iter().any(|codespace| codespace.path == path) {
                     return;
                 }
-                list.push(Workspace {
+                list.push(Codespace {
                     id: new_id(list, changed),
                     name: name_of(folder),
                     path: path.clone(),
                     opened: changed,
-                    ..Workspace::default()
+                    ..Codespace::default()
                 });
             });
         }
@@ -213,13 +219,13 @@ impl Workspaces {
     }
 
     pub fn forget(&self, id: &str) -> Result<(), Error> {
-        self.change(|list| list.retain(|workspace| workspace.id != id))
+        self.change(|list| list.retain(|codespace| codespace.id != id))
     }
 
-    fn change<R>(&self, edit: impl FnOnce(&mut Vec<Workspace>) -> R) -> Result<R, Error> {
+    fn change<R>(&self, edit: impl FnOnce(&mut Vec<Codespace>) -> R) -> Result<R, Error> {
         let mut list = self.list.lock().expect("not poisoned");
         let result = edit(&mut list);
-        let text = serde_json::to_string_pretty(&*list).expect("workspaces serialize");
+        let text = serde_json::to_string_pretty(&*list).expect("codespaces serialize");
         if let Some(dir) = self.file.parent() {
             std::fs::create_dir_all(dir).map_err(|err| Error::io(dir, err))?;
         }
@@ -281,10 +287,10 @@ pub fn folders(dir: &str) -> Result<(String, Vec<Folder>), Error> {
     Ok((dir.display().to_string(), folders))
 }
 
-/// What a workspace the workbench made is called: its main repo and the name of its work.
-fn called(workspace: &Workspace) -> String {
-    let work = workspace.work.as_deref().unwrap_or(&workspace.name);
-    match &workspace.main {
+/// What a codespace the workbench made is called: its main repo and the name of its work.
+fn called(codespace: &Codespace) -> String {
+    let work = codespace.work.as_deref().unwrap_or(&codespace.name);
+    match &codespace.main {
         Some(main) => format!("{main}-{work}"),
         None => work.to_string(),
     }
@@ -343,12 +349,12 @@ fn slug(text: &str) -> String {
     }
 }
 
-/// A short id no workspace has yet: the time it was made, in base 36.
-fn new_id(list: &[Workspace], now: u64) -> String {
+/// A short id no codespace has yet: the time it was made, in base 36.
+fn new_id(list: &[Codespace], now: u64) -> String {
     let mut n = now;
     loop {
         let id = base36(n);
-        if list.iter().all(|workspace| workspace.id != id) {
+        if list.iter().all(|codespace| codespace.id != id) {
             return id;
         }
         n += 1;
@@ -384,20 +390,20 @@ mod tests {
         std::fs::create_dir_all(pi.path().join("notes")).unwrap();
         std::fs::create_dir_all(pi.path().join(".cache")).unwrap();
 
-        let workspaces = Workspaces::beside(data.path(), Some(pi.path().to_path_buf()));
-        let mut names: Vec<String> = workspaces.all().into_iter().map(|w| w.name).collect();
+        let codespaces = Codespaces::beside(data.path(), Some(pi.path().to_path_buf()));
+        let mut names: Vec<String> = codespaces.all().into_iter().map(|w| w.name).collect();
         names.sort();
         assert_eq!(names, ["api", "notes", "site", "web"]);
 
         // One taken off the list stays off, in this wbd and in the next.
-        let web = workspaces
+        let web = codespaces
             .all()
             .into_iter()
             .find(|w| w.name == "web")
             .unwrap();
-        workspaces.forget(&web.id).unwrap();
-        assert_eq!(workspaces.all().len(), 3);
-        let next = Workspaces::beside(data.path(), Some(pi.path().to_path_buf()));
+        codespaces.forget(&web.id).unwrap();
+        assert_eq!(codespaces.all().len(), 3);
+        let next = Codespaces::beside(data.path(), Some(pi.path().to_path_buf()));
         assert_eq!(next.all().len(), 3);
 
         // A folder that comes later is taken in then.
@@ -412,20 +418,20 @@ mod tests {
         std::fs::create_dir(code.path().join("web")).unwrap();
         std::fs::create_dir(code.path().join("api")).unwrap();
 
-        let workspaces = Workspaces::beside(data.path(), None);
-        let web = workspaces
+        let codespaces = Codespaces::beside(data.path(), None);
+        let web = codespaces
             .open(&code.path().join("web").display().to_string())
             .unwrap();
         assert_eq!(web.name, "web");
-        let api = workspaces
+        let api = codespaces
             .open(&code.path().join("api").display().to_string())
             .unwrap();
         // Opening one again doesn't list it twice.
-        let again = workspaces.open(&web.path).unwrap();
+        let again = codespaces.open(&web.path).unwrap();
         assert_eq!(again.id, web.id);
 
         // A new wbd reads the same list back.
-        let reread = Workspaces::beside(data.path(), None);
+        let reread = Codespaces::beside(data.path(), None);
         assert_eq!(reread.all().len(), 2);
 
         reread.forget(&api.id).unwrap();
@@ -460,15 +466,15 @@ mod tests {
     #[test]
     fn a_scratchpad_gets_a_folder_named_after_what_you_asked() {
         let data = tempfile::tempdir().unwrap();
-        let workspaces = Workspaces::beside(data.path(), None);
-        let under = data.path().join("workspaces");
-        let first = workspaces
+        let codespaces = Codespaces::beside(data.path(), None);
+        let under = data.path().join("codespaces");
+        let first = codespaces
             .scratch(&under, "Why does checkout crash on run?", None)
             .unwrap();
         assert_eq!(first.name, "why-does-checkout-crash-on");
         assert!(first.scratch && Path::new(&first.path).is_dir());
         // The same question again gets a folder of its own.
-        let second = workspaces
+        let second = codespaces
             .scratch(&under, "Why does checkout crash on run?", None)
             .unwrap();
         assert_eq!(second.name, "why-does-checkout-crash-on-2");
@@ -476,28 +482,28 @@ mod tests {
     }
 
     #[test]
-    fn a_workspace_is_called_after_its_main_repo_and_its_work() {
+    fn a_codespace_is_called_after_its_main_repo_and_its_work() {
         let data = tempfile::tempdir().unwrap();
-        let workspaces = Workspaces::beside(data.path(), None);
-        let under = data.path().join("workspaces");
+        let codespaces = Codespaces::beside(data.path(), None);
+        let under = data.path().join("codespaces");
         // Started from a repo: called after both from the start.
-        let started = workspaces
+        let started = codespaces
             .scratch(&under, "Fix the login", Some("web"))
             .unwrap();
         assert_eq!(started.name, "web-fix-the-login");
         assert_eq!(started.work.as_deref(), Some("fix-the-login"));
         let path = Path::new(&started.path);
-        workspaces.name(path, "login-redirect").unwrap();
-        let named = workspaces.at(path).unwrap();
+        codespaces.name(path, "login-redirect").unwrap();
+        let named = codespaces.at(path).unwrap();
         assert_eq!(named.name, "web-login-redirect");
         assert!(named.named);
 
         // Started with no repo: the first one put in is the main one, a later one is not.
-        let plain = workspaces.scratch(&under, "Look around", None).unwrap();
+        let plain = codespaces.scratch(&under, "Look around", None).unwrap();
         let path = Path::new(&plain.path);
-        workspaces.took(path, "api").unwrap();
-        workspaces.took(path, "docs").unwrap();
-        let took = workspaces.at(path).unwrap();
+        codespaces.took(path, "api").unwrap();
+        codespaces.took(path, "docs").unwrap();
+        let took = codespaces.at(path).unwrap();
         assert_eq!(took.name, "api-look-around");
         assert_eq!(took.main.as_deref(), Some("api"));
     }
@@ -506,11 +512,11 @@ mod tests {
     fn ids_are_short_and_differ() {
         assert_eq!(base36(0), "0");
         assert_eq!(base36(36), "10");
-        let taken = [Workspace {
+        let taken = [Codespace {
             id: base36(5),
             path: String::new(),
             name: String::new(),
-            ..Workspace::default()
+            ..Codespace::default()
         }];
         assert_eq!(new_id(&taken, 5), base36(6));
     }

@@ -11,10 +11,10 @@ export type PullRow = {
  */
 check: PipelineRun | null, openThreads: number, 
 /**
- * Where it opens from: the workspace that has its repo, by its id, or else a clone of
+ * Where it opens from: the codespace that has its repo, by its id, or else a clone of
  * the repo in your repos folder, by its path. Nothing when neither is there.
  */
-workspace: string | null, 
+codespace: string | null, 
 /**
  * Who opened it.
  */

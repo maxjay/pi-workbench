@@ -15,9 +15,9 @@ use crate::{Comment, WorkItemRef};
 pub struct TicketRow {
     #[serde(flatten)]
     pub item: WorkItemRef,
-    /// Where it was asked from: a workspace, by its id, or a clone in your repos folder, by
+    /// Where it was asked from: a codespace, by its id, or a clone in your repos folder, by
     /// its path. Either is a folder cloned from its organization.
-    pub workspace: String,
+    pub codespace: String,
 }
 
 /// A ticket, with everything its tab shows.

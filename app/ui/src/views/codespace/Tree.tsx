@@ -1,4 +1,4 @@
-// The Files list: the workspace's folders and files as a tree, with git's
+// The Files list: the codespace's folders and files as a tree, with git's
 // mark beside a file that changed.
 
 import { For, Show } from 'solid-js';
@@ -16,12 +16,12 @@ export const marks: Record<GitMark, { letter: string; state: 'working' | 'ok' | 
 };
 
 export function Tree(props: {
-  /** What each folder that was read holds, by path relative to the workspace. */
+  /** What each folder that was read holds, by path relative to the codespace. */
   folders: Record<string, Listing>;
   expanded: string[];
   /** Git's mark for each changed file, by relative path. */
   changed: Map<string, GitMark>;
-  /** The file shown in the editor, relative to the workspace. */
+  /** The file shown in the editor, relative to the codespace. */
   current: string | undefined;
   onOpen: (path: string) => void;
   /** Opens a folder, or shuts it if it is open. */

@@ -12,21 +12,21 @@
 //! These Rust types are the source. `cargo test -p protocol` writes the
 //! TypeScript ones into app/ui/src/protocol.
 
+mod codespace;
 mod conversation;
 mod pulls;
 mod review;
 mod tickets;
-mod workspace;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use ts_rs::TS;
 
+pub use codespace::*;
 pub use conversation::*;
 pub use pulls::*;
 pub use review::*;
 pub use tickets::*;
-pub use workspace::*;
 
 /// What the page can ask.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
@@ -37,33 +37,33 @@ pub enum Call {
     #[serde(rename = "health")]
     Health,
 
-    /// The workspaces, the last opened first.
-    #[serde(rename = "workspaces.list")]
-    WorkspacesList,
-    /// Opens a folder as a workspace, or opens it again.
-    #[serde(rename = "workspaces.open")]
-    WorkspacesOpen { path: String },
-    /// Takes a workspace off the list. The folder is not touched.
-    #[serde(rename = "workspaces.forget")]
-    WorkspacesForget { id: String },
-    /// Makes a folder for what you asked and opens it as a workspace. With `repo`, the folder
+    /// The codespaces, the last opened first.
+    #[serde(rename = "codespaces.list")]
+    CodespacesList,
+    /// Opens a folder as a codespace, or opens it again.
+    #[serde(rename = "codespaces.open")]
+    CodespacesOpen { path: String },
+    /// Takes a codespace off the list. The folder is not touched.
+    #[serde(rename = "codespaces.forget")]
+    CodespacesForget { id: String },
+    /// Makes a folder for what you asked and opens it as a codespace. With `repo`, the folder
     /// of one of your clones, a worktree of it is put in at once, on a branch of its own.
     #[serde(rename = "scratch.new")]
     ScratchNew { text: String, repo: Option<String> },
     /// The folders in `dir`, to pick one to open. `~` is your home folder.
     #[serde(rename = "folders.list")]
     FoldersList { dir: String },
-    /// The clones in your repos folder, to pick one to put into a workspace.
+    /// The clones in your repos folder, to pick one to put into a codespace.
     #[serde(rename = "repos.list")]
     ReposList,
-    /// The repos directly inside a workspace's folder, each with its branch.
-    #[serde(rename = "workspace.repos")]
-    WorkspaceRepos { dir: String },
-    /// Puts a worktree of `clone` into the workspace at `dir`, in a folder named after the
-    /// clone. Its branch is `branch`. Without one it is the workspace's work name, or the
+    /// The repos directly inside a codespace's folder, each with its branch.
+    #[serde(rename = "codespace.repos")]
+    CodespaceRepos { dir: String },
+    /// Puts a worktree of `clone` into the codespace at `dir`, in a folder named after the
+    /// clone. Its branch is `branch`. Without one it is the codespace's work name, or the
     /// branch the repos already there are on.
-    #[serde(rename = "workspace.add")]
-    WorkspaceAdd {
+    #[serde(rename = "codespace.add")]
+    CodespaceAdd {
         dir: String,
         clone: String,
         branch: Option<String>,
@@ -155,7 +155,7 @@ pub enum Call {
         answer: Option<String>,
     },
 
-    /// The pull requests you opened, in every project your workspaces are in.
+    /// The pull requests you opened, in every project your codespaces are in.
     /// With `quick`, as Azure DevOps' own list has them, from one request:
     /// without a check and threads, which take requests for each one.
     #[serde(rename = "pulls.list")]
@@ -477,10 +477,10 @@ pub enum Answer {
     /// The call did what it was asked and has nothing to say.
     Done,
     Health(Health),
-    Workspaces {
-        list: Vec<WorkspaceView>,
+    Codespaces {
+        list: Vec<CodespaceView>,
     },
-    Workspace(WorkspaceView),
+    Codespace(CodespaceView),
     Folders {
         /// The folder listed, with `~` resolved.
         dir: String,
@@ -614,8 +614,8 @@ pub enum Event {
     Terminals { list: Vec<Terminal> },
     /// What changed in a conversation.
     Conversation { id: String, changes: Vec<Change> },
-    /// A workspace was named, or got a repo: the list is to be asked for again.
-    Workspaces,
+    /// A codespace was named, or got a repo: the list is to be asked for again.
+    Codespaces,
 }
 
 /// Why a call wasn't answered: a JSON-RPC error.

@@ -5,7 +5,7 @@ import type { ThreadSummary } from "./ThreadSummary";
 import type { WorkItemRef } from "./WorkItemRef";
 
 /**
- * A branch and its pull request, as the workspace shows them: what dova's
+ * A branch and its pull request, as the codespace shows them: what dova's
  * `status` says. `pr` is None for a branch that has none yet.
  */
 export type PullView = { 

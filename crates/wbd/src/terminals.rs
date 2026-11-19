@@ -1,4 +1,4 @@
-//! Terminals: shells in pseudo-terminals, in a workspace's folder. What each
+//! Terminals: shells in pseudo-terminals, in a codespace's folder. What each
 //! prints goes to the page as it comes, gathered up every [`FLUSH`], and the
 //! last of it is kept so a terminal can be drawn again.
 

@@ -2,6 +2,7 @@
 import type { Asked } from "./Asked";
 import type { ChangedFile } from "./ChangedFile";
 import type { CheckRun } from "./CheckRun";
+import type { CodespaceView } from "./CodespaceView";
 import type { Conversation } from "./Conversation";
 import type { ConversationView } from "./ConversationView";
 import type { DiffLine } from "./DiffLine";
@@ -23,13 +24,12 @@ import type { Team } from "./Team";
 import type { Terminal } from "./Terminal";
 import type { Ticket } from "./Ticket";
 import type { TicketRow } from "./TicketRow";
-import type { WorkspaceView } from "./WorkspaceView";
 
 /**
  * What wbd answers. `kind` says which, so the page can check it got the
  * answer it asked for.
  */
-export type Answer = { "kind": "done" } | { "kind": "health" } & Health | { "kind": "workspaces", list: Array<WorkspaceView>, } | { "kind": "workspace" } & WorkspaceView | { "kind": "folders", 
+export type Answer = { "kind": "done" } | { "kind": "health" } & Health | { "kind": "codespaces", list: Array<CodespaceView>, } | { "kind": "codespace" } & CodespaceView | { "kind": "folders", 
 /**
  * The folder listed, with `~` resolved.
  */

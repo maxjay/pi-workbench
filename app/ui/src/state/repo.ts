@@ -1,5 +1,5 @@
-// What a workspace's folder holds, as last asked: the folders read for the
-// tree, and where its git stands. A repo inside a workspace is kept here too,
+// What a codespace's folder holds, as last asked: the folders read for the
+// tree, and where its git stands. A repo inside a codespace is kept here too,
 // by its own folder, for where its git stands.
 
 import { createStore, reconcile, unwrap } from 'solid-js/store';
@@ -14,8 +14,8 @@ export interface Listing {
 
 export interface Repo {
   /**
-   * Each folder that was read, by its path relative to the workspace. '' is
-   * the workspace's own folder. A folder that could not be read is not here.
+   * Each folder that was read, by its path relative to the codespace. '' is
+   * the codespace's own folder. A folder that could not be read is not here.
    */
   folders: Record<string, Listing>;
   /**
@@ -32,7 +32,7 @@ export { repos };
 /** Folders being asked about now, so two askers share one answer. */
 const asking = new Map<string, Promise<void>>();
 
-/** Asks wbd what one folder of a workspace holds. Undefined when it cannot be read. */
+/** Asks wbd what one folder of a codespace holds. Undefined when it cannot be read. */
 const read = (dir: string, path: string) =>
   ask({ method: 'folder.read', params: { dir: path ? `${dir}/${path}` : dir } }, 'entries').then(
     ({ folders, files }): Listing => ({ folders, files }),
@@ -40,7 +40,7 @@ const read = (dir: string, path: string) =>
   );
 
 /**
- * The folders kept for a workspace with what was just read put in. A folder
+ * The folders kept for a codespace with what was just read put in. A folder
  * that could not be read is dropped. One that was not asked about stays as
  * it was, so an answer never takes away a folder opened after the question.
  */
@@ -60,7 +60,7 @@ function withRead(dir: string, paths: string[], listings: (Listing | undefined)[
  */
 const changes = <T>(fresh: T) => reconcile(fresh, { key: null, merge: true });
 
-/** For each workspace, whether git is being asked now, when it last answered and how long that took. */
+/** For each codespace, whether git is being asked now, when it last answered and how long that took. */
 const gitting = new Map<string, { busy: boolean; done: number; took: number }>();
 
 /**
@@ -87,7 +87,7 @@ export async function refreshGit(dir: string) {
 }
 
 /**
- * Asks wbd for a workspace's own folder and each folder open in its tree. Its git status is
+ * Asks wbd for a codespace's own folder and each folder open in its tree. Its git status is
  * asked for too, but the tree does not wait for it.
  */
 export function refreshRepo(dir: string, open: string[]) {
@@ -107,13 +107,13 @@ export function refreshRepo(dir: string, open: string[]) {
   return going;
 }
 
-/** Reads one folder of a workspace now, for when it is opened in the tree. */
+/** Reads one folder of a codespace now, for when it is opened in the tree. */
 export async function readFolder(dir: string, path: string) {
   const listing = await read(dir, path);
   if (repos[dir]) setRepos(dir, 'folders', changes(withRead(dir, [path], [listing])));
 }
 
-/** Every file in a workspace, relative to it, to find one by name. */
+/** Every file in a codespace, relative to it, to find one by name. */
 export const allFiles = (dir: string) => ask({ method: 'files.list', params: { dir } }, 'files');
 
 /** A file as the last commit has it, or null. */

@@ -16,6 +16,7 @@ import { shutOnAway } from '../../components/shut';
 import type { Field } from '../../protocol/Field';
 import type { Part } from '../../protocol/Part';
 import type { Ticket } from '../../protocol/Ticket';
+import { dirOf, openPlace, refreshCodespaces } from '../../state/codespaces';
 import { patchTalk, say, setTitle, settle, talksOf, threadTalk } from '../../state/review';
 import { active, markTab, open, type TabId } from '../../state/tabs';
 import {
@@ -33,25 +34,24 @@ import {
   touched,
   unlinkChild,
 } from '../../state/tickets';
-import { dirOf, openPlace, refreshWorkspaces } from '../../state/workspaces';
+import { Chat, type Dress } from '../codespace/Chat';
 import { header, shown as shownText } from '../pull/agent';
 import { pullHue, ticketHue } from '../pull/parts';
 import { Said } from '../pull/Said';
 import { createTalker, type Host, why } from '../pull/talker';
-import { Chat, type Dress } from '../workspace/Chat';
 import { toMarkdown } from './markdown';
 
 const DRAFT =
   "Write the comment I should post in this ticket's discussion. Use what we have said about it. Answer with only the text of the comment, ready to post, and nothing else.";
 
-export function TicketPage(props: { tab: TabId; workspace: string; id: number }) {
+export function TicketPage(props: { tab: TabId; codespace: string; id: number }) {
   return (
     <Show
-      when={dirOf(props.workspace)}
+      when={dirOf(props.codespace)}
       keyed
       fallback={<p class="pr-pad dim">The folder this ticket was opened from is not on the list any more.</p>}
     >
-      {(dir) => <Page tab={props.tab} workspace={props.workspace} dir={dir} id={props.id} />}
+      {(dir) => <Page tab={props.tab} codespace={props.codespace} dir={dir} id={props.id} />}
     </Show>
   );
 }
@@ -72,7 +72,7 @@ const many = (kind: string) => (kind.endsWith('y') ? `${kind.slice(0, -1)}ies` :
 /** An iteration without its project in front: every one of them starts with it. */
 const sprint = (path: string) => (path.includes('\\') ? path.slice(path.indexOf('\\') + 1) : path);
 
-function Page(props: { tab: TabId; workspace: string; dir: string; id: number }) {
+function Page(props: { tab: TabId; codespace: string; dir: string; id: number }) {
   const { dir, id } = props;
   const key = `wi:${dir}#${id}`;
   // Kept in a store and merged into, so what you are writing in stays put while the ticket is asked about again.
@@ -157,8 +157,8 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
   const setting = createAction((to: { state?: string; mine?: boolean }) => setTicket(dir, id, to));
   const starting = createAction(async () => {
     await startTicket(dir, id);
-    refreshWorkspaces();
-    void openPlace(props.workspace);
+    refreshCodespaces();
+    void openPlace(props.codespace);
   });
   const [states, setStates] = createSignal(false);
   let stateBox!: HTMLDivElement;
@@ -204,7 +204,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
   });
   const ticking = createAction((child: number, done: boolean) => tickOff(dir, child, done));
   const unlinking = createAction((child: number) => unlinkChild(dir, id, child));
-  const openOther = (other: number) => open(`wi:${props.workspace}:${other}`);
+  const openOther = (other: number) => open(`wi:${props.codespace}:${other}`);
 
   return (
     <Show
@@ -316,7 +316,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                     <button
                       type="button"
                       class="row ticket-link"
-                      onClick={() => open(`pr:${props.workspace}:${pull}`)}
+                      onClick={() => open(`pr:${props.codespace}:${pull}`)}
                     >
                       <span style={{ color: pullHue(pull) }}>#{pull}</span>
                     </button>
@@ -548,7 +548,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                   dress={dress}
                   hint="Ask about the ticket"
                   empty="It already has this ticket: its words, its fields, what is above and under it, the discussion, and any pull request linked to it."
-                  onOpenFile={() => void openPlace(props.workspace)}
+                  onOpenFile={() => void openPlace(props.codespace)}
                 />
               )}
             </Show>

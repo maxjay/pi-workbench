@@ -1,6 +1,6 @@
 [package]
 name = "workbench"
-description = "A window on Claude Code or Pi: the scratchpad, workspaces and pull requests"
+description = "A window on Claude Code or Pi: the scratchpad, codespaces and pull requests"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

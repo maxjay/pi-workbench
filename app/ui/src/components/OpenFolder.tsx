@@ -1,9 +1,9 @@
-// Picking a folder in WSL to open as a workspace: go into folders until you
+// Picking a folder in WSL to open as a codespace: go into folders until you
 // are in the one you want, then open it. Or type its path.
 
 import { createResource, createSignal, For, Show } from 'solid-js';
 import { ask } from '../daemon';
-import { openFolder } from '../state/workspaces';
+import { openFolder } from '../state/codespaces';
 import { createAction } from './action';
 
 const [dir, setDir] = createSignal<string>();

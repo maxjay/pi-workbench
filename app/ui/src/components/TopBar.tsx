@@ -4,11 +4,11 @@
 
 import { For, Show } from 'solid-js';
 import { status, stopReason } from '../daemon';
+import { codespaceById } from '../state/codespaces';
 import { standing } from '../state/conversations';
 import { titles } from '../state/review';
-import { active, close, marks, open, pullOf, type TabId, tabs, ticketOf, workspaceOf } from '../state/tabs';
+import { active, close, codespaceOf, marks, open, pullOf, type TabId, tabs, ticketOf } from '../state/tabs';
 import { tickets } from '../state/tickets';
-import { workspaceById } from '../state/workspaces';
 import { Glyph } from './Glyph';
 import { pullHue, ticketHue } from './hues';
 
@@ -17,13 +17,13 @@ const words = () => (status() === 'connecting' ? 'Starting wbd' : (stopReason() 
 /** The number of the pull request or the ticket a tab shows. */
 const numberOf = (tab: TabId) => pullOf(tab)?.pr ?? ticketOf(tab)?.id;
 
-/** What a tab is called: Home, its workspace's name, or its pull request's or ticket's number and title. */
+/** What a tab is called: Home, its codespace's name, or its pull request's or ticket's number and title. */
 export function titleOf(tab: TabId) {
   if (tab === 'settings') return 'Settings';
   const numbered = numberOf(tab);
   if (numbered !== undefined) return titles[tab] ? `#${numbered} ${titles[tab]}` : `#${numbered}`;
-  const id = workspaceOf(tab);
-  return id ? (workspaceById(id)?.workspace.name ?? 'Codespace') : 'Home';
+  const id = codespaceOf(tab);
+  return id ? (codespaceById(id)?.codespace.name ?? 'Codespace') : 'Home';
 }
 
 /**
@@ -42,9 +42,9 @@ function hueOfTab(tab: TabId) {
 
 /** Where a tab's agent stands: waiting on you, or working. */
 function dotOf(tab: TabId) {
-  const id = workspaceOf(tab);
-  const view = id ? workspaceById(id) : undefined;
-  return view ? standing(view.workspace.path) : marks[tab]?.standing;
+  const id = codespaceOf(tab);
+  const view = id ? codespaceById(id) : undefined;
+  return view ? standing(view.codespace.path) : marks[tab]?.standing;
 }
 
 export function TopBar() {
@@ -63,7 +63,7 @@ export function TopBar() {
                 aria-current={active() === tab ? 'page' : undefined}
                 onClick={() => open(tab)}
               >
-                <Show when={workspaceOf(tab)}>
+                <Show when={codespaceOf(tab)}>
                   <Glyph name={titleOf(tab)} size={10} />
                 </Show>
                 <Show when={numberOf(tab) !== undefined} fallback={titleOf(tab)}>

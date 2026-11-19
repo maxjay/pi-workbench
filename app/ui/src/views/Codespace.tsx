@@ -1,8 +1,8 @@
-// A workspace's tab. On the left a list: Files or Changes. In the middle the
+// A codespace's tab. On the left a list: Files or Changes. In the middle the
 // one thing you picked, with the terminals under it. On the right the agent.
 // While nothing is open in the middle, the agent has the middle.
 //
-// A workspace is one repo, or a folder that holds several: each a folder
+// A codespace is one repo, or a folder that holds several: each a folder
 // inside it, a worktree of one of your clones on a branch of its own. Changes
 // then lists each repo by itself, and Add repo puts one more in.
 
@@ -10,18 +10,18 @@ import { createMemo, createResource, For, onCleanup, onMount, Show } from 'solid
 import { createAction } from '../components/action';
 import { openPalette } from '../components/Palette';
 import { ask } from '../daemon';
+import type { CodespaceView } from '../protocol/CodespaceView';
 import type { GitMark } from '../protocol/GitMark';
-import type { WorkspaceView } from '../protocol/WorkspaceView';
+import { codespaceById, forget } from '../state/codespaces';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { allFiles, readFolder, refreshGit, refreshRepo, repos } from '../state/repo';
 import { open } from '../state/tabs';
-import { forget, workspaceById } from '../state/workspaces';
-import { Chat } from './workspace/Chat';
-import { createEditor } from './workspace/Editor';
-import { NewPull } from './workspace/NewPull';
-import { BranchPull } from './workspace/Pull';
-import { Terminals } from './workspace/Terminals';
-import { marks, Tree } from './workspace/Tree';
+import { Chat } from './codespace/Chat';
+import { createEditor } from './codespace/Editor';
+import { NewPull } from './codespace/NewPull';
+import { BranchPull } from './codespace/Pull';
+import { Terminals } from './codespace/Terminals';
+import { marks, Tree } from './codespace/Tree';
 import {
   closeTab,
   isFile,
@@ -33,13 +33,13 @@ import {
   shortPath,
   toggleFolder,
   uiOf,
-} from './workspace/ui';
+} from './codespace/ui';
 
-export function WorkspacePage(props: { id: string }) {
+export function CodespacePage(props: { id: string }) {
   return (
-    // Not keyed: the list is asked again when a workspace is named, and what is open in this
+    // Not keyed: the list is asked again when a codespace is named, and what is open in this
     // one stays as it is then.
-    <Show when={workspaceById(props.id)}>
+    <Show when={codespaceById(props.id)}>
       {(view) => (
         <Show when={view().exists} fallback={<Missing view={view()} />}>
           <Page view={view()} />
@@ -49,37 +49,37 @@ export function WorkspacePage(props: { id: string }) {
   );
 }
 
-function Missing(props: { view: WorkspaceView }) {
+function Missing(props: { view: CodespaceView }) {
   return (
     <div class="gone">
-      <h1>{props.view.workspace.name} is not there any more</h1>
-      <p class="dim">{props.view.workspace.path}</p>
+      <h1>{props.view.codespace.name} is not there any more</h1>
+      <p class="dim">{props.view.codespace.path}</p>
       <p>The folder was moved or deleted.</p>
-      <button type="button" class="button" onClick={() => void forget(props.view.workspace.id)}>
+      <button type="button" class="button" onClick={() => void forget(props.view.codespace.id)}>
         Take it off the list
       </button>
     </div>
   );
 }
 
-function Page(props: { view: WorkspaceView }) {
-  const id = props.view.workspace.id;
-  const root = props.view.workspace.path;
+function Page(props: { view: CodespaceView }) {
+  const id = props.view.codespace.id;
+  const root = props.view.codespace.path;
   const ui = () => uiOf(id);
   const repo = () => repos[root];
-  /** The workspace's own folder, as last read. */
+  /** The codespace's own folder, as last read. */
   const top = () => repo()?.folders[''];
   const absolute = (relative: string) => `${root}/${relative}`;
   const relative = (path: string) => path.slice(root.length + 1);
 
-  // A workspace that is not a repo itself takes repos: the folders directly inside it that
+  // A codespace that is not a repo itself takes repos: the folders directly inside it that
   // are one. They are looked for again whenever the folders in it change.
   const takes = props.view.branch === null;
   const [inside] = createResource(
     () => (takes ? `in:${top()?.folders.join('/') ?? ''}` : undefined),
-    async () => (await ask({ method: 'workspace.repos', params: { dir: root } }, 'folders')).folders,
+    async () => (await ask({ method: 'codespace.repos', params: { dir: root } }, 'folders')).folders,
   );
-  /** Where git is asked: each repo inside, or the workspace's own folder. */
+  /** Where git is asked: each repo inside, or the codespace's own folder. */
   const parts = createMemo(() => {
     const found = inside.latest ?? [];
     return found.length > 0
@@ -92,7 +92,7 @@ function Page(props: { view: WorkspaceView }) {
   };
 
   const adding = createAction(async (clone: string) => {
-    await ask({ method: 'workspace.add', params: { dir: root, clone, branch: null } }, 'done');
+    await ask({ method: 'codespace.add', params: { dir: root, clone, branch: null } }, 'done');
     await refresh();
   });
   /** Lists your clones, to pick the one to put in. */
@@ -117,7 +117,7 @@ function Page(props: { view: WorkspaceView }) {
     const tab = ui().current;
     return tab && isFile(tab) ? tab : undefined;
   };
-  /** Each changed file by its path in the workspace, in whichever repo it is. */
+  /** Each changed file by its path in the codespace, in whichever repo it is. */
   const changed = createMemo(() => {
     const all = new Map<string, GitMark>();
     for (const part of parts())

@@ -1,5 +1,5 @@
 // The open tabs. Home is always first and can't close. Settings, every
-// workspace you have open, every pull request you are reviewing and every
+// codespace you have open, every pull request you are reviewing and every
 // ticket you have open has a tab of its own.
 
 import { createSignal } from 'solid-js';
@@ -8,7 +8,7 @@ import { createStore } from 'solid-js/store';
 export type TabId =
   | 'home'
   | 'settings'
-  | `ws:${string}`
+  | `cs:${string}`
   | `pr:${string}:${number}`
   | `wi:${string}:${number}`;
 
@@ -29,21 +29,21 @@ export { marks };
 
 export const markTab = (tab: TabId, mark: TabMark) => setMarks(tab, mark);
 
-/** The workspace a tab shows, if it shows one. */
-export const workspaceOf = (id: TabId) => (id.startsWith('ws:') ? id.slice(3) : undefined);
+/** The codespace a tab shows, if it shows one. */
+export const codespaceOf = (id: TabId) => (id.startsWith('cs:') ? id.slice(3) : undefined);
 
-/** The pull request a tab shows, and the workspace it is asked from, if it shows one. */
+/** The pull request a tab shows, and the codespace it is asked from, if it shows one. */
 export function pullOf(id: TabId) {
   if (!id.startsWith('pr:')) return undefined;
-  const [, workspace, pr] = id.split(':');
-  return { workspace, pr: Number(pr) };
+  const [, codespace, pr] = id.split(':');
+  return { codespace, pr: Number(pr) };
 }
 
-/** The ticket a tab shows, and the workspace it is asked from, if it shows one. */
+/** The ticket a tab shows, and the codespace it is asked from, if it shows one. */
 export function ticketOf(id: TabId) {
   if (!id.startsWith('wi:')) return undefined;
-  const [, workspace, ticket] = id.split(':');
-  return { workspace, id: Number(ticket) };
+  const [, codespace, ticket] = id.split(':');
+  return { codespace, id: Number(ticket) };
 }
 
 /** Opens a tab, or goes to it if it is open. */

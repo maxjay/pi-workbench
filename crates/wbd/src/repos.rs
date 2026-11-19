@@ -1,4 +1,4 @@
-//! The repos in a workspace. A workspace whose folder is not a repo itself can hold several:
+//! The repos in a codespace. A codespace whose folder is not a repo itself can hold several:
 //! each is a git worktree of one of your clones, on a branch of its own, in a folder named
 //! after the repo. The clone is not changed, apart from knowing one more worktree and branch.
 
@@ -7,15 +7,15 @@ use std::time::Duration;
 
 use protocol::Folder;
 
+use crate::codespaces;
 use crate::error::Error;
 use crate::git::run;
 use crate::places::Found;
-use crate::workspaces;
 
 /// git gets this long to fetch the main branch before a worktree starts from it.
 const FETCH: Duration = Duration::from_secs(60);
 
-/// A repo that was put into a workspace.
+/// A repo that was put into a codespace.
 pub struct Added {
     pub name: String,
     pub branch: String,
@@ -30,7 +30,7 @@ pub fn takes(folder: &Path) -> bool {
 
 /// The repos directly inside `folder`, each with its branch.
 pub fn inside(folder: &Path) -> Vec<Folder> {
-    let listed = workspaces::folders(&folder.display().to_string());
+    let listed = codespaces::folders(&folder.display().to_string());
     let folders = listed.map_or_else(|_| Vec::new(), |(_, folders)| folders);
     folders
         .into_iter()
@@ -39,8 +39,8 @@ pub fn inside(folder: &Path) -> Vec<Folder> {
 }
 
 /// The branch a repo put into `folder` goes on when none is named: the one the repos there
-/// are on, when they are all on the same one. A workspace is one piece of work, so its repos
-/// share a branch name. Without that, the workspace's own name.
+/// are on, when they are all on the same one. A codespace is one piece of work, so its repos
+/// share a branch name. Without that, the codespace's own name.
 pub fn branch_for(folder: &Path) -> String {
     let mut on = inside(folder).into_iter().filter_map(|repo| repo.branch);
     match on.next() {
@@ -278,10 +278,10 @@ mod tests {
         assert!(rename(&room, "Not A Name").await.is_err());
         assert!(rename(&room, "main").await.is_err());
         rename(&room, "fix-it").await.unwrap();
-        // A workspace with no repo yet names the branch after itself.
+        // A codespace with no repo yet names the branch after itself.
         assert_eq!(branch_for(&clone.join(".git")), ".git");
         // The clone is where it was.
-        assert_eq!(workspaces::branch(&clone).as_deref(), Some("main"));
+        assert_eq!(codespaces::branch(&clone).as_deref(), Some("main"));
         // It is not put in twice.
         assert!(matches!(
             add(&clone, &room, "fix-it").await,

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-use crate::{files, workspaces};
+use crate::{codespaces, files};
 
 /// What was found is used again for this long before the folder is looked in again.
 const FRESH: Duration = Duration::from_secs(60);
@@ -69,12 +69,12 @@ impl Places {
 
     /// The folder your clones are in.
     pub fn repos(&self) -> PathBuf {
-        workspaces::expand(&self.written().0)
+        codespaces::expand(&self.written().0)
     }
 
     /// The folder the workbench keeps its own things in.
     pub fn own(&self) -> PathBuf {
-        workspaces::expand(&self.written().1)
+        codespaces::expand(&self.written().1)
     }
 
     /// Changes the two folders. One left empty goes back to the usual one.

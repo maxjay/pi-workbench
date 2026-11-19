@@ -1,5 +1,5 @@
 // A branch and its pull request, as dova reports them: the calls a
-// workspace makes about its own branch, and to open a pull request from it.
+// codespace makes about its own branch, and to open a pull request from it.
 // Reviewing one is in `review.ts`.
 
 import { createSignal } from 'solid-js';

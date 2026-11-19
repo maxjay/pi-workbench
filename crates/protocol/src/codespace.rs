@@ -1,4 +1,4 @@
-//! Workspaces: a folder opened in the workbench, its files, and where its
+//! Codespaces: a folder opened in the workbench, its files, and where its
 //! git repository stands.
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct Workspace {
+pub struct Codespace {
     pub id: String,
     /// Absolute, with links resolved.
     pub path: String,
@@ -26,7 +26,7 @@ pub struct Workspace {
     /// it, and for a folder you opened.
     #[serde(default)]
     pub main: Option<String>,
-    /// The name of the work, in a workspace the workbench made: the branch in every repo in it.
+    /// The name of the work, in a codespace the workbench made: the branch in every repo in it.
     #[serde(default)]
     pub work: Option<String>,
     /// True once the work was named. Until then its name is the first words you wrote.
@@ -34,16 +34,16 @@ pub struct Workspace {
     pub named: bool,
 }
 
-/// A workspace as Home lists it.
+/// A codespace as Home lists it.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct WorkspaceView {
-    pub workspace: Workspace,
+pub struct CodespaceView {
+    pub codespace: Codespace,
     /// False when the folder was moved or deleted.
     pub exists: bool,
     /// The branch it is on, read from the folder without running git: listing and opening a
-    /// workspace never wait for git. None outside git.
+    /// codespace never wait for git. None outside git.
     pub branch: Option<String>,
     /// The repos in it, by name, when its folder is not a repo itself: each a folder of its
     /// own directly inside.
@@ -153,7 +153,7 @@ pub enum GitMark {
     Conflicted,
 }
 
-/// A terminal in a workspace's folder: a shell of its own.
+/// A terminal in a codespace's folder: a shell of its own.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

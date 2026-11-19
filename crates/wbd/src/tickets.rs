@@ -407,7 +407,7 @@ fn iteration_paths(node: &Value, above: &str, out: &mut Vec<String>) {
 
 /// Your tickets that are not finished, or with `words` every ticket whose
 /// title has them, across every project a folder of yours is cloned from: your
-/// workspaces, and the clones in your repos folder.
+/// codespaces, and the clones in your repos folder.
 pub async fn list(
     dova: &Dova,
     clones: &[pulls::Clone],
@@ -432,7 +432,7 @@ pub async fn list(
                 .filter(|item| !words.trim().is_empty() || !over(item.state.as_deref()))
                 .map(|item| TicketRow {
                     item,
-                    workspace: clone.key.clone(),
+                    codespace: clone.key.clone(),
                 }),
         );
     }

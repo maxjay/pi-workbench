@@ -1,7 +1,7 @@
 //! dova, asked through `dova rpc`: one long-lived process, JSON-RPC 2.0, one
 //! object per line. It starts with the first call and starts again if it
 //! has gone. Each call names the folder it is about, so one process serves
-//! every workspace, and dova reads the org, project and repo from that
+//! every codespace, and dova reads the org, project and repo from that
 //! folder's git remote.
 
 use std::collections::HashMap;

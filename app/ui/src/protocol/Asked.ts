@@ -5,7 +5,7 @@
  */
 export type Asked = { 
 /**
- * The workspace's name.
+ * The codespace's name.
  */
 name: string, 
 /**

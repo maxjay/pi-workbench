@@ -1,5 +1,5 @@
-// Home: the ask line, which starts a workspace in a repo or a scratchpad,
-// then your pull requests, then your workspaces.
+// Home: the ask line, which starts a codespace in a repo or a scratchpad,
+// then your pull requests, then your codespaces.
 
 import { createSignal, For, Show } from 'solid-js';
 import { createAction } from '../components/action';
@@ -7,24 +7,24 @@ import { Glyph } from '../components/Glyph';
 import { openFolderDialog } from '../components/OpenFolder';
 import { openPalette } from '../components/Palette';
 import { ask, connect, status, stopReason } from '../daemon';
-import type { WorkspaceView } from '../protocol/WorkspaceView';
+import type { CodespaceView } from '../protocol/CodespaceView';
+import { codespaces, refreshCodespaces } from '../state/codespaces';
 import { agentName, defaultAgent, start } from '../state/conversations';
 import { open } from '../state/tabs';
-import { refreshWorkspaces, workspaces } from '../state/workspaces';
+import { setConversation, shortPath } from './codespace/ui';
 import { Pulls } from './home/Pulls';
 import { Tickets } from './home/Tickets';
-import { setConversation, shortPath } from './workspace/ui';
 
-/** The repos in a workspace, the main one first. */
-function reposOf(view: WorkspaceView) {
-  const main = view.workspace.main;
+/** The repos in a codespace, the main one first. */
+function reposOf(view: CodespaceView) {
+  const main = view.codespace.main;
   return main ? [main, ...view.repos.filter((name) => name !== main)] : view.repos;
 }
 
-/** What a workspace with no repo in it is on: its branch, or why it has none. */
-function standing(view: WorkspaceView) {
+/** What a codespace with no repo in it is on: its branch, or why it has none. */
+function standing(view: CodespaceView) {
   if (!view.exists) return 'not there any more';
-  if (view.workspace.scratch) return 'scratchpad';
+  if (view.codespace.scratch) return 'scratchpad';
   return view.branch ?? 'not a git folder';
 }
 
@@ -47,20 +47,20 @@ export function Home() {
       `Start in a repo from ${shortPath(dir)}`,
     );
   });
-  // What you ask becomes a workspace: a folder of its own, with the conversation already
+  // What you ask becomes a codespace: a folder of its own, with the conversation already
   // started in it. With a repo picked, a worktree of it is in the folder from the start, on
   // a branch of its own. Without one it is a scratchpad, and a repo can be put in later.
   const asking = createAction(async () => {
     const asked = text().trim();
     const view = await ask(
       { method: 'scratch.new', params: { text: asked, repo: repo()?.path ?? null } },
-      'workspace',
+      'codespace',
     );
-    const conversation = await start(defaultAgent(), view.workspace.path, asked);
-    await refreshWorkspaces();
-    setConversation(view.workspace.id, conversation);
+    const conversation = await start(defaultAgent(), view.codespace.path, asked);
+    await refreshCodespaces();
+    setConversation(view.codespace.id, conversation);
     setText('');
-    open(`ws:${view.workspace.id}`);
+    open(`cs:${view.codespace.id}`);
   });
   const ready = () => status() === 'ready' && !asking.busy() && text().trim() !== '';
 
@@ -129,9 +129,9 @@ export function Home() {
       <Tickets />
       <Pulls />
 
-      <section class="section" aria-labelledby="workspaces">
+      <section class="section" aria-labelledby="codespaces">
         <div class="section-head">
-          <h2 id="workspaces">Codespaces</h2>
+          <h2 id="codespaces">Codespaces</h2>
           <span class="top-gap" />
           <button type="button" class="button" disabled={status() !== 'ready'} onClick={openFolderDialog}>
             Open folder
@@ -139,16 +139,16 @@ export function Home() {
         </div>
         <div class="rows">
           <For
-            each={workspaces()}
+            each={codespaces()}
             fallback={<p class="rows-none dim">None yet. Open a folder in WSL to start one.</p>}
           >
             {(view) => (
-              <button type="button" class="row table-row" onClick={() => open(`ws:${view.workspace.id}`)}>
-                <Glyph name={view.workspace.name} size={12} />
-                <span class="table-name" title={view.workspace.path}>
-                  {view.workspace.name}
-                  <Show when={!view.workspace.scratch}>
-                    <span class="table-aside">{shortPath(view.workspace.path)}</span>
+              <button type="button" class="row table-row" onClick={() => open(`cs:${view.codespace.id}`)}>
+                <Glyph name={view.codespace.name} size={12} />
+                <span class="table-name" title={view.codespace.path}>
+                  {view.codespace.name}
+                  <Show when={!view.codespace.scratch}>
+                    <span class="table-aside">{shortPath(view.codespace.path)}</span>
                   </Show>
                 </span>
                 {/* The repos in it, as a list over the rest of the row. One that does not fit is

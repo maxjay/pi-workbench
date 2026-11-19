@@ -4,8 +4,8 @@
 //! socket: one line of JSON each way.
 //!
 //! `wb repos [words]` lists your clones. `wb add <repo>...` puts a worktree of each into the
-//! conversation's workspace, after you said yes to it on a card in the conversation.
-//! `wb name <name>` names the work: the workspace, and the branch in every repo in it.
+//! conversation's codespace, after you said yes to it on a card in the conversation.
+//! `wb name <name>` names the work: the codespace, and the branch in every repo in it.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use protocol::{Ask, Event, Workspace};
+use protocol::{Ask, Codespace, Event};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -27,14 +27,14 @@ const USAGE: &str = "wb name <name>       name the work: the codespace, and the 
                      wb repos [words]     the user's clones, or those with any of the words\n\
                      wb add <repo>...     put a worktree of each into this codespace";
 
-/// What an agent in a workspace that takes repos is told about it and about `wb`, added to
+/// What an agent in a codespace that takes repos is told about it and about `wb`, added to
 /// what it is told about itself.
-pub fn note(workspace: Option<&Workspace>, folder: &Path) -> String {
+pub fn note(codespace: Option<&Codespace>, folder: &Path) -> String {
     let here: Vec<String> = repos::inside(folder)
         .into_iter()
         .map(|repo| repo.name)
         .collect();
-    let main = workspace.and_then(|workspace| workspace.main.as_deref());
+    let main = codespace.and_then(|codespace| codespace.main.as_deref());
     let mut out = String::from(
         "This folder is a codespace in the Workbench app, for one piece of work. It holds the \
          repositories of the user that the work needs, each in a folder of its own, as a git \
@@ -57,10 +57,10 @@ pub fn note(workspace: Option<&Workspace>, folder: &Path) -> String {
             ));
         }
     }
-    match workspace.filter(|workspace| workspace.named) {
-        Some(workspace) => out.push_str(&format!(
+    match codespace.filter(|codespace| codespace.named) {
+        Some(codespace) => out.push_str(&format!(
             "The work is named {}. That is the branch in every repository here.\n",
-            workspace.work.as_deref().unwrap_or(&workspace.name)
+            codespace.work.as_deref().unwrap_or(&codespace.name)
         )),
         None => out.push_str(
             "The work has no name yet. As soon as you know what it is, name it, once, with \
@@ -187,30 +187,30 @@ async fn listed(ctx: &Ctx, words: &[String]) -> String {
     out
 }
 
-/// `wb name`: names the work, once. The branch in every repo of the workspace is renamed.
+/// `wb name`: names the work, once. The branch in every repo of the codespace is renamed.
 async fn name(ctx: &Ctx, asked: &Value) -> Result<String, String> {
     let conversation = asked["conversation"].as_str().unwrap_or_default();
     let Some(cwd) = ctx.conversations.cwd(conversation) else {
         return Err("wb works in a conversation started in the Workbench.".into());
     };
     let folder = Path::new(&cwd);
-    let workspace = ctx.workspaces.at(folder);
-    let Some(workspace) = workspace.filter(|workspace| workspace.scratch) else {
+    let codespace = ctx.codespaces.at(folder);
+    let Some(codespace) = codespace.filter(|codespace| codespace.scratch) else {
         return Err("This folder is not a codespace the Workbench made. Its name stays.".into());
     };
-    let was = workspace.work.as_deref().unwrap_or(&workspace.name);
+    let was = codespace.work.as_deref().unwrap_or(&codespace.name);
     let Some(new) = asked["name"].as_str().filter(|name| !name.is_empty()) else {
         return Ok(format!("The work is called {was}."));
     };
-    if workspace.named {
+    if codespace.named {
         return Ok(format!(
             "The work already has its name: {was}. Nothing was changed."
         ));
     }
     let renamed = repos::rename(folder, new).await?;
     let failed = |err| protocol::Failure::from(err).message;
-    ctx.workspaces.name(folder, new).map_err(failed)?;
-    let _ = ctx.out.send(protocol::event(&Event::Workspaces));
+    ctx.codespaces.name(folder, new).map_err(failed)?;
+    let _ = ctx.out.send(protocol::event(&Event::Codespaces));
     Ok(match renamed.is_empty() {
         true => format!("The work is named {new}."),
         false => format!(
@@ -255,8 +255,8 @@ async fn add(
             clones.push(clone.path.clone());
         }
     }
-    let workspace = ctx.workspaces.at(folder);
-    let branch = match workspace.and_then(|workspace| workspace.work) {
+    let codespace = ctx.codespaces.at(folder);
+    let branch = match codespace.and_then(|codespace| codespace.work) {
         Some(work) => work,
         None => repos::branch_for(folder),
     };
@@ -311,9 +311,9 @@ async fn add(
             "  ./{}  a worktree of {clone}, on the branch {}{from}\n",
             added.name, added.branch
         ));
-        let _ = ctx.workspaces.took(folder, &added.name);
+        let _ = ctx.codespaces.took(folder, &added.name);
     }
-    let _ = ctx.out.send(protocol::event(&Event::Workspaces));
+    let _ = ctx.out.send(protocol::event(&Event::Codespaces));
     out.push_str("Work, commit and push in these folders.");
     Ok(out)
 }

@@ -1,4 +1,4 @@
-// A branch's pull request, as one line in a workspace's Changes: the way
+// A branch's pull request, as one line in a codespace's Changes: the way
 // to its own tab, where it is reviewed. Before there is one, how far the
 // branch is ahead and the way to open one.
 

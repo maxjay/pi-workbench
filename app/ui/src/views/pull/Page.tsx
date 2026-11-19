@@ -24,6 +24,7 @@ import type { Place } from '../../protocol/Place';
 import type { PullTo } from '../../protocol/PullTo';
 import type { Review } from '../../protocol/Review';
 import type { Thread } from '../../protocol/Thread';
+import { dirOf } from '../../state/codespaces';
 import {
   addTalk,
   changed,
@@ -43,8 +44,7 @@ import {
   vote,
 } from '../../state/review';
 import { active, markTab, open, type TabId } from '../../state/tabs';
-import { dirOf } from '../../state/workspaces';
-import { Chat, type Dress } from '../workspace/Chat';
+import { Chat, type Dress } from '../codespace/Chat';
 import {
   code,
   DRAFT_COMMENT,
@@ -69,21 +69,21 @@ const FILES_AT_ONCE = 20;
 /** What the middle shows. */
 type Shown = { kind: 'overview' } | { kind: 'checks' } | { kind: 'file'; path: string; at?: number };
 
-export function PullPage(props: { tab: TabId; workspace: string; pr: number }) {
+export function PullPage(props: { tab: TabId; codespace: string; pr: number }) {
   return (
     <Show
-      when={dirOf(props.workspace)}
+      when={dirOf(props.codespace)}
       keyed
       fallback={
         <p class="pr-pad dim">The folder this pull request was opened from is not on the list any more.</p>
       }
     >
-      {(dir) => <Page tab={props.tab} workspace={props.workspace} dir={dir} pr={props.pr} />}
+      {(dir) => <Page tab={props.tab} codespace={props.codespace} dir={dir} pr={props.pr} />}
     </Show>
   );
 }
 
-function Page(props: { tab: TabId; workspace: string; dir: string; pr: number }) {
+function Page(props: { tab: TabId; codespace: string; dir: string; pr: number }) {
   const { dir, pr } = props;
   const key = `${dir}#${pr}`;
   // Kept in a store and merged into, so a line that didn't change stays the
@@ -276,7 +276,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
     opened: (card) => Boolean(opened[card]),
     setOpened,
     showFile,
-    openTicket: (id) => open(`wi:${props.workspace}:${id}`),
+    openTicket: (id) => open(`wi:${props.codespace}:${id}`),
     reload: load,
     loadFile,
   });

@@ -5,4 +5,4 @@ import type { Terminal } from "./Terminal";
 /**
  * What wbd says without being asked.
  */
-export type Event = { "event": "ready", version: string, } | { "event": "terminal", id: string, data: string, } | { "event": "terminals", list: Array<Terminal>, } | { "event": "conversation", id: string, changes: Array<Change>, } | { "event": "workspaces" };
+export type Event = { "event": "ready", version: string, } | { "event": "terminal", id: string, data: string, } | { "event": "terminals", list: Array<Terminal>, } | { "event": "conversation", id: string, changes: Array<Change>, } | { "event": "codespaces" };

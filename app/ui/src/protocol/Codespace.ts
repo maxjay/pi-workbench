@@ -3,7 +3,7 @@
 /**
  * A folder opened in the workbench. Nothing is written into the folder itself.
  */
-export type Workspace = { id: string, 
+export type Codespace = { id: string, 
 /**
  * Absolute, with links resolved.
  */
@@ -28,7 +28,7 @@ scratch: boolean,
  */
 main: string | null, 
 /**
- * The name of the work, in a workspace the workbench made: the branch in every repo in it.
+ * The name of the work, in a codespace the workbench made: the branch in every repo in it.
  */
 work: string | null, 
 /**

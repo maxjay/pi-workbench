@@ -4,7 +4,7 @@
 // people, in these repos. Nothing of those is asked for until you choose,
 // because an organization can have thousands.
 //
-// Both are Home's one table, as the tickets and the workspaces are. The
+// Both are Home's one table, as the tickets and the codespaces are. The
 // rows are under their repo, and a repo can be shut. A row is its number,
 // its title, and two facts. Of yours: its check and its open threads. Of
 // the ones to review: who opened it and your vote. What a check said and
@@ -103,7 +103,7 @@ function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: 
   const groups = createMemo(() => byRepo(props.rows));
   const projects = () => new Set(props.rows.map((row) => row.project.toLowerCase())).size;
   /** A row opens here when its repo is open here or cloned in your repos folder, and on Azure DevOps when not. */
-  const go = (row: PullRow) => (row.workspace ? open(`pr:${row.workspace}:${row.id}`) : openUrl(row.url));
+  const go = (row: PullRow) => (row.codespace ? open(`pr:${row.codespace}:${row.id}`) : openUrl(row.url));
   return (
     <For each={groups()}>
       {(group) => {
@@ -129,7 +129,7 @@ function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: 
                     type="button"
                     class="row table-row"
                     title={
-                      row.workspace
+                      row.codespace
                         ? undefined
                         : `The ${row.repo} repo is not open here and not in your repos folder. Opens on Azure DevOps.`
                     }

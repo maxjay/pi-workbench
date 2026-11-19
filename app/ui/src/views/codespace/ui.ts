@@ -1,18 +1,18 @@
-// What each open workspace's tab is showing: which list is on the left,
+// What each open codespace's tab is showing: which list is on the left,
 // which folders are open in the tree, and the tabs in the middle. Kept
 // while the app runs.
 //
 // A middle tab is a string. A file's tab is its absolute path, which always
 // starts with `/`. `newpr` is the form for a new pull request, and `newpr:` with a folder
-// after it the form for one repo of a workspace that holds several.
+// after it the form for one repo of a codespace that holds several.
 
 import { createStore } from 'solid-js/store';
 
 export type Left = 'files' | 'changes';
 
-export interface WorkspaceUi {
+export interface CodespaceUi {
   left: Left;
-  /** Folders open in the tree, as paths relative to the workspace. */
+  /** Folders open in the tree, as paths relative to the codespace. */
   expanded: string[];
   tabs: string[];
   /** The tab shown, if any is open. */
@@ -21,9 +21,9 @@ export interface WorkspaceUi {
   conversation: string | undefined;
 }
 
-const [uis, setUis] = createStore<Record<string, WorkspaceUi>>({});
+const [uis, setUis] = createStore<Record<string, CodespaceUi>>({});
 
-export function uiOf(id: string): WorkspaceUi {
+export function uiOf(id: string): CodespaceUi {
   if (!uis[id])
     setUis(id, {
       left: 'files',

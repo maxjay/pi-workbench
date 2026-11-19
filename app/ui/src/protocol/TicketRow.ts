@@ -5,10 +5,10 @@
  */
 export type TicketRow = { 
 /**
- * Where it was asked from: a workspace, by its id, or a clone in your repos folder, by
+ * Where it was asked from: a codespace, by its id, or a clone in your repos folder, by
  * its path. Either is a folder cloned from its organization.
  */
-workspace: string, id: number, title: string | null, 
+codespace: string, id: number, title: string | null, 
 /**
  * `Bug`, `Product Backlog Item` and so on.
  */

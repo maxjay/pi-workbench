@@ -20,10 +20,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 use crate::agent::{self, name};
+use crate::codespaces::Codespaces;
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
-use crate::workspaces::Workspaces;
 use crate::{repos, wb};
 
 /// How often what an agent says goes to the page. A reply streaming word
@@ -40,8 +40,8 @@ pub struct Conversations {
     out: UnboundedSender<String>,
     /// What every agent's environment gets, so it can run `wb`. Empty without it.
     env: Arc<Vec<(String, String)>>,
-    /// To tell an agent what workspace it is in.
-    workspaces: Arc<Workspaces>,
+    /// To tell an agent what codespace it is in.
+    codespaces: Arc<Codespaces>,
 }
 
 /// A conversation whose agent is running.
@@ -72,14 +72,14 @@ impl Conversations {
         data_dir: &Path,
         out: UnboundedSender<String>,
         env: Vec<(String, String)>,
-        workspaces: Arc<Workspaces>,
+        codespaces: Arc<Codespaces>,
     ) -> Self {
         Conversations {
             dir: data_dir.join("conversations"),
             live: Arc::default(),
             out,
             env: Arc::new(env),
-            workspaces,
+            codespaces,
         }
     }
 
@@ -349,9 +349,9 @@ impl Conversations {
         let state = &folded.state;
         let (id, agent, cwd) = (state.id.clone(), state.agent, Path::new(&state.cwd));
         let (model, effort) = (state.model.as_deref(), state.effort.as_deref());
-        // In a workspace that takes repos the agent is told about `wb`, each time it starts.
+        // In a codespace that takes repos the agent is told about `wb`, each time it starts.
         let note = (!self.env.is_empty() && repos::takes(cwd))
-            .then(|| wb::note(self.workspaces.at(cwd).as_ref(), cwd));
+            .then(|| wb::note(self.codespaces.at(cwd).as_ref(), cwd));
         let told = match (brief.as_deref(), note) {
             (Some(brief), Some(note)) => Some(format!("{brief}\n\n{note}")),
             (Some(brief), None) => Some(brief.to_string()),

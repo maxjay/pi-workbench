@@ -1,4 +1,4 @@
-// The agent, beside a workspace: the conversation, and where you write.
+// The agent, beside a codespace: the conversation, and where you write.
 // When the agent asks something, its question takes the place of the box
 // you write in. The same parts whichever agent it is.
 

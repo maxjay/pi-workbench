@@ -1,5 +1,5 @@
 // The list that opens over everything: type to narrow it, Enter to run the
-// row picked. Ctrl K opens it with places to go, Ctrl P with a workspace's
+// row picked. Ctrl K opens it with places to go, Ctrl P with a codespace's
 // files. Whoever opens it says what is in it.
 
 import { createSignal, For, Show } from 'solid-js';

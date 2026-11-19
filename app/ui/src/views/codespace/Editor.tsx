@@ -1,4 +1,4 @@
-// A workspace's editor, made once per workspace tab: the file you are on,
+// A codespace's editor, made once per codespace tab: the file you are on,
 // editable, with what changed since the last commit marked in place. Ctrl S
 // saves. A file that changes on disk while yours has nothing unsaved just
 // shows the new text. When yours has unsaved changes, a bar asks which to keep.
