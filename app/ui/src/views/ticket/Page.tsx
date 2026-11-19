@@ -334,7 +334,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
             </aside>
 
             <section class="overview" aria-label="The ticket">
-              <div class="overview-col ticket-col">
+              <div class="overview-col">
                 <Show
                   when={draft()}
                   fallback={

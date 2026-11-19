@@ -932,11 +932,14 @@ button.dl-num {
   padding: 36px 44px;
 }
 
+/* The column you read: in the middle of the space it has, and no wider than reads well. */
 .overview-col {
   display: flex;
   flex-direction: column;
   gap: 30px;
-  max-width: 660px;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
 .overview-what {
@@ -1293,10 +1296,6 @@ button.dl-num {
   align-self: flex-start;
   font-size: 12px;
   color: var(--dim);
-}
-
-.ticket-col {
-  max-width: 680px;
 }
 
 .ticket-what {
