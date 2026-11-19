@@ -1774,45 +1774,92 @@ svg.glyph {
   background: var(--hover);
 }
 
-/* What is drawn under a line: a thread, a note, the box you write in. */
-.diff-under {
-  padding: 8px 20px 12px 126px;
+/* The code, and beside it what was said about its lines. A card is put level with its line by
+   the page, so the code is never broken up. */
+.diff-sheet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.diff-sheet[data-margin] {
+  grid-template-columns: minmax(0, 1fr) clamp(280px, 30%, 380px);
+}
+
+.diff-code {
+  position: relative;
+  align-self: start;
+  min-width: 0;
+}
+
+.diff-margin {
+  position: relative;
+  display: none;
+  margin: 0 16px 0 8px;
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
-.diff-under > * {
-  max-width: 720px;
+.diff-sheet[data-margin] .diff-margin {
+  display: block;
 }
 
-.diff-under .thread,
-.diff-under .note,
-.diff-under .diff-write {
-  padding: 12px 14px;
+.margin-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+/* The lines of the thread the pointer is on. */
+.diff-line[data-lit] {
+  background-image: linear-gradient(var(--picked), var(--picked));
+}
+
+.diff-margin .thread,
+.diff-margin .note,
+.diff-margin .diff-write {
+  padding: 10px 12px;
   background: var(--raised);
-  border: 1px solid var(--line);
   border-left: 2px solid var(--dim);
 }
 
-.diff-under .thread[data-open="true"] {
+.diff-margin .thread[data-open="true"] {
   border-left-color: var(--asking);
 }
 
-.diff-under .note,
-.diff-under .diff-write {
+.diff-margin .note,
+.diff-margin .diff-write {
   border-left-color: var(--accent);
 }
 
 /* A thread's comments are divided inside its card, and the line to reply on is its foot. */
-.diff-under .said + .said {
+.diff-margin .said + .said {
   margin-top: 0;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
-.diff-under .thread-foot {
-  margin: 2px -14px -12px;
-  padding: 6px 8px 6px 14px;
+.diff-margin .thread-foot {
+  margin: 0 -12px -10px;
+  padding: 4px 6px 4px 12px;
   border-top: 1px solid var(--line);
+}
+
+/* A thread that is shut: one line. */
+.margin-stub {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 10px;
+  background: var(--raised);
+  color: var(--dim);
+  font-size: 12px;
+  text-align: left;
+}
+
+.margin-stub:hover,
+.margin-stub[aria-expanded="true"] {
+  color: var(--ink);
 }
 
 /* Side by side: the old file on the left, the new on the right */

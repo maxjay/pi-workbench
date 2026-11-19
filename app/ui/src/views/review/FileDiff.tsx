@@ -1,11 +1,13 @@
 // One changed file's diff, in the middle: old and new in one column, or
-// side by side. A line that has comments carries a marker at its left,
-// which opens and closes them: a thread still open starts open, resolved
-// ones start closed. Click a line to comment on it or to ask the agent
-// about it; shift-click another line to cover every line between. What
-// the agent answers shows under those lines, for you alone.
+// side by side. The code is never broken up. What was said about its
+// lines is beside it, each thread level with the line it ends on: one
+// still open is shown in full, a resolved one is a single line until you
+// open it. The marker at a line's left opens and shuts what is said on
+// it. Click a line to comment on it or to ask the agent about it;
+// shift-click another line to cover every line between. What the agent
+// answers shows beside those lines, for you alone.
 
-import { createEffect, createMemo, createSignal, For, on, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import type { DiffLine } from '../../protocol/DiffLine';
 import type { Place } from '../../protocol/Place';
@@ -149,14 +151,7 @@ export function FileDiff(props: {
     ...((line && line.old !== null && found.get(keyOf(true, line.old))) || []),
   ];
   const draftFor = (thread: Thread) => notesOf(props.r.pull).find((note) => note.thread === thread.id);
-  /** Threads on this file that no line shown draws: on the whole file, on lines gone, or on lines not shown. */
-  const loose = createMemo(() => {
-    const drawn = new Set(lines().flatMap((line) => under(threads(), line)));
-    // With no line to carry a marker, a resolved one follows the overview's switch.
-    return here().filter((thread) => !drawn.has(thread) && (thread.unresolved || !hideResolved()));
-  });
-
-  /** What a line has under it: a thread still open, the agent's notes, or only resolved threads. */
+  /** What a line has beside it: a thread still open, the agent's notes, or only resolved threads. */
   const flag = (row: number) => {
     const line = lines()[row];
     const found = under(threads(), line);
@@ -164,21 +159,42 @@ export function FileDiff(props: {
     if (under(notes(), line).length > 0) return 'note';
     return found.length > 0 ? 'resolved' : undefined;
   };
-  // The lines whose comments you opened or closed yourself. The rest follow what is under them.
+  // The threads and notes you opened or shut yourself. The rest: a thread is open while it is unresolved.
   const [byHand, setByHand] = createSignal<Record<string, boolean>>({});
-  const rowKey = (row: number) => `${lines()[row]?.old ?? ''}:${lines()[row]?.new ?? ''}`;
-  const isOpen = (row: number) => byHand()[rowKey(row)] ?? flag(row) !== 'resolved';
-  const toggle = (row: number) => setByHand({ ...byHand(), [rowKey(row)]: !isOpen(row) });
-  /** A line's threads that are drawn: the open ones while the line is open, and the resolved ones only once you open the line yourself. */
-  const shownThreads = (row: number) =>
-    isOpen(row)
-      ? under(threads(), lines()[row]).filter((thread) => thread.unresolved || byHand()[rowKey(row)] === true)
-      : [];
-  /** What the agent wrote about lines of this file that are not shown. */
-  const looseNotes = createMemo(() => {
-    const drawn = new Set(lines().flatMap((line) => under(notes(), line)));
-    return notesOf(props.r.pull).filter((note) => note.place?.file === props.path && !drawn.has(note));
-  });
+  const threadOpen = (thread: Thread) => byHand()[`t${thread.id}`] ?? thread.unresolved;
+  const noteOpen = (note: Note) => byHand()[`n${note.id}`] ?? true;
+  const setOpen = (key: string, to: boolean) => setByHand({ ...byHand(), [key]: to });
+  const rowOpen = (row: number) =>
+    under(threads(), lines()[row]).some(threadOpen) || under(notes(), lines()[row]).some(noteOpen);
+  /** A line's marker opens or shuts everything said on that line. */
+  const toggleRow = (row: number) => {
+    const [to, next] = [!rowOpen(row), { ...byHand() }];
+    for (const thread of under(threads(), lines()[row])) next[`t${thread.id}`] = to;
+    for (const note of under(notes(), lines()[row])) next[`n${note.id}`] = to;
+    setByHand(next);
+  };
+
+  /** The rows a place covers, first and last. Nothing when its lines are not shown. */
+  const rowsOf = (where: Place | null | undefined) => {
+    if (!where || where.line === null) return undefined;
+    const numberOf = (line: DiffLine) => (where.old ? line.old : line.new);
+    const hi = lines().findIndex((line) => numberOf(line) === where.line);
+    if (hi < 0) return undefined;
+    const lo = lines().findIndex((line) => numberOf(line) === (where.from ?? where.line));
+    return { lo: lo < 0 ? hi : lo, hi };
+  };
+  /** The threads drawn beside the code. One with no line shown to stand beside is at the top, and follows the overview's switch once it is resolved. */
+  const beside = () =>
+    here().filter((thread) => rowsOf(thread.place) || thread.unresolved || !hideResolved());
+  const fileNotes = () => notesOf(props.r.pull).filter((note) => note.place?.file === props.path);
+  /** The lines of the thread or note the pointer is on. */
+  const [lit, setLit] = createSignal<{ lo: number; hi: number }>();
+  const isLit = (row: number) => {
+    const range = lit();
+    return range !== undefined && row >= range.lo && row <= range.hi;
+  };
+  // The margin is kept while there is room for it, so the code does not move when you pick a line.
+  const [roomy, setRoomy] = createSignal(true);
 
   /** How many lines of the file are left out just before a row. */
   const gapBefore = (row: number) => {
@@ -232,6 +248,8 @@ export function FileDiff(props: {
             data-kind={l().kind}
             data-side={p.side}
             data-picked={isPicked(p.row) || undefined}
+            data-lit={isLit(p.row) || undefined}
+            data-row={p.row}
             onClick={(e) => {
               // Dragging over the code selects it, to copy. Only a plain click picks the line.
               if (window.getSelection()?.isCollapsed === false) return;
@@ -246,16 +264,16 @@ export function FileDiff(props: {
                 type="button"
                 class="diff-flag"
                 data-what={flag(p.row)}
-                aria-expanded={isOpen(p.row)}
+                aria-expanded={rowOpen(p.row)}
                 aria-label={
-                  isOpen(p.row) ? 'Close the comments on this line' : 'Open the comments on this line'
+                  rowOpen(p.row) ? 'Shut the comments on this line' : 'Open the comments on this line'
                 }
                 title={
                   flag(p.row) === 'resolved' ? 'Resolved' : flag(p.row) === 'open' ? 'Open' : 'From the agent'
                 }
                 onClick={(e) => {
                   e.stopPropagation();
-                  toggle(p.row);
+                  toggleRow(p.row);
                 }}
               >
                 <span class="flag" data-what={flag(p.row)} />
@@ -285,78 +303,181 @@ export function FileDiff(props: {
     );
   };
 
-  /** What is drawn under a line: the box you are writing in, its threads, the agent's notes. */
-  const Under = (p: { row: number }) => (
-    <>
-      <Show when={span()?.hi === p.row}>
-        <div class="diff-under">
-          <form
-            class="diff-write"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void posting.run();
-            }}
-          >
-            <span class="diff-write-where" title="Shift-click another line to cover more">
-              <Show when={place()} fallback="These lines have no number to comment on">
-                {(at) => placeName(at())}
-              </Show>
-            </span>
-            <textarea
-              class="diff-write-text"
-              rows={2}
-              placeholder="Comment, or ask the agent"
-              aria-label="Comment or question"
-              value={text()}
-              onInput={(e) => setText(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setPicked();
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void posting.run();
-              }}
-              ref={(el) => requestAnimationFrame(() => el.focus())}
-            />
-            <Show when={posting.error()}>
-              {(error) => <span class="diff-write-where note-failed">{error()}</span>}
-            </Show>
-            <div class="diff-write-foot">
-              <button
-                type="submit"
-                class="button button-accent"
-                disabled={posting.busy() || !text().trim() || !place()}
+  /** Beside the code: the box you are writing in, the threads, the agent's notes. */
+  const Margin = () => {
+    let lane!: HTMLDivElement;
+    let queued = 0;
+    // A card starts level with its line, or under the card before it when that one is in the way.
+    const layout = () => {
+      const code = lane.previousElementSibling as HTMLElement;
+      const cards = ([...lane.children] as HTMLElement[])
+        .map((el) => ({ el, row: Number(el.dataset.row), order: Number(el.dataset.order) }))
+        .sort((a, b) => a.row - b.row || a.order - b.order);
+      let floor = 0;
+      for (const card of cards) {
+        const line = card.row < 0 ? null : code.querySelector<HTMLElement>(`[data-row="${card.row}"]`);
+        const top = Math.max(line?.offsetTop ?? 0, floor);
+        card.el.style.top = `${top}px`;
+        floor = top + card.el.offsetHeight + 8;
+      }
+      lane.style.minHeight = `${floor}px`;
+    };
+    const soon = () => {
+      cancelAnimationFrame(queued);
+      queued = requestAnimationFrame(layout);
+    };
+    onMount(() => {
+      const body = lane.closest<HTMLElement>('.diff-body');
+      // Laid out again when the code or a card changes size, and when a card comes, goes or moves to another line.
+      const sizes = new ResizeObserver(() => {
+        if (body) setRoomy(body.clientWidth >= 1000);
+        soon();
+      });
+      const watch = () => {
+        for (const el of lane.children) sizes.observe(el);
+        soon();
+      };
+      const changes = new MutationObserver(watch);
+      if (body) sizes.observe(body);
+      sizes.observe(lane.previousElementSibling as Element);
+      changes.observe(lane, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-row'],
+      });
+      watch();
+      onCleanup(() => {
+        sizes.disconnect();
+        changes.disconnect();
+        cancelAnimationFrame(queued);
+      });
+    });
+    return (
+      <div class="diff-margin" ref={lane}>
+        <Show when={span()}>
+          {(range) => (
+            <div class="margin-item" data-row={range().hi} data-order="0">
+              <form
+                class="diff-write"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void posting.run();
+                }}
               >
-                Comment
-              </button>
-              <button type="button" class="button" disabled={!place()} onClick={askAbout}>
-                Ask
-              </button>
-              <button type="button" class="quiet" onClick={() => setPicked()}>
-                Cancel
-              </button>
+                <span class="diff-write-where" title="Shift-click another line to cover more">
+                  <Show when={place()} fallback="These lines have no number to comment on">
+                    {(at) => placeName(at())}
+                  </Show>
+                </span>
+                <textarea
+                  class="diff-write-text"
+                  rows={2}
+                  placeholder="Comment, or ask the agent"
+                  aria-label="Comment or question"
+                  value={text()}
+                  onInput={(e) => setText(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setPicked();
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void posting.run();
+                  }}
+                  ref={(el) => requestAnimationFrame(() => el.focus())}
+                />
+                <Show when={posting.error()}>
+                  {(error) => <span class="diff-write-where note-failed">{error()}</span>}
+                </Show>
+                <div class="diff-write-foot">
+                  <button
+                    type="submit"
+                    class="button button-accent"
+                    disabled={posting.busy() || !text().trim() || !place()}
+                  >
+                    Comment
+                  </button>
+                  <button type="button" class="button" disabled={!place()} onClick={askAbout}>
+                    Ask
+                  </button>
+                  <button type="button" class="quiet" onClick={() => setPicked()}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
             </div>
-          </form>
-        </div>
-      </Show>
-      <For each={shownThreads(p.row)}>
-        {(thread) => (
-          <div class="diff-under">
-            <ThreadBox r={props.r} thread={thread} draft={draftFor(thread)} />
-          </div>
-        )}
-      </For>
-      <For each={isOpen(p.row) ? under(notes(), lines()[p.row]) : []}>
-        {(note) => (
-          <div class="diff-under">
-            <NoteBox
-              note={note}
-              pull={props.r.pull}
-              label="agent"
-              onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
-            />
-          </div>
-        )}
-      </For>
-    </>
-  );
+          )}
+        </Show>
+        <For each={beside()}>
+          {(thread) => {
+            const rows = () => rowsOf(thread.place);
+            return (
+              <div
+                class="margin-item"
+                data-row={rows()?.hi ?? -1}
+                data-order="1"
+                onPointerEnter={() => setLit(rows())}
+                onPointerLeave={() => setLit()}
+              >
+                {/* A resolved thread is this one line. Shut, an open one is too. */}
+                <Show when={!thread.unresolved || !threadOpen(thread)}>
+                  <button
+                    type="button"
+                    class="margin-stub"
+                    aria-expanded={threadOpen(thread)}
+                    onClick={() => setOpen(`t${thread.id}`, !threadOpen(thread))}
+                  >
+                    <span class="flag" data-what={thread.unresolved ? 'open' : 'resolved'} />
+                    <span>{thread.comments[0]?.author ?? 'Someone'}</span>
+                    <span class="dim">
+                      {thread.unresolved ? 'open' : 'resolved'}
+                      {thread.comments.length > 1 ? ` · ${thread.comments.length}` : ''}
+                    </span>
+                  </button>
+                </Show>
+                <Show when={threadOpen(thread)}>
+                  <ThreadBox r={props.r} thread={thread} draft={draftFor(thread)} showPlace={!rows()} />
+                </Show>
+              </div>
+            );
+          }}
+        </For>
+        <For each={fileNotes()}>
+          {(note) => {
+            const rows = () => rowsOf(note.place);
+            return (
+              <div
+                class="margin-item"
+                data-row={rows()?.hi ?? -1}
+                data-order="2"
+                onPointerEnter={() => setLit(rows())}
+                onPointerLeave={() => setLit()}
+              >
+                <Show
+                  when={noteOpen(note)}
+                  fallback={
+                    <button
+                      type="button"
+                      class="margin-stub"
+                      aria-expanded={false}
+                      onClick={() => setOpen(`n${note.id}`, true)}
+                    >
+                      <span class="flag" data-what="note" />
+                      <span>agent</span>
+                    </button>
+                  }
+                >
+                  <NoteBox
+                    note={note}
+                    pull={props.r.pull}
+                    label={rows() || !note.place ? 'agent' : `agent · ${placeName(note.place)}`}
+                    onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
+                  />
+                </Show>
+              </div>
+            );
+          }}
+        </For>
+      </div>
+    );
+  };
 
   return (
     <Show
@@ -418,62 +539,45 @@ export function FileDiff(props: {
                 </button>
               </p>
             </Show>
-            <For each={loose()}>
-              {(thread) => (
-                <div class="diff-under">
-                  <ThreadBox r={props.r} thread={thread} draft={draftFor(thread)} showPlace />
-                </div>
-              )}
-            </For>
-            <For each={looseNotes()}>
-              {(note) => (
-                <div class="diff-under">
-                  <NoteBox
-                    note={note}
-                    pull={props.r.pull}
-                    label={`agent · ${note.place ? placeName(note.place) : props.path}`}
-                    onPost={(words) => comment(props.r.dir, props.r.pr, words, note.place ?? null)}
-                  />
-                </div>
-              )}
-            </For>
-
-            <Show
-              when={split()}
-              fallback={
-                <For each={lines()}>
-                  {(_, row) => (
-                    <>
-                      <Gap row={row()} />
-                      <Line row={row()} />
-                      <Under row={row()} />
-                    </>
-                  )}
-                </For>
+            <div
+              class="diff-sheet"
+              data-margin={
+                roomy() || span() || beside().length > 0 || fileNotes().length > 0 ? '' : undefined
               }
             >
-              <For each={pairs()}>
-                {(pair) => (
-                  <>
-                    <Gap row={pair.left ?? pair.right ?? 0} />
-                    <div class="diff-pair">
-                      <Show when={pair.left !== undefined} fallback={<div class="diff-blank" />}>
-                        <Line row={pair.left as number} side="old" />
-                      </Show>
-                      <Show when={pair.right !== undefined} fallback={<div class="diff-blank" />}>
-                        <Line row={pair.right as number} side="new" />
-                      </Show>
-                    </div>
-                    <Show when={pair.left !== undefined}>
-                      <Under row={pair.left as number} />
-                    </Show>
-                    <Show when={pair.right !== undefined && pair.right !== pair.left}>
-                      <Under row={pair.right as number} />
-                    </Show>
-                  </>
-                )}
-              </For>
-            </Show>
+              <div class="diff-code">
+                <Show
+                  when={split()}
+                  fallback={
+                    <For each={lines()}>
+                      {(_, row) => (
+                        <>
+                          <Gap row={row()} />
+                          <Line row={row()} />
+                        </>
+                      )}
+                    </For>
+                  }
+                >
+                  <For each={pairs()}>
+                    {(pair) => (
+                      <>
+                        <Gap row={pair.left ?? pair.right ?? 0} />
+                        <div class="diff-pair">
+                          <Show when={pair.left !== undefined} fallback={<div class="diff-blank" />}>
+                            <Line row={pair.left as number} side="old" />
+                          </Show>
+                          <Show when={pair.right !== undefined} fallback={<div class="diff-blank" />}>
+                            <Line row={pair.right as number} side="new" />
+                          </Show>
+                        </div>
+                      </>
+                    )}
+                  </For>
+                </Show>
+              </div>
+              <Margin />
+            </div>
           </div>
         </div>
       )}
