@@ -1,7 +1,8 @@
 // Home's list of pull requests, from dova: the ones you opened, and under
 // their own word the ones assigned to you to review. They come from the
 // whole organization of each folder you have open, not only that folder's
-// project. One field keeps only the repos you name. A row of yours that
+// project. Yours are asked for on their own and show first; the ones to
+// review are added when they come. One field keeps only the repos you name. A row of yours that
 // needs you says why under it: the check that failed, the thread still
 // open. When dova is missing or signed out, the section says what to run.
 // When there is nothing to list, it says what was asked and what was not.
@@ -12,7 +13,7 @@ import { openFolderDialog } from '../../components/OpenFolder';
 import { DaemonError } from '../../daemon';
 import type { PullRow } from '../../protocol/PullRow';
 import { health, recheck } from '../../state/health';
-import { asked, pulls, refreshPulls, repos, searched, setRepos } from '../../state/pulls';
+import { asked, pulls, refreshPulls, repos, searched, setRepos, toReview } from '../../state/pulls';
 import { open } from '../../state/tabs';
 
 const INSTALL = 'curl -LO https://dova.maxjay.dev/dova.deb && sudo apt install ./dova.deb';
@@ -148,11 +149,20 @@ export function Pulls() {
     const error: unknown = pulls.error;
     return error instanceof Error ? error.message : String(error);
   };
+  /** Yours, then the ones to review that are not also yours. */
+  const all = createMemo(() => {
+    const mine = pulls.latest ?? [];
+    const same = (a: PullRow) => (b: PullRow) =>
+      a.id === b.id && a.repo === b.repo && a.project === b.project;
+    return [...mine, ...(toReview.latest ?? []).filter((row) => !mine.some(same(row)))];
+  });
   /** The ones in the repos you named, or all of them. */
-  const kept = createMemo(() => (pulls.latest ?? []).filter(named(repos())));
-  const leftOut = () => (pulls.latest ?? []).length - kept().length;
+  const kept = createMemo(() => all().filter(named(repos())));
+  const leftOut = () => all().length - kept().length;
   const yours = () => kept().filter((row) => !row.review);
-  const toReview = () => kept().filter((row) => row.review);
+  const reviewing = () => kept().filter((row) => row.review);
+  /** The ones to review have not come yet. */
+  const waiting = () => toReview.loading && !toReview.latest;
   const needYou = () => yours().filter((row) => row.failed || row.thread).length;
   /** The folders that were passed over: their remote is not on Azure Repos, or they have none. */
   const passed = () => asked().filter((folder) => !folder.project);
@@ -161,10 +171,11 @@ export function Pulls() {
     <section class="section" aria-labelledby="pulls">
       <div class="section-head">
         <h2 id="pulls">Pull requests</h2>
-        <Show when={pulls.latest?.length}>
+        <Show when={all().length}>
           <span class="dim">
-            {yours().length} yours{needYou() > 0 ? `, ${needYou()} need you` : ''}, {toReview().length} to
-            review{leftOut() > 0 ? `, ${leftOut()} left out` : ''}
+            {yours().length} yours{needYou() > 0 ? `, ${needYou()} need you` : ''}
+            {waiting() ? '' : `, ${reviewing().length} to review`}
+            {leftOut() > 0 ? `, ${leftOut()} left out` : ''}
           </span>
         </Show>
         <span class="top-gap" />
@@ -201,7 +212,7 @@ export function Pulls() {
           </div>
         </Match>
         <Match when={pulls.latest}>
-          {(rows) => (
+          {(_) => (
             <div class="rows">
               <div class="pull-row pull-head dim">
                 <span>#</span>
@@ -212,14 +223,14 @@ export function Pulls() {
                 <span>Check</span>
                 <span>Threads</span>
               </div>
-              <Show when={rows().length > 0}>
+              <Show when={all().length > 0 || waiting()}>
                 <p class="pull-group dim">Yours · {yours().length}</p>
                 <For each={yours()}>{(row) => <Row row={row} />}</For>
-                <p class="pull-group dim">To review · {toReview().length}</p>
-                <For each={toReview()}>{(row) => <Row row={row} />}</For>
+                <p class="pull-group dim">To review · {waiting() ? 'asking dova' : reviewing().length}</p>
+                <For each={reviewing()}>{(row) => <Row row={row} />}</For>
               </Show>
               {/* Nothing to list: say what was asked, so it is plain whether that is right. */}
-              <Show when={rows().length === 0}>
+              <Show when={all().length === 0 && !waiting()}>
                 <div class="rows-none dim pulls-why">
                   <Show
                     when={asked().length > 0}

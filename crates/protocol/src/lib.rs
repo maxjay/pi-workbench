@@ -137,8 +137,13 @@ pub enum Call {
     },
 
     /// The pull requests you opened, in every project your workspaces are in.
+    /// With `review`, the ones you were asked to review instead. They are two
+    /// calls so that yours show without waiting for the others.
     #[serde(rename = "pulls.list")]
-    PullsList,
+    PullsList {
+        #[serde(default)]
+        review: bool,
+    },
     /// A folder's branch and its pull request. With `pr`, that pull request
     /// whatever branch the folder is on.
     #[serde(rename = "pull.status")]

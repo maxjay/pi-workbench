@@ -407,10 +407,10 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::link(&ctx.dova, &dir, &ids).await?;
             Answer::Done
         }
-        Call::PullsList => {
+        Call::PullsList { review } => {
             let (rows, asked, searched) = ctx
                 .pulls
-                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all(), review)
                 .await?;
             Answer::Pulls {
                 rows,

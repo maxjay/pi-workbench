@@ -32,14 +32,16 @@ struct Clone {
 }
 
 impl Pulls {
-    /// The pull requests you opened and the ones you were asked to review, in the whole of
-    /// each organization a workspace is cloned from: its other projects too. With them, every
-    /// folder that was looked at and every project that was asked, so an empty list can say why.
+    /// The pull requests you opened, or with `review` the ones you were asked to review, in
+    /// the whole of each organization a workspace is cloned from: its other projects too. With
+    /// them, every folder that was looked at and every project that was asked, so an empty
+    /// list can say why.
     pub async fn list(
         &self,
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
+        review: bool,
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let mut clones = Vec::new();
         let mut looked = Vec::new();
@@ -87,7 +89,7 @@ impl Pulls {
                     projects.push((name, true));
                 }
             }
-            for name in elsewhere(dova, reviews, cwd).await {
+            for name in elsewhere(dova, reviews, cwd, review).await {
                 if !projects
                     .iter()
                     .any(|(known, _)| known.eq_ignore_ascii_case(&name))
@@ -97,45 +99,41 @@ impl Pulls {
             }
 
             for (project, must) in projects {
-                // The ones you opened, then the ones you were asked to review.
-                for review in [false, true] {
-                    let asked = json!({ "project": project, "review": review });
-                    let listed = match dova.call("pr.list", cwd, asked).await {
-                        Ok(listed) => listed,
-                        Err(err) if must => return Err(err),
-                        // A project found by the search that will not list is left out.
-                        Err(_) => continue,
-                    };
-                    let listed: Vec<PullRow> = serde_json::from_value(listed)
-                        .map_err(|err| Error::Dova(format!("couldn't read dova's list: {err}")))?;
-                    for mut row in listed {
-                        if rows.iter().any(|known| known.pr.id == row.pr.id) {
-                            continue;
-                        }
-                        // The ones you opened are listed as yours, even where you are a reviewer too.
-                        if !review {
-                            row.review = None;
-                        } else if row.review.is_none() {
-                            row.review = Some(Reviewing {
-                                vote: "none".into(),
-                                team: None,
-                            });
-                        }
-                        row.workspace = home(&clones, &row);
-                        // Why a check failed and which thread is open are asked for one row at a
-                        // time. They are for your own: a team can be asked to review a great many.
-                        if !review {
-                            let failed =
-                                |run: &PipelineRun| run.result.as_deref() == Some("failed");
-                            if row.check.as_ref().is_some_and(failed) {
-                                row.failed = self.why(dova, cwd, &row).await;
-                            }
-                            if row.open_threads > 0 {
-                                row.thread = first_open(dova, cwd, row.pr.id).await;
-                            }
-                        }
-                        rows.push(row);
+                let asked = json!({ "project": project, "review": review });
+                let listed = match dova.call("pr.list", cwd, asked).await {
+                    Ok(listed) => listed,
+                    Err(err) if must => return Err(err),
+                    // A project found by the search that will not list is left out.
+                    Err(_) => continue,
+                };
+                let listed: Vec<PullRow> = serde_json::from_value(listed)
+                    .map_err(|err| Error::Dova(format!("couldn't read dova's list: {err}")))?;
+                for mut row in listed {
+                    if rows.iter().any(|known| known.pr.id == row.pr.id) {
+                        continue;
                     }
+                    // The ones you opened are listed as yours, even where you are a reviewer too.
+                    if !review {
+                        row.review = None;
+                    } else if row.review.is_none() {
+                        row.review = Some(Reviewing {
+                            vote: "none".into(),
+                            team: None,
+                        });
+                    }
+                    row.workspace = home(&clones, &row);
+                    // Why a check failed and which thread is open are asked for one row at a
+                    // time. They are for your own: a team can be asked to review a great many.
+                    if !review {
+                        let failed = |run: &PipelineRun| run.result.as_deref() == Some("failed");
+                        if row.check.as_ref().is_some_and(failed) {
+                            row.failed = self.why(dova, cwd, &row).await;
+                        }
+                        if row.open_threads > 0 {
+                            row.thread = first_open(dova, cwd, row.pr.id).await;
+                        }
+                    }
+                    rows.push(row);
                 }
                 searched.push(project);
             }
@@ -260,25 +258,25 @@ async fn first_open(dova: &Dova, cwd: &str, pr: u64) -> Option<ThreadSummary> {
 }
 
 /// The projects, anywhere in the organization `cwd` is cloned from, that have an open pull
-/// request you opened or are a reviewer of. Nothing when the organization will not say.
-async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str) -> Vec<String> {
+/// request you opened, or with `review` one you are a reviewer of. Nothing when the
+/// organization will not say.
+async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str, review: bool) -> Vec<String> {
     let Ok(me) = reviews.me(dova, cwd).await else {
         return Vec::new();
     };
+    let who = if review { "reviewerId" } else { "creatorId" };
+    // A path that starts with a slash is asked of the organization, not of the folder's project.
+    let path = format!(
+        "/_apis/git/pullrequests?searchCriteria.{who}={me}&searchCriteria.status=active&$top=500&api-version=7.1"
+    );
+    let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
+        return Vec::new();
+    };
     let mut projects: Vec<String> = Vec::new();
-    for who in ["creatorId", "reviewerId"] {
-        // A path that starts with a slash is asked of the organization, not of the folder's project.
-        let path = format!(
-            "/_apis/git/pullrequests?searchCriteria.{who}={me}&searchCriteria.status=active&$top=500&api-version=7.1"
-        );
-        let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
-            continue;
-        };
-        for pull in found["value"].as_array().into_iter().flatten() {
-            let name = pull["repository"]["project"]["name"].as_str();
-            if let Some(name) = name.filter(|name| !projects.iter().any(|known| known == name)) {
-                projects.push(name.to_string());
-            }
+    for pull in found["value"].as_array().into_iter().flatten() {
+        let name = pull["repository"]["project"]["name"].as_str();
+        if let Some(name) = name.filter(|name| !projects.iter().any(|known| known == name)) {
+            projects.push(name.to_string());
         }
     }
     projects

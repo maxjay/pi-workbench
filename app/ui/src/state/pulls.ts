@@ -17,18 +17,25 @@ export function setRepos(text: string) {
   setReposNow(text);
 }
 
-const [pulls, { refetch }] = createResource(
-  // Nothing to ask until wbd is up and has found dova.
-  () => status() === 'ready' && Boolean(health()?.dova),
-  async () => {
-    const listed = await ask({ method: 'pulls.list' }, 'pulls');
-    setAsked(listed.asked);
-    setSearched(listed.searched);
-    return listed.rows;
-  },
-);
+// Nothing to ask until wbd is up and has found dova.
+const ready = () => status() === 'ready' && Boolean(health()?.dova);
 
-export { asked, pulls, repos, searched };
+/** The ones you opened. Asked as soon as wbd is up, and shown without waiting for the others. */
+const [pulls, { refetch }] = createResource(ready, async () => {
+  const listed = await ask({ method: 'pulls.list', params: { review: false } }, 'pulls');
+  setAsked(listed.asked);
+  setSearched(listed.searched);
+  return listed.rows;
+});
+
+/** The ones you were asked to review. Asked at the same time, and added when they come. */
+const [toReview, { refetch: refetchReview }] = createResource(ready, async () => {
+  const listed = await ask({ method: 'pulls.list', params: { review: true } }, 'pulls');
+  setSearched((known) => [...new Set([...known, ...listed.searched])]);
+  return listed.rows;
+});
+
+export { asked, pulls, repos, searched, toReview };
 
 /** Asks dova again. */
-export const refreshPulls = () => refetch();
+export const refreshPulls = () => Promise.all([refetch(), refetchReview()]);
