@@ -5,8 +5,8 @@
 // When there is nothing to list, it says what was asked and what was not.
 //
 // "To review" has the ones you or a team of yours were asked to review.
-// There can be a great many, so each is one line, and Pick chooses the
-// projects, repos and people whose rows show.
+// There can be a great many, so each is one line, and the switches under
+// the heading choose the projects, repos and people whose rows show.
 
 import { createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from 'solid-js';
 import { pullHue } from '../../components/hues';
@@ -182,46 +182,49 @@ function Pick(props: { rows: PullRow[] }) {
 
   return (
     <div class="watch">
-      <For each={projects()}>
-        {(group) => (
-          <div class="watch-line">
-            <button
-              type="button"
-              class="quiet watch-project"
-              aria-pressed={whole(group.project)}
-              title="The whole project"
-              onClick={() => toggleProject(group.project)}
-            >
-              {group.project}
-            </button>
-            <For each={group.repos}>
-              {([repo, count]) => (
-                <button
-                  type="button"
-                  class="quiet"
-                  aria-pressed={on(group.project, repo)}
-                  onClick={() =>
-                    toggleRepo(
-                      group.project,
-                      repo,
-                      group.repos.map(([name]) => name),
-                    )
-                  }
-                >
-                  {repo} <span class="watch-count">{count}</span>
-                </button>
-              )}
-            </For>
-          </div>
-        )}
-      </For>
+      <span class="watch-word dim">Repos</span>
+      <div class="watch-lines">
+        <For each={projects()}>
+          {(group) => (
+            <div class="watch-line">
+              <button
+                type="button"
+                class="watch-switch watch-project"
+                aria-pressed={whole(group.project)}
+                title={`Every repo in ${group.project}`}
+                onClick={() => toggleProject(group.project)}
+              >
+                {group.project}
+              </button>
+              <For each={group.repos}>
+                {([repo, count]) => (
+                  <button
+                    type="button"
+                    class="watch-switch"
+                    aria-pressed={on(group.project, repo)}
+                    onClick={() =>
+                      toggleRepo(
+                        group.project,
+                        repo,
+                        group.repos.map(([name]) => name),
+                      )
+                    }
+                  >
+                    {repo} <span class="watch-count">{count}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          )}
+        </For>
+      </div>
+      <span class="watch-word dim">People</span>
       <div class="watch-line">
-        <span class="watch-word dim">by</span>
         <For each={people()}>
           {([name, count]) => (
             <button
               type="button"
-              class="quiet"
+              class="watch-switch"
               aria-pressed={picked().people.includes(name)}
               onClick={() => togglePerson(name)}
             >
@@ -235,7 +238,6 @@ function Pick(props: { rows: PullRow[] }) {
 }
 
 function ToReview() {
-  const [picking, setPicking] = createSignal(false);
   /** The ones to review that you did not open yourself. */
   const all = createMemo(() => {
     const mine = listed() ?? [];
@@ -259,16 +261,11 @@ function ToReview() {
         <span class="top-gap" />
         <Show when={any()}>
           <button type="button" class="quiet" onClick={() => setPicked({ repos: [], people: [] })}>
-            All
-          </button>
-        </Show>
-        <Show when={all().length > 0}>
-          <button type="button" class="quiet" aria-pressed={picking()} onClick={() => setPicking(!picking())}>
-            Pick
+            Clear
           </button>
         </Show>
       </div>
-      <Show when={picking()}>
+      <Show when={all().length > 0}>
         <Pick rows={all()} />
       </Show>
       <Switch>
