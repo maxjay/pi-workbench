@@ -493,7 +493,7 @@ svg.glyph {
   justify-content: center;
   align-items: flex-start;
   padding-top: 96px;
-  background: rgb(14 15 13 / 0.7);
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
 }
 
 /* The backdrop is a button: pressing anywhere outside the list closes it. */
@@ -650,7 +650,7 @@ svg.glyph {
 .columns[data-chat="right"] .chat,
 .pr-cols > .chat {
   border-left: 1px solid var(--line);
-  background: #121310;
+  background: var(--beside);
   --ground: var(--paper);
 }
 
@@ -734,7 +734,7 @@ svg.glyph {
 .chat-entries .markdown,
 .chat-empty {
   font-family: var(--display);
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.5;
 }
 
@@ -861,7 +861,7 @@ svg.glyph {
   flex-direction: column;
   background: var(--ground);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -987,7 +987,7 @@ svg.glyph {
 
 .markdown code {
   font-family: var(--mono);
-  font-size: 0.9em;
+  font-size: 13px;
 }
 
 .markdown pre code {
@@ -1031,7 +1031,7 @@ svg.glyph {
   outline: 0;
   color: var(--ink);
   font-family: var(--display);
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.5;
   padding: 12px 0 4px;
 }
@@ -1527,4 +1527,22 @@ svg.glyph {
   flex-direction: column;
   gap: 4px;
   overflow-wrap: anywhere;
+}
+
+/* Settings: the theme is picked by its word. The one in ink is the one that is on. */
+.setting-theme {
+  display: flex;
+  gap: 2px;
+  margin-left: -8px;
+}
+
+/* xterm paints its own ground black under the screen. It takes the paper's colour, in either theme. */
+.terminal .xterm-viewport {
+  /* biome-ignore lint/complexity/noImportantStyles: xterm sets its own ground in a style of higher weight */
+  background-color: var(--paper) !important;
+}
+
+.setting-theme {
+  align-items: center;
+  padding: 6px 0;
 }

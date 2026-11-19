@@ -6,6 +6,7 @@ import type { Agent } from '../protocol/Agent';
 import { agentName, askOffer, defaultAgent, setDefaultAgent } from '../state/conversations';
 import { health } from '../state/health';
 import { active } from '../state/tabs';
+import { setTheme, type Theme, theme } from '../state/theme';
 
 export function Settings() {
   const version = (agent: Agent) => (agent === 'pi' ? health()?.pi : health()?.claude);
@@ -64,6 +65,22 @@ export function Settings() {
               <dd>{h().distro ?? 'Linux, outside WSL'}</dd>
               <dt>dova</dt>
               <dd classList={{ dim: !h().dova }}>{h().dova ?? 'not found in WSL'}</dd>
+              <dt>Theme</dt>
+              <dd class="setting-theme">
+                {/* System follows Windows. */}
+                <For each={['system', 'light', 'dark'] as Theme[]}>
+                  {(each) => (
+                    <button
+                      type="button"
+                      class="quiet"
+                      aria-pressed={theme() === each}
+                      onClick={() => setTheme(each)}
+                    >
+                      {each}
+                    </button>
+                  )}
+                </For>
+              </dd>
             </dl>
           </section>
         )}

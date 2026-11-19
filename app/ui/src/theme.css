@@ -1,59 +1,96 @@
 /* The design's tokens. Everything else refers to these by name.
-   The surfaces are the same four maxjay.dev uses. Colour is only ever a state. */
+
+   There are two themes, with the colours maxjay.dev has in each. A colour
+   that differs is written once, the light one first and the dark one
+   second. Which is used follows Windows, unless Settings picked one: the
+   two rules at the foot of this file say so. */
 
 :root {
-  --paper: #0e0f0d;
-  --ink: #ecebe4;
-  --dim: #8b897e;
-  --line: #2a2b27;
+  color-scheme: light dark;
+
+  /* The four surfaces of maxjay.dev. */
+  --paper: light-dark(#f2f0e9, #0e0f0d);
+  --ink: light-dark(#14140f, #ecebe4);
+  --dim: light-dark(#78766b, #8b897e);
+  --line: light-dark(#d5d2c6, #2a2b27);
+  /* Words on a block of colour: the same dark ink in both themes, as on maxjay.dev. */
+  --on: #14140f;
 
   /* A card that sits on top of something else: a comment on a line of code. */
-  --raised: #171815;
+  --raised: light-dark(#f9f8f3, #171815);
+  /* What opens on top of a card: the list of states in a thread. */
+  --above: light-dark(#fefdfa, #1c1d19);
+  /* The agent's column, beside something else: a shade off the paper. */
+  --beside: light-dark(#f7f5ef, #121310);
+  /* Under code and what a command printed: a shade off the paper the other way. */
+  --ground: light-dark(#e8e6dc, #131411);
+  /* The thumb of a scrollbar, and the line of something that is done with. */
+  --faint: light-dark(#bdbaae, #4a4b45);
+  /* A thing that is done with: the square of a resolved thread. */
+  --gone: light-dark(#9c998d, #6b6a62);
+  /* The old file's line numbers, quieter than the new one's. */
+  --old: light-dark(#aaa79b, #5f5e56);
+  /* Your own words to the agent in a thread: a little quieter than what is posted. */
+  --quiet-ink: light-dark(#3d3d35, #c9c8c0);
 
-  /* A row under the pointer, and the row that is picked. */
-  --hover: rgb(236 235 228 / 0.05);
-  --picked: rgb(236 235 228 / 0.07);
+  /* A row under the pointer, and the row that is picked: a little of the ink over what is there. */
+  --hover: color-mix(in srgb, var(--ink) 5%, transparent);
+  --picked: color-mix(in srgb, var(--ink) 7%, transparent);
+
+  /* Every colour that says something has one lightness and one strength, and only its hue differs:
+     0.70 and 0.17 on the light paper, 0.80 and 0.15 on the dark, as on maxjay.dev.
+     components/hues.ts makes a pull request's and a ticket type's colour the same way. */
 
   /* States, and nothing else. */
-  --failed: oklch(0.74 0.16 25);
-  --ok: oklch(0.8 0.15 150);
-  --working: oklch(0.82 0.14 85);
-  --asking: oklch(0.78 0.12 250);
+  --failed: light-dark(oklch(0.7 0.17 25), oklch(0.8 0.15 25));
+  --ok: light-dark(oklch(0.7 0.17 150), oklch(0.8 0.15 150));
+  --working: light-dark(oklch(0.7 0.17 85), oklch(0.8 0.15 85));
+  --asking: light-dark(oklch(0.7 0.17 250), oklch(0.8 0.15 250));
 
-  /* A pull request's own colour, the way a page of maxjay.dev has one: the
-     same lightness and strength as the states, a hue none of them uses. It
-     marks what is picked, what posts, and what the agent wrote. */
-  --accent: oklch(0.8 0.15 310);
+  /* The app's own colour, the way a page of maxjay.dev has one. A pull request's
+     tab and a ticket's put their own in its place. */
+  --accent: light-dark(oklch(0.7 0.17 310), oklch(0.8 0.15 310));
 
   /* What a thing is: what people said is blue, the agent and anything only you see is orange. */
-  --people: oklch(0.8 0.15 250);
-  --agent: oklch(0.8 0.15 60);
-  --faint: #4a4b45;
-  /* Under code and what a command printed: a shade under the paper. */
-  --ground: #131411;
+  --people: light-dark(oklch(0.7 0.17 250), oklch(0.8 0.15 250));
+  --agent: light-dark(oklch(0.7 0.17 60), oklch(0.8 0.15 60));
 
-  /* Code, in the editor: one lightness and strength, only the hue differs. */
-  --syn-keyword: oklch(0.8 0.1 310);
-  --syn-string: oklch(0.8 0.1 150);
-  --syn-number: oklch(0.8 0.1 70);
-  --syn-type: oklch(0.8 0.1 200);
-  --syn-function: oklch(0.8 0.1 255);
+  /* A line that was added, and one that was removed. */
+  --added: color-mix(in oklch, var(--ok) 12%, transparent);
+  --removed: color-mix(in oklch, var(--failed) 12%, transparent);
 
-  /* The terminal's colours. Plain values, because xterm can't read the forms above. */
-  --term-red: #f08c80;
-  --term-green: #7fd39a;
-  --term-yellow: #e2c36f;
-  --term-blue: #8db5ee;
-  --term-magenta: #cba6e6;
-  --term-cyan: #72cfd0;
-  --term-selection: #3a3b36;
+  /* Code: one lightness and strength, only the hue differs. Darker on the light paper, to be read. */
+  --syn-keyword: light-dark(oklch(0.52 0.15 310), oklch(0.8 0.1 310));
+  --syn-string: light-dark(oklch(0.52 0.13 150), oklch(0.8 0.1 150));
+  --syn-number: light-dark(oklch(0.52 0.13 70), oklch(0.8 0.1 70));
+  --syn-type: light-dark(oklch(0.52 0.13 200), oklch(0.8 0.1 200));
+  --syn-function: light-dark(oklch(0.52 0.15 255), oklch(0.8 0.1 255));
 
+  /* The terminal's colours. */
+  --term-red: light-dark(#b3392c, #f08c80);
+  --term-green: light-dark(#2f7d4a, #7fd39a);
+  --term-yellow: light-dark(#8a6a12, #e2c36f);
+  --term-blue: light-dark(#2f5fa8, #8db5ee);
+  --term-magenta: light-dark(#7d4aa3, #cba6e6);
+  --term-cyan: light-dark(#1f7f80, #72cfd0);
+  --term-selection: light-dark(#d9d6ca, #3a3b36);
+
+  /* Two faces: the mono for the app's own words and for code, the other for what people and the
+     agent say. Text sizes are whole pixels, so every size is drawn as sharp as the next: 12 and 13
+     in the mono, 14 and 15 for what is read, and 16, 18, 22, 26 and 32 for headings. */
   --display: "Archivo Variable", "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
   /* The height of the top row, and of every bar under it. */
   --top: 44px;
   --bar: 40px;
+}
 
+/* The theme picked in Settings. With neither, the page follows Windows. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
   color-scheme: dark;
 }

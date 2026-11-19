@@ -49,7 +49,7 @@ const look = EditorView.theme(
     '.cm-activeLine': { backgroundColor: 'var(--hover)' },
     '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--ink)' },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-      backgroundColor: 'rgb(236 235 228 / 0.18) !important',
+      backgroundColor: 'color-mix(in srgb, var(--ink) 18%, transparent) !important',
     },
     '.cm-selectionMatch': { backgroundColor: 'var(--picked)' },
     '&.cm-focused': { outline: 'none' },

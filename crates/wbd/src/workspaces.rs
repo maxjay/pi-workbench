@@ -1,6 +1,9 @@
 //! The workspaces: folders opened in the workbench, kept in
 //! `workspaces.json` in wbd's data folder. Nothing is written into the
 //! folders themselves.
+//!
+//! The folders under `~/.pi/workspaces` are workspaces without being
+//! opened by hand: each is taken in the first time it is seen there.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,12 +19,33 @@ pub struct Workspaces {
     /// Where scratchpads' folders are made.
     scratch: PathBuf,
     list: Mutex<Vec<Workspace>>,
+    /// Where Pi's own workspaces are: `~/.pi/workspaces`, or what `WB_PI_WORKSPACES` names.
+    pi: Option<PathBuf>,
+    /// The folders that were taken in from there, kept in `adopted.json`. One you take off the
+    /// list is still in here, so it is not taken in again.
+    adopted_file: PathBuf,
+    adopted: Mutex<Vec<String>>,
 }
 
 impl Workspaces {
     pub fn new(data_dir: &Path) -> Self {
+        let pi = std::env::var_os("WB_PI_WORKSPACES")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".pi/workspaces"))
+            });
+        Self::beside(data_dir, pi)
+    }
+
+    /// The store, with `pi` as the folder Pi's own workspaces are in, if there is one.
+    fn beside(data_dir: &Path, pi: Option<PathBuf>) -> Self {
         let file = data_dir.join("workspaces.json");
         let list = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default();
+        let adopted_file = data_dir.join("adopted.json");
+        let adopted = std::fs::read_to_string(&adopted_file)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_default();
@@ -29,11 +53,15 @@ impl Workspaces {
             file,
             scratch: data_dir.join("scratch"),
             list: Mutex::new(list),
+            pi,
+            adopted_file,
+            adopted: Mutex::new(adopted),
         }
     }
 
     /// The last opened first.
     pub fn all(&self) -> Vec<Workspace> {
+        self.adopt();
         let mut list = self.list.lock().expect("not poisoned").clone();
         list.sort_by_key(|workspace| std::cmp::Reverse(workspace.opened));
         list
@@ -86,6 +114,50 @@ impl Workspaces {
         })
     }
 
+    /// Takes in the folders under Pi's workspaces that were not seen before. A folder that is a
+    /// repo is one workspace. A folder that only holds repos gives one for each of them.
+    fn adopt(&self) {
+        let Some(found) = self.pi.as_deref().map(under) else {
+            return;
+        };
+        let fresh: Vec<PathBuf> = {
+            let adopted = self.adopted.lock().expect("not poisoned");
+            found
+                .into_iter()
+                .filter(|folder| !adopted.contains(&folder.display().to_string()))
+                .collect()
+        };
+        if fresh.is_empty() {
+            return;
+        }
+        for folder in &fresh {
+            // It is listed by when it was last changed, not as if it was opened just now.
+            let changed = std::fs::metadata(folder)
+                .and_then(|data| data.modified())
+                .ok()
+                .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+                .map_or(0, |since| since.as_millis() as u64);
+            let path = folder.display().to_string();
+            let _ = self.change(|list| {
+                if list.iter().any(|workspace| workspace.path == path) {
+                    return;
+                }
+                list.push(Workspace {
+                    id: new_id(list, changed),
+                    name: name_of(folder),
+                    path: path.clone(),
+                    opened: changed,
+                    scratch: false,
+                });
+            });
+        }
+        let mut adopted = self.adopted.lock().expect("not poisoned");
+        adopted.extend(fresh.iter().map(|folder| folder.display().to_string()));
+        if let Ok(text) = serde_json::to_string_pretty(&*adopted) {
+            let _ = files::write_whole(&self.adopted_file, &text, None);
+        }
+    }
+
     pub fn forget(&self, id: &str) -> Result<(), Error> {
         self.change(|list| list.retain(|workspace| workspace.id != id))
     }
@@ -100,6 +172,38 @@ impl Workspaces {
         files::write_whole(&self.file, &text, None).map_err(|err| Error::io(&self.file, err))?;
         Ok(result)
     }
+}
+
+/// The folders to take in from Pi's workspaces: each folder there, or the repos inside it when
+/// it is not a repo itself and holds some. Hidden folders are left out.
+fn under(dir: &Path) -> Vec<PathBuf> {
+    let inside = |dir: &Path| -> Vec<PathBuf> {
+        let mut folders: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir() && !name_of(path).starts_with('.'))
+            .filter_map(|path| path.canonicalize().ok())
+            .collect();
+        folders.sort();
+        folders
+    };
+    let mut found = Vec::new();
+    for folder in inside(dir) {
+        let repos: Vec<PathBuf> = match folder.join(".git").exists() {
+            true => Vec::new(),
+            false => inside(&folder)
+                .into_iter()
+                .filter(|inner| inner.join(".git").exists())
+                .collect(),
+        };
+        match repos.is_empty() {
+            true => found.push(folder),
+            false => found.extend(repos),
+        }
+    }
+    found
 }
 
 /// The folders in `dir`, hidden ones left out, sorted by name, with the
@@ -199,13 +303,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn takes_in_pis_workspaces_once() {
+        let data = tempfile::tempdir().unwrap();
+        let pi = tempfile::tempdir().unwrap();
+        // A repo, a folder that only holds repos, a plain folder, and a hidden one.
+        std::fs::create_dir_all(pi.path().join("web/.git")).unwrap();
+        std::fs::create_dir_all(pi.path().join("shop/api/.git")).unwrap();
+        std::fs::create_dir_all(pi.path().join("shop/site/.git")).unwrap();
+        std::fs::create_dir_all(pi.path().join("notes")).unwrap();
+        std::fs::create_dir_all(pi.path().join(".cache")).unwrap();
+
+        let workspaces = Workspaces::beside(data.path(), Some(pi.path().to_path_buf()));
+        let mut names: Vec<String> = workspaces.all().into_iter().map(|w| w.name).collect();
+        names.sort();
+        assert_eq!(names, ["api", "notes", "site", "web"]);
+
+        // One taken off the list stays off, in this wbd and in the next.
+        let web = workspaces
+            .all()
+            .into_iter()
+            .find(|w| w.name == "web")
+            .unwrap();
+        workspaces.forget(&web.id).unwrap();
+        assert_eq!(workspaces.all().len(), 3);
+        let next = Workspaces::beside(data.path(), Some(pi.path().to_path_buf()));
+        assert_eq!(next.all().len(), 3);
+
+        // A folder that comes later is taken in then.
+        std::fs::create_dir_all(pi.path().join("later/.git")).unwrap();
+        assert_eq!(next.all().len(), 4);
+    }
+
+    #[test]
     fn opens_remembers_and_forgets() {
         let data = tempfile::tempdir().unwrap();
         let code = tempfile::tempdir().unwrap();
         std::fs::create_dir(code.path().join("web")).unwrap();
         std::fs::create_dir(code.path().join("api")).unwrap();
 
-        let workspaces = Workspaces::new(data.path());
+        let workspaces = Workspaces::beside(data.path(), None);
         let web = workspaces
             .open(&code.path().join("web").display().to_string())
             .unwrap();
@@ -218,7 +354,7 @@ mod tests {
         assert_eq!(again.id, web.id);
 
         // A new wbd reads the same list back.
-        let reread = Workspaces::new(data.path());
+        let reread = Workspaces::beside(data.path(), None);
         assert_eq!(reread.all().len(), 2);
 
         reread.forget(&api.id).unwrap();
@@ -253,7 +389,7 @@ mod tests {
     #[test]
     fn a_scratchpad_gets_a_folder_named_after_what_you_asked() {
         let data = tempfile::tempdir().unwrap();
-        let workspaces = Workspaces::new(data.path());
+        let workspaces = Workspaces::beside(data.path(), None);
         let first = workspaces
             .scratch("Why does checkout crash on run?")
             .unwrap();

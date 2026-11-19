@@ -5,13 +5,48 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal as Xterm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { createAction } from '../../components/action';
 import type { Terminal } from '../../protocol/Terminal';
 import { closeTerminal, draw, openTerminal, printed, resize, terminalsIn, type } from '../../state/terminals';
+import { light } from '../../state/theme';
 
 /** A token from theme.css, as the colour it stands for. xterm takes real values, not names. */
 const token = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/** A colour token as the colour it is in the theme shown now. The token itself holds both themes' colours. */
+function colour(name: string) {
+  const probe = document.createElement('span');
+  probe.style.color = `var(${name})`;
+  document.documentElement.append(probe);
+  const now = getComputedStyle(probe).color;
+  probe.remove();
+  return now;
+}
+
+/** The terminal's colours, in the theme shown now. */
+const colours = () => ({
+  background: colour('--paper'),
+  foreground: colour('--ink'),
+  cursor: colour('--ink'),
+  selectionBackground: colour('--term-selection'),
+  black: colour('--paper'),
+  red: colour('--term-red'),
+  green: colour('--term-green'),
+  yellow: colour('--term-yellow'),
+  blue: colour('--term-blue'),
+  magenta: colour('--term-magenta'),
+  cyan: colour('--term-cyan'),
+  white: colour('--ink'),
+  brightBlack: colour('--dim'),
+  brightRed: colour('--term-red'),
+  brightGreen: colour('--term-green'),
+  brightYellow: colour('--term-yellow'),
+  brightBlue: colour('--term-blue'),
+  brightMagenta: colour('--term-magenta'),
+  brightCyan: colour('--term-cyan'),
+  brightWhite: colour('--ink'),
+});
 
 export function Terminals(props: { dir: string }) {
   const list = () => terminalsIn(props.dir);
@@ -82,29 +117,18 @@ function View(props: { terminal: Terminal; shown: boolean }) {
     lineHeight: 1.3,
     cursorBlink: true,
     scrollback: 5000,
-    theme: {
-      background: token('--paper'),
-      foreground: token('--ink'),
-      cursor: token('--ink'),
-      selectionBackground: token('--term-selection'),
-      black: token('--line'),
-      red: token('--term-red'),
-      green: token('--term-green'),
-      yellow: token('--term-yellow'),
-      blue: token('--term-blue'),
-      magenta: token('--term-magenta'),
-      cyan: token('--term-cyan'),
-      white: token('--ink'),
-      brightBlack: token('--dim'),
-      brightRed: token('--term-red'),
-      brightGreen: token('--term-green'),
-      brightYellow: token('--term-yellow'),
-      brightBlue: token('--term-blue'),
-      brightMagenta: token('--term-magenta'),
-      brightCyan: token('--term-cyan'),
-      brightWhite: token('--ink'),
-    },
+    theme: colours(),
   });
+  // A terminal that is open takes the other theme's colours when the theme changes.
+  createEffect(
+    on(
+      light,
+      () => {
+        term.options.theme = colours();
+      },
+      { defer: true },
+    ),
+  );
   const fit = new FitAddon();
   term.loadAddon(fit);
 

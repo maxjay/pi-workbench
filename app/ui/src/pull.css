@@ -41,7 +41,7 @@
 }
 
 [data-tone="faint"] {
-  --tone: #6b6a62;
+  --tone: var(--gone);
 }
 
 [data-tone="quiet"] {
@@ -184,12 +184,12 @@
 
 .softs[data-weight="solid"],
 .soft[data-solid] {
-  color: var(--paper);
+  color: var(--on);
   background: var(--tone);
 }
 
 .softs[data-tone="quiet"] {
-  background: rgb(236 235 228 / 0.06);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .softs-main {
@@ -212,7 +212,10 @@
 
 .softs > button:hover:enabled,
 .soft:hover:enabled {
-  background-image: linear-gradient(rgb(236 235 228 / 0.1), rgb(236 235 228 / 0.1));
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--ink) 10%, transparent),
+    color-mix(in srgb, var(--ink) 10%, transparent)
+  );
 }
 
 .softs > button:disabled,
@@ -357,7 +360,7 @@
 }
 
 .files-unread[aria-pressed="true"] {
-  background: rgb(236 235 228 / 0.1);
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
 }
 
 .files-out {
@@ -575,11 +578,11 @@
 }
 
 .dl-code[data-kind="added"] {
-  background-color: oklch(0.8 0.15 150 / 0.09);
+  background-color: var(--added);
 }
 
 .dl-code[data-kind="removed"] {
-  background-color: oklch(0.74 0.16 25 / 0.09);
+  background-color: var(--removed);
 }
 
 .dl-code:hover {
@@ -600,7 +603,7 @@
 }
 
 .dl-code[data-lit="faint"] {
-  --tone: #6b6a62;
+  --tone: var(--gone);
 }
 
 .dl-code[data-on] {
@@ -617,7 +620,7 @@
 }
 
 .dl-old {
-  color: #5f5e56;
+  color: var(--old);
 }
 
 .dl-code[data-side] .dl-old {
@@ -649,7 +652,7 @@ button.dl-num {
 }
 
 .dl-blank {
-  background: rgb(236 235 228 / 0.025);
+  background: color-mix(in srgb, var(--ink) 2.5%, transparent);
 }
 
 .dl-blank:first-of-type {
@@ -734,7 +737,10 @@ button.dl-num {
 }
 
 .said-peek:hover {
-  background-image: linear-gradient(rgb(236 235 228 / 0.04), rgb(236 235 228 / 0.04));
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--ink) 4%, transparent),
+    color-mix(in srgb, var(--ink) 4%, transparent)
+  );
 }
 
 .said-who {
@@ -819,7 +825,7 @@ button.dl-num {
   right: 0;
   font-size: 13px;
   color: var(--ink);
-  background: #1c1d19;
+  background: var(--above);
 }
 
 .said-states .row {
@@ -831,12 +837,12 @@ button.dl-num {
 .said-input,
 .overview-comment {
   font-family: var(--display);
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.5;
 }
 
 .said-text[data-you] {
-  color: #c9c8c0;
+  color: var(--quiet-ink);
 }
 
 .said-text .markdown {
@@ -859,7 +865,7 @@ button.dl-num {
 }
 
 .said-label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--agent);
 }
 
@@ -913,7 +919,7 @@ button.dl-num {
 .said .markdown :not(pre) > code,
 .overview .markdown :not(pre) > code {
   padding: 1px 4px;
-  background: rgb(236 235 228 / 0.08);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: inherit;
 }
 
@@ -1111,12 +1117,12 @@ button.dl-num {
 }
 
 .checks-step[aria-pressed="true"] {
-  background: rgb(236 235 228 / 0.08);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
 .checks-log {
   font: inherit;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 20px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1155,7 +1161,7 @@ button.dl-num {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--display);
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--dim);
 }
 
@@ -1336,7 +1342,7 @@ button.dl-num {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--dim);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
 }
 

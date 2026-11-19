@@ -1,10 +1,10 @@
 // The colour of a thing, by what it is. Every one has the same lightness
-// and strength, only the hue differs: a pull request has a hue of its own
+// and strength, as theme.css's own colours do in each theme, and only the hue differs: a pull request has a hue of its own
 // from its number, and a ticket has its type's, as Azure DevOps colours it.
 // The same thing has the same colour wherever its number is written.
 
 /** A colour for a kind of thing. */
-export const hue = (degrees: number) => `oklch(0.8 0.15 ${degrees})`;
+export const hue = (degrees: number) => `light-dark(oklch(0.7 0.17 ${degrees}), oklch(0.8 0.15 ${degrees}))`;
 
 /** The hues that mean nothing else here. Not red, orange, yellow, green or the blue of threads: those say something. */
 const FREE = [330, 280, 210, 170, 300, 190];
