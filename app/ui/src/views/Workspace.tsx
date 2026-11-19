@@ -173,7 +173,12 @@ function Page(props: { view: WorkspaceView }) {
             </Show>
           </Show>
           <Show when={ui().left === 'changes'}>
-            <Show when={repo()?.git} fallback={<p class="left-note dim">Not a git folder.</p>}>
+            <Show
+              when={repo()?.git}
+              fallback={
+                <p class="left-note dim">{repo()?.git === undefined ? 'Asking git' : 'Not a git folder.'}</p>
+              }
+            >
               {(git) => (
                 <>
                   <p class="left-note dim">

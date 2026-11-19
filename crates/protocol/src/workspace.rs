@@ -31,8 +31,9 @@ pub struct WorkspaceView {
     pub workspace: Workspace,
     /// False when the folder was moved or deleted.
     pub exists: bool,
-    /// None outside git.
-    pub git: Option<GitSummary>,
+    /// The branch it is on, read from the folder without running git: listing and opening a
+    /// workspace never wait for git. None outside git.
+    pub branch: Option<String>,
 }
 
 /// A folder to pick when opening one.

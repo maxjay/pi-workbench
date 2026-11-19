@@ -18,12 +18,8 @@ import { setConversation } from './workspace/ui';
 function standing(view: WorkspaceView) {
   if (!view.exists) return 'not there any more';
   if (view.workspace.scratch) return 'scratchpad';
-  return view.git ? view.git.branch : 'not a git folder';
+  return view.branch ?? 'not a git folder';
 }
-
-/** How many of a workspace's files changed, when any did. */
-const changed = (view: WorkspaceView) =>
-  view.exists && view.git && view.git.files > 0 ? `${view.git.files} changed` : '';
 
 /** A folder's path with the home folder as `~`. */
 const short = (path: string) => path.replace(/^\/home\/[^/]+/, '~');
@@ -106,7 +102,7 @@ export function Home() {
                   </Show>
                 </span>
                 <span class="dim">{standing(view)}</span>
-                <span>{changed(view)}</span>
+                <span />
               </button>
             )}
           </For>

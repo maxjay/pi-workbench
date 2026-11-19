@@ -153,16 +153,16 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::WorkspacesList => {
             let mut list = Vec::new();
             for workspace in ctx.workspaces.all() {
-                list.push(view(workspace).await);
+                list.push(view(workspace));
             }
             Answer::Workspaces { list }
         }
-        Call::WorkspacesOpen { path } => Answer::Workspace(view(ctx.workspaces.open(&path)?).await),
+        Call::WorkspacesOpen { path } => Answer::Workspace(view(ctx.workspaces.open(&path)?)),
         Call::WorkspacesForget { id } => {
             ctx.workspaces.forget(&id)?;
             Answer::Done
         }
-        Call::ScratchNew { text } => Answer::Workspace(view(ctx.workspaces.scratch(&text)?).await),
+        Call::ScratchNew { text } => Answer::Workspace(view(ctx.workspaces.scratch(&text)?)),
         Call::FoldersList { dir } => {
             let (dir, folders) = workspaces::folders(&dir)?;
             Answer::Folders { dir, folders }
@@ -481,18 +481,16 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
     })
 }
 
-/// A workspace as Home lists it: whether its folder is still there, and where its git stands.
-async fn view(workspace: protocol::Workspace) -> WorkspaceView {
+/// A workspace as Home lists it: whether its folder is still there, and the branch it is on.
+/// git is not run for it. In a large repo `git status` takes seconds, on a Windows drive far
+/// longer, and nothing that lists or opens a workspace may wait for that.
+fn view(workspace: protocol::Workspace) -> WorkspaceView {
     let path = Path::new(&workspace.path);
     let exists = path.is_dir();
-    let git = match exists {
-        true => git::status(path).await.map(|status| status.summary),
-        false => None,
-    };
     WorkspaceView {
+        branch: exists.then(|| workspaces::branch(path)).flatten(),
         workspace,
         exists,
-        git,
     }
 }
 

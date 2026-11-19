@@ -247,10 +247,18 @@ fn expand(path: &str) -> PathBuf {
     }
 }
 
-/// The branch a folder has checked out, read from `.git/HEAD` without
-/// running git. None when the folder isn't the top of a repository.
-fn branch(dir: &Path) -> Option<String> {
-    let head = std::fs::read_to_string(dir.join(".git/HEAD")).ok()?;
+/// The branch a folder has checked out, read from its `.git` without running git. None
+/// when the folder isn't the top of a repository. In a worktree `.git` is a file that says
+/// where the rest is.
+pub fn branch(dir: &Path) -> Option<String> {
+    let git = dir.join(".git");
+    let head = match std::fs::read_to_string(&git) {
+        Ok(points) => {
+            let elsewhere = points.trim().strip_prefix("gitdir:")?.trim();
+            std::fs::read_to_string(dir.join(elsewhere).join("HEAD")).ok()?
+        }
+        Err(_) => std::fs::read_to_string(git.join("HEAD")).ok()?,
+    };
     Some(match head.trim().strip_prefix("ref: refs/heads/") {
         Some(branch) => branch.to_string(),
         None => "detached".to_string(),
