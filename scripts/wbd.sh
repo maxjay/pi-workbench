@@ -6,6 +6,9 @@
 #
 # The build goes to a folder inside WSL, because building on the Windows
 # drive from Linux is slow.
+#
+# The installed app puts the wbd it carries back there each time it starts.
+# Run this again after using the installed app, before `npm run dev`.
 set -e
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/workbench-target}"
