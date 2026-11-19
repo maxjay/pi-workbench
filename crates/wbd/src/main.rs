@@ -407,10 +407,18 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             pulls::link(&ctx.dova, &dir, &ids).await?;
             Answer::Done
         }
-        Call::PullsList { review, quick } => {
+        Call::PullsList { review: true, .. } => Answer::Pulls {
+            rows: ctx
+                .pulls
+                .to_review(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .await?,
+            asked: Vec::new(),
+            searched: Vec::new(),
+        },
+        Call::PullsList { quick, .. } => {
             let (rows, asked, searched) = ctx
                 .pulls
-                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all(), review, quick)
+                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all(), quick)
                 .await?;
             Answer::Pulls {
                 rows,

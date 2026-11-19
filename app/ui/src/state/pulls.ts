@@ -1,4 +1,5 @@
-// Your pull requests, as wbd last got them from dova.
+// Your pull requests, as wbd last got them from dova, and the ones you were
+// asked to review, with what you picked to see of those.
 
 import { createResource, createSignal } from 'solid-js';
 import { ask, status } from '../daemon';
@@ -10,13 +11,6 @@ import { health } from './health';
 const [asked, setAsked] = createSignal<Asked[]>([]);
 /** Every project that was asked: the folders' own, and the others in their organizations with one of yours. */
 const [searched, setSearched] = createSignal<string[]>([]);
-/** The repos you care about, as you wrote them. Empty: all of them. Kept in the window's own storage. */
-const [repos, setReposNow] = createSignal(localStorage.getItem('pull-repos') ?? '');
-
-export function setRepos(text: string) {
-  localStorage.setItem('pull-repos', text);
-  setReposNow(text);
-}
 
 // Nothing to ask until wbd is up and has found dova.
 const ready = () => status() === 'ready' && Boolean(health()?.dova);
@@ -43,14 +37,48 @@ const [pulls, { refetch }] = createResource(ready, async (_, known): Promise<Pul
 /** Your rows: the full answer once it is here, and before that the first one. */
 const yours = () => pulls.latest ?? (pulls.error ? undefined : first());
 
-/** The ones you were asked to review. Asked at the same time, and added when they come. */
+/** The ones you or a team of yours were asked to review. Asked at the same time, in a list of their own. */
 const [toReview, { refetch: refetchReview }] = createResource(ready, async () => {
   const listed = await ask({ method: 'pulls.list', params: { review: true, quick: false } }, 'pulls');
-  setSearched((known) => [...new Set([...known, ...listed.searched])]);
   return listed.rows;
 });
 
-export { asked, pulls, repos, searched, toReview, yours };
+export { asked, pulls, searched, toReview, yours };
 
-/** Asks dova again. */
+/** Asks again. */
 export const refreshPulls = () => Promise.all([refetch(), refetchReview()]);
+
+/**
+ * What you picked to see of the ones to review. A repo is `project/repo`, and `project/*` is a
+ * whole project. A row shows when its repo is picked and its author is picked; a list with
+ * nothing picked lets every row through. Kept in the window's own storage.
+ */
+export type Picked = { repos: string[]; people: string[] };
+
+function kept(): Picked {
+  try {
+    const saved = JSON.parse(localStorage.getItem('review-picked') ?? '{}') as Partial<Picked>;
+    return { repos: saved.repos ?? [], people: saved.people ?? [] };
+  } catch {
+    return { repos: [], people: [] };
+  }
+}
+
+const [picked, setPickedNow] = createSignal<Picked>(kept());
+
+export { picked };
+
+export function setPicked(next: Picked) {
+  localStorage.setItem('review-picked', JSON.stringify(next));
+  setPickedNow(next);
+}
+
+export const repoKey = (row: { project: string; repo: string }) => `${row.project}/${row.repo}`;
+
+/** Whether a row is among what you picked. */
+export function shows(pick: Picked, row: PullRow) {
+  const repo =
+    pick.repos.length === 0 || pick.repos.includes(repoKey(row)) || pick.repos.includes(`${row.project}/*`);
+  const person = pick.people.length === 0 || pick.people.includes(row.author ?? '');
+  return repo && person;
+}

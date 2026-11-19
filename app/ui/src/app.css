@@ -1515,11 +1515,46 @@ svg.glyph {
   padding-top: 8px;
 }
 
-/* Home's pull requests: the ones to review under their own word, and why a list is empty. */
-.pull-group {
-  padding: 22px 0 8px;
+/* Home's pull requests to review, and why a list is empty. */
+/* One to review is a single line, so a hundred of them stay readable. */
+.pull-review {
   border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+/* Their columns: number, title, repo, who opened it, state, your vote, the team that was asked. */
+.rows-review .pull-row {
+  grid-template-columns: 56px minmax(0, 1fr) 150px 170px 60px 190px 150px;
+}
+
+/* What to see of the ones to review: a line of switches for each project, then the people. */
+.watch {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 14px;
+}
+
+.watch-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 2px;
+}
+
+.watch-project,
+.watch-word {
+  min-width: 150px;
+  padding-left: 0;
+  text-align: left;
+}
+
+.watch-word {
   font-size: 12px;
+}
+
+.watch-count {
+  color: var(--dim);
 }
 
 .pulls-why {
