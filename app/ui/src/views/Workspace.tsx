@@ -223,7 +223,12 @@ function Page(props: { view: WorkspaceView }) {
             <For each={ui().tabs}>
               {(tab) => (
                 <span class="strip-tab strip-tab-closable" data-current={ui().current === tab}>
-                  <button type="button" class="strip-open" title={tab} onClick={() => openTab(id, tab)}>
+                  <button
+                    type="button"
+                    class="strip-open"
+                    title={isFile(tab) ? tab : undefined}
+                    onClick={() => openTab(id, tab)}
+                  >
                     {labelOf(tab)}
                     <Show when={buffers[tab]?.dirty}>
                       <span role="img" aria-label="Not saved">
