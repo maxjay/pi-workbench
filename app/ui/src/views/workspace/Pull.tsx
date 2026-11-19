@@ -56,7 +56,7 @@ export function BranchPull(props: {
               title="Opens the pull request"
               onClick={() => props.onOpen(pr().id)}
             >
-              <span class="accent">#{pr().id}</span>
+              <span class="dim">#{pr().id}</span>
               <span class="tree-name">{pr().title}</span>
               <span class="dim">{pr().isDraft ? 'draft' : pr().status}</span>
             </button>

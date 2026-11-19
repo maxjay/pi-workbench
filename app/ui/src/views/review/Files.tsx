@@ -1,7 +1,8 @@
-// The changed files, on the left: grouped by folder, each with what it
-// adds and removes and how many threads on it are still open. A box marks
-// a file, or a whole folder, as viewed. One switch hides what you have
-// viewed, and one field leaves files out by pattern.
+// The changed files, on the left, grouped by folder. A file's name comes
+// first and is never squeezed out. After it: a square for what is on the
+// file (blue for a thread still open, violet for what the agent drafted),
+// what it adds and removes, and a tick once you have read it. One switch
+// leaves out what you have read, and one field leaves files out by pattern.
 
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { ChangedFile } from '../../protocol/ChangedFile';
@@ -55,22 +56,22 @@ export function Files(props: {
   return (
     <div class="files">
       <div class="files-head">
-        <span title="Files you have viewed, of all the changed files">
+        <span title="Files you have read, of all the changed files">
           Files {files().filter(viewed).length}/{files().length}
           <Show when={hidden() > 0}> · {hidden()} hidden</Show>
         </span>
         <button
           type="button"
           class="quiet"
-          title="Leave out the files you have viewed"
+          title="Leave out the files you have read"
           aria-pressed={hideViewed()}
           onClick={() => setHideViewed(!hideViewed())}
         >
-          unviewed
+          unread
         </button>
       </div>
       <input
-        class="files-exclude"
+        class="field files-exclude"
         placeholder="exclude: tests/**, *.md"
         aria-label="Files to exclude"
         value={exclude()}
@@ -102,12 +103,10 @@ export function Files(props: {
                   </svg>
                   <span class="tree-name">{folder.dir}</span>
                   <Show when={closed().includes(folder.dir)}>
-                    <span>
-                      {folder.files.length} {folder.files.length === 1 ? 'file' : 'files'}
-                    </span>
+                    <span>{folder.files.length}</span>
                   </Show>
                 </button>
-                <ViewedBox
+                <Read
                   on={folder.files.every(viewed)}
                   name={folder.dir}
                   onToggle={() => viewFolder(folder.dir, folder.files)}
@@ -129,11 +128,27 @@ export function Files(props: {
                       onClick={() => props.onPick(file.path)}
                     >
                       <span class="tree-name">{split(file.path).name}</span>
-                      <Show when={drafted().get(file.path)}>
-                        {(n) => <span class="files-drafted">{n()} drafted</span>}
-                      </Show>
                       <Show when={open().get(file.path)}>
-                        {(n) => <span class="files-open">{n()} open</span>}
+                        {(n) => (
+                          <span
+                            class="flag"
+                            data-what="open"
+                            role="img"
+                            aria-label={`${n()} open`}
+                            title={`${n()} ${n() === 1 ? 'thread' : 'threads'} still open`}
+                          />
+                        )}
+                      </Show>
+                      <Show when={drafted().get(file.path)}>
+                        {(n) => (
+                          <span
+                            class="flag"
+                            data-what="note"
+                            role="img"
+                            aria-label={`${n()} drafted`}
+                            title={`${n()} drafted by the agent`}
+                          />
+                        )}
                       </Show>
                       <span class="files-count">
                         <Show when={file.added > 0}>
@@ -147,7 +162,7 @@ export function Files(props: {
                         </Show>
                       </span>
                     </button>
-                    <ViewedBox
+                    <Read
                       on={viewed(file)}
                       name={file.path}
                       onToggle={() => markViewed(props.r.pull, [file], !viewed(file))}
@@ -163,17 +178,18 @@ export function Files(props: {
   );
 }
 
-function ViewedBox(props: { on: boolean; name: string; onToggle: () => void }) {
+/** The tick for "you have read this". Faint until you have. */
+export function Read(props: { on: boolean; name: string; onToggle: () => void }) {
   return (
     <button
       type="button"
-      class="viewed-box"
+      class="read"
       aria-pressed={props.on}
-      aria-label={`Viewed: ${props.name}`}
-      title={props.on ? 'Viewed. Click to unmark' : 'Mark as viewed'}
+      aria-label={`Read: ${props.name}`}
+      title={props.on ? 'Read. Click to unmark' : 'Mark as read'}
       onClick={props.onToggle}
     >
-      <span />
+      ✓
     </button>
   );
 }

@@ -182,7 +182,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
             <div class="review-name">
               <h1>{review().pr.title}</h1>
               <span class="dim">
-                <span class="accent">#{review().pr.id}</span> ·{' '}
+                <span class="dim">#{review().pr.id}</span> ·{' '}
                 <span class="review-state">{stateOf(review())}</span>
                 <Show when={review().autoComplete && review().pr.status === 'active'}>
                   {' '}
@@ -278,7 +278,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
                       title={item.title ?? undefined}
                       onClick={() => open(`wi:${props.workspace}:${item.id}`)}
                     >
-                      <span class="accent">#{item.id}</span>
+                      <span class="dim">#{item.id}</span>
                       <span class="tree-name">{item.title}</span>
                       <span class="dim">{item.state}</span>
                     </button>

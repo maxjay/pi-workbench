@@ -1360,6 +1360,17 @@ svg.glyph {
   position: relative;
 }
 
+.review .menu > .button {
+  padding: 0 8px;
+  border-color: transparent;
+  color: var(--dim);
+}
+
+.review .menu > .button:hover:enabled,
+.review .menu > .button[aria-expanded="true"] {
+  color: var(--ink);
+}
+
 .menu-list {
   position: absolute;
   top: 38px;
@@ -1502,26 +1513,31 @@ svg.glyph {
   white-space: nowrap;
 }
 
-.files-exclude {
+/* A field is a line to write on, not a box. */
+.field {
   height: 28px;
-  margin: 0 10px 12px;
-  padding: 0 8px;
+  padding: 0 2px;
   background: none;
-  border: 1px solid var(--line);
+  border: 0;
+  border-bottom: 1px solid var(--line);
   outline: 0;
   color: var(--ink);
   font: inherit;
   font-size: 12px;
 }
 
-.files-exclude:focus {
-  border-color: var(--dim);
+.field:focus {
+  border-bottom-color: var(--dim);
 }
 
-.files-exclude::placeholder,
+.field::placeholder,
 .thread-input::placeholder,
 .diff-write-text::placeholder {
   color: var(--dim);
+}
+
+.files-exclude {
+  margin: 0 10px 12px;
 }
 
 .files-none {
@@ -1571,18 +1587,6 @@ svg.glyph {
   background: var(--hover);
 }
 
-.files-open {
-  color: var(--asking);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.files-drafted {
-  color: var(--accent);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
 .files-count {
   font-size: 12px;
   white-space: nowrap;
@@ -1596,26 +1600,38 @@ svg.glyph {
   color: var(--failed);
 }
 
-.viewed-box {
+.read {
   width: 28px;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  color: var(--line);
+  font-size: 12px;
+  text-align: center;
 }
 
-.viewed-box span {
-  width: 11px;
-  height: 11px;
+.read:hover {
+  color: var(--dim);
+}
+
+.read[aria-pressed="true"] {
+  color: var(--ink);
+}
+
+/* A square is the state of a thing: a thread still open, or what the agent wrote. */
+.flag {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
   border: 1px solid var(--dim);
 }
 
-.viewed-box[aria-pressed="true"] span {
-  background: var(--dim);
+.flag[data-what="open"] {
+  background: var(--asking);
+  border-color: var(--asking);
 }
 
-.viewed-box:hover span {
-  border-color: var(--ink);
+.flag[data-what="note"] {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 /* A file's diff */
@@ -1669,41 +1685,23 @@ svg.glyph {
   background-image: linear-gradient(var(--picked), var(--picked));
 }
 
-/* The marker of a line that has comments. Filled while they are open, hollow while closed. */
+/* The marker of a line that has comments: the same square. Hollow while they are closed. */
 .diff-flag {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.diff-flag .flag {
-  width: 8px;
-  height: 8px;
-  border: 1px solid var(--dim);
+.diff-flag[aria-expanded="false"] .flag {
+  background: none;
 }
 
 .diff-flag:hover .flag {
   border-color: var(--ink);
 }
 
-.diff-flag[data-what="open"] .flag {
-  border-color: var(--asking);
-}
-
-.diff-flag[data-what="note"] .flag {
-  border-color: var(--accent);
-}
-
-.diff-flag[aria-expanded="true"] .flag {
+.diff-flag[data-what="resolved"][aria-expanded="true"] .flag {
   background: var(--dim);
-}
-
-.diff-flag[data-what="open"][aria-expanded="true"] .flag {
-  background: var(--asking);
-}
-
-.diff-flag[data-what="note"][aria-expanded="true"] .flag {
-  background: var(--accent);
 }
 
 .diff-num {
@@ -1790,18 +1788,20 @@ svg.glyph {
 .diff-write {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--accent);
+  padding-left: 14px;
+  border-left: 1px solid var(--accent);
 }
 
 .diff-write-where {
-  padding: 10px 14px 0;
+  padding: 0;
   color: var(--dim);
   font-size: 12px;
 }
 
 .diff-write-text,
 .note-edit {
-  padding: 6px 14px 10px;
+  padding: 6px 0 8px;
+  border-bottom: 1px solid var(--line);
   background: none;
   border: 0;
   outline: 0;
@@ -1814,8 +1814,7 @@ svg.glyph {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--line);
+  padding-top: 8px;
 }
 
 .review .diff-write-foot .button,
@@ -1866,24 +1865,6 @@ svg.glyph {
 .said-who {
   color: var(--dim);
   font-size: 12px;
-}
-
-/* What people and the agent wrote is prose: set in the face for prose, so it reads apart from code. */
-.thread .markdown,
-.note .markdown {
-  font-family: var(--display);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.thread .markdown code,
-.note .markdown code {
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.thread[data-open="false"] .said {
-  color: var(--dim);
 }
 
 .thread-foot {
@@ -2157,13 +2138,6 @@ svg.glyph {
 .ticket-cols[data-agent] > .chat {
   grid-area: auto;
   border-left: 1px solid var(--line);
-}
-
-/* What a ticket says is prose. */
-.ticket-text .markdown {
-  font-family: var(--display);
-  font-size: 14px;
-  line-height: 1.55;
 }
 
 .ticket-said {

@@ -133,7 +133,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
             <div class="review-name">
               <h1>{t().title}</h1>
               <span class="dim">
-                <span class="accent">#{t().id}</span> · {t().type}
+                <span class="dim">#{t().id}</span> · {t().type}
                 <Show when={t().iteration}>{(sprint) => <> · {sprint().split('\\').pop()}</>}</Show>
                 <Show when={t().points}>{(points) => <> · {points()} points</>}</Show> ·{' '}
                 {t().mine ? 'yours' : (t().assignedTo ?? 'nobody')}
@@ -192,7 +192,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                       {(parent) => (
                         <button type="button" class="row overview-line" onClick={() => openOther(parent())}>
                           <span class="dim">parent</span>
-                          <span class="accent">#{parent().id}</span>
+                          <span class="dim">#{parent().id}</span>
                           <span class="tree-name">{parent().title}</span>
                           <span class="dim">{parent().state}</span>
                         </button>
@@ -202,7 +202,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                       {(child) => (
                         <button type="button" class="row overview-line" onClick={() => openOther(child)}>
                           <span class="dim">child</span>
-                          <span class="accent">#{child.id}</span>
+                          <span class="dim">#{child.id}</span>
                           <span class="tree-name">{child.title}</span>
                           <span class="dim">{child.state}</span>
                         </button>
@@ -222,7 +222,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                           onClick={() => open(`pr:${props.workspace}:${pull}`)}
                         >
                           <span class="dim">pull request</span>
-                          <span class="accent">#{pull}</span>
+                          <span class="dim">#{pull}</span>
                         </button>
                       )}
                     </For>

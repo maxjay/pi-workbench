@@ -19,6 +19,7 @@ import {
   notesOf,
   wholeFile,
 } from '../../state/review';
+import { Read } from './Files';
 import { placeName, type Reviewing } from './parts';
 import { NoteBox, ThreadBox } from './Threads';
 
@@ -257,7 +258,7 @@ export function FileDiff(props: {
                   toggle(p.row);
                 }}
               >
-                <span class="flag" />
+                <span class="flag" data-what={flag(p.row)} />
               </button>
             </Show>
             <Show when={p.side !== 'new'}>
@@ -397,15 +398,11 @@ export function FileDiff(props: {
                 full
               </button>
             </Show>
-            <button
-              type="button"
-              class="quiet"
-              title="You have read this file"
-              aria-pressed={isViewed(props.r.pull, f())}
-              onClick={() => markViewed(props.r.pull, [f()], !isViewed(props.r.pull, f()))}
-            >
-              viewed
-            </button>
+            <Read
+              on={isViewed(props.r.pull, f())}
+              name={f().path}
+              onToggle={() => markViewed(props.r.pull, [f()], !isViewed(props.r.pull, f()))}
+            />
           </div>
 
           <div class="diff-body">

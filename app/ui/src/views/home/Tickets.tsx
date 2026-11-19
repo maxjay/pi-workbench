@@ -35,7 +35,7 @@ export function Tickets() {
         </Show>
         <span class="top-gap" />
         <input
-          class="files-exclude tickets-find"
+          class="field tickets-find"
           placeholder="find"
           aria-label="Find a ticket by its title"
           onInput={(e) => findTickets(e.currentTarget.value)}
