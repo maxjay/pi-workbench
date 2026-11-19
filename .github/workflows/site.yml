@@ -1,5 +1,6 @@
 # Publishes workbench.maxjay.dev: the page in site/public, and beside it the
-# newest release's installer under a name that never changes (workbench.exe).
+# newest release's app and its installer under names that never change:
+# workbench.exe runs as it is, workbench-setup.exe installs it.
 # Runs after every release, and by hand (Actions, site, Run workflow) to publish
 # a change to the page alone.
 #
@@ -19,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Put the newest release's installer and its version on the page
+      - name: Put the newest release's app, its installer and its version on the page
         # Every release so far is a pre-release, which "the latest release"
         # leaves out, so this takes the newest v2 release of any kind.
         run: |
@@ -30,8 +31,9 @@ jobs:
             exit 1
           fi
           commit=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.sha[0:7]')
-          gh release download "$tag" --pattern '*.exe' --dir installers
-          cp installers/*.exe site/public/workbench.exe
+          gh release download "$tag" --pattern '*.exe' --dir released
+          cp released/*-setup.exe site/public/workbench-setup.exe
+          cp released/*_x64.exe site/public/workbench.exe
           sed -i "s/__VERSION__/$tag/g; s/__COMMIT__/$commit/g" site/public/index.html
         env:
           GH_TOKEN: ${{ github.token }}

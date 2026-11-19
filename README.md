@@ -50,7 +50,7 @@ In WSL: `cargo test -p protocol -p wbd`.
 
 ## Release
 
-Set the version in `Cargo.toml`, then push a tag of the same version, like `v2.0.0-alpha.1`. That builds the installer, publishes it as a GitHub release, and puts it on [workbench.maxjay.dev](https://workbench.maxjay.dev) as `workbench.exe`, beside the page in `site/public`.
+Set the version in `Cargo.toml`, then push a tag of the same version, like `v2.0.0-alpha.2`. That builds the app and its installer, publishes both as a GitHub release, and puts them on [workbench.maxjay.dev](https://workbench.maxjay.dev) beside the page in `site/public`: `workbench.exe` is the app as one file that runs as it is, and `workbench-setup.exe` installs it.
 
 ## Licence
 

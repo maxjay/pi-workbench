@@ -1,6 +1,6 @@
 # Every push to v2 and every pull request: the Rust side on Linux, the page,
 # and the Windows app with its installer, which carries wbd. A tag like
-# v2.0.0-alpha.1: also publish the installer as a release, and on
+# v2.0.0-alpha.1: also publish the app and its installer as a release, and on
 # workbench.maxjay.dev (site.yml).
 name: ci
 
@@ -92,6 +92,13 @@ jobs:
       # Builds the page, the app, and the installer that carries wbd.
       - run: npm run tauri -- build
         working-directory: app/ui
+      # The app is one file that runs by itself. It goes out beside its installer,
+      # under the installer's name without "-setup".
+      - name: Name the app as its installer is named
+        shell: bash
+        run: |
+          setup=$(ls target/release/bundle/nsis/*-setup.exe)
+          cp target/release/workbench.exe "${setup%-setup.exe}.exe"
       - uses: actions/upload-artifact@v7
         with:
           name: workbench-windows
@@ -117,7 +124,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The release's installer goes up on workbench.maxjay.dev, with the page.
+  # The release's app and installer go up on workbench.maxjay.dev, with the page.
   site:
     needs: release
     uses: ./.github/workflows/site.yml
