@@ -818,6 +818,17 @@ svg.glyph {
   padding-left: 22px;
 }
 
+.picture-link {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+
+.picture-link:hover {
+  color: var(--ink);
+}
+
 .markdown pre {
   padding: 10px 12px;
   border: 1px solid var(--line);
