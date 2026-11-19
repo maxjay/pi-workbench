@@ -9,15 +9,14 @@ use std::sync::{Arc, Mutex};
 
 use protocol::{
     Child, Comment, Field, FieldKind, Part, PartEdit, Ticket, TicketRow, TicketState, WorkItemRef,
-    Workspace,
 };
 use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::dova::Dova;
 use crate::error::Error;
+use crate::pulls;
 use crate::review::Reviews;
-use crate::{git, pulls};
 
 /// A ticket in one of these states is finished with, whatever its type calls them.
 const OVER: [&str; 3] = ["Closed", "Done", "Removed"];
@@ -407,28 +406,25 @@ fn iteration_paths(node: &Value, above: &str, out: &mut Vec<String>) {
 }
 
 /// Your tickets that are not finished, or with `words` every ticket whose
-/// title has them, across every project your workspaces are cloned from.
+/// title has them, across every project a folder of yours is cloned from: your
+/// workspaces, and the clones in your repos folder.
 pub async fn list(
     dova: &Dova,
-    workspaces: Vec<Workspace>,
+    clones: &[pulls::Clone],
     words: &str,
 ) -> Result<Vec<TicketRow>, Error> {
     let mut rows = Vec::new();
     let mut asked = HashSet::new();
-    for workspace in workspaces.into_iter().filter(|w| !w.scratch) {
-        let origin = git::origin(Path::new(&workspace.path)).await;
-        let Some((project, _)) = origin.as_deref().and_then(pulls::azure) else {
-            continue;
-        };
+    for clone in clones {
         // dova searches a whole project at once, so each project is asked once.
-        if !asked.insert(project.to_lowercase()) {
+        if !asked.insert(clone.project.to_lowercase()) {
             continue;
         }
         let params = match words.trim() {
             "" => json!({ "assignee": "me" }),
             words => json!({ "query": words }),
         };
-        let found = dova.call("wi.search", &workspace.path, params).await?;
+        let found = dova.call("wi.search", &clone.path, params).await?;
         let items: Vec<WorkItemRef> = shape(found["items"].clone())?;
         rows.extend(
             items
@@ -436,7 +432,7 @@ pub async fn list(
                 .filter(|item| !words.trim().is_empty() || !over(item.state.as_deref()))
                 .map(|item| TicketRow {
                     item,
-                    workspace: workspace.id.clone(),
+                    workspace: clone.key.clone(),
                 }),
         );
     }

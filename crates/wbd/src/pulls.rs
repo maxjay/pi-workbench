@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use crate::dova::Dova;
 use crate::error::Error;
 use crate::git;
+use crate::places::Found;
 use crate::review::Reviews;
+use crate::workspaces;
 
 #[derive(Default)]
 pub struct Pulls {
@@ -25,6 +27,13 @@ pub struct Pulls {
     members: Mutex<HashMap<String, Vec<Person>>>,
     /// Every repo of an organization, by organization. Asked once: the search reads from it.
     repos: Mutex<HashMap<String, Vec<RepoName>>>,
+}
+
+/// Whose pull requests to list, and in which repos.
+pub struct Chosen<'a> {
+    pub people: &'a [String],
+    pub repos: &'a [RepoPick],
+    pub both: bool,
 }
 
 /// A team you are in.
@@ -38,18 +47,23 @@ struct Mine {
 /// The most of each kind a search gives back.
 const FOUND: usize = 8;
 
-/// A workspace that is cloned from Azure Repos.
-struct Clone {
-    workspace: Workspace,
+/// A folder cloned from Azure Repos that things can be asked from: a workspace, or a clone
+/// found in your repos folder.
+pub struct Clone {
+    /// What the page opens a pull request or a ticket from: a workspace's id, or for a
+    /// clone that is not a workspace its path.
+    pub key: String,
+    pub path: String,
     /// Its remote without the repo's name: the same for every repo in a project.
-    project: String,
-    repo: String,
-    branch: Option<String>,
+    pub project: String,
+    pub repo: String,
+    pub branch: Option<String>,
 }
 
-/// The workspaces cloned from Azure Repos, and every folder that was looked at.
-async fn clones(workspaces: Vec<Workspace>) -> (Vec<Clone>, Vec<Asked>) {
-    let mut clones = Vec::new();
+/// The folders cloned from Azure Repos: your workspaces first, then the clones found in your
+/// repos folder that are not workspaces. With them, every workspace that was looked at.
+pub async fn clones(workspaces: Vec<Workspace>, found: &[Found]) -> (Vec<Clone>, Vec<Asked>) {
+    let mut clones: Vec<Clone> = Vec::new();
     let mut looked = Vec::new();
     for workspace in workspaces.into_iter().filter(|w| !w.scratch) {
         let dir = std::path::Path::new(&workspace.path);
@@ -63,12 +77,28 @@ async fn clones(workspaces: Vec<Workspace>) -> (Vec<Clone>, Vec<Asked>) {
         let Some((project, repo)) = on_azure else {
             continue;
         };
-        let branch = git::status(dir).await.map(|status| status.summary.branch);
         clones.push(Clone {
-            workspace,
+            key: workspace.id,
+            // Read from the folder: `git status` takes seconds in a large repo.
+            branch: workspaces::branch(dir),
+            path: workspace.path,
             project,
             repo,
-            branch,
+        });
+    }
+    for one in found {
+        let Some((project, repo)) = azure(&one.remote) else {
+            continue;
+        };
+        if clones.iter().any(|known| known.path == one.path) {
+            continue;
+        }
+        clones.push(Clone {
+            key: one.path.clone(),
+            branch: workspaces::branch(std::path::Path::new(&one.path)),
+            path: one.path.clone(),
+            project,
+            repo,
         });
     }
     (clones, looked)
@@ -92,11 +122,12 @@ impl Pulls {
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
+        found: &[Found],
     ) -> Result<Vec<PullRow>, Error> {
-        let (clones, _) = clones(workspaces).await;
+        let (clones, _) = clones(workspaces, found).await;
         let mut rows = Vec::new();
         for clone in one_each(&clones) {
-            let cwd = &clone.workspace.path;
+            let cwd = &clone.path;
             let me = reviews.me(dova, cwd).await?;
             let site = site(organization(&clone.project));
             // A path that starts with a slash is asked of the organization, not of the folder's project.
@@ -126,12 +157,13 @@ impl Pulls {
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
+        found: &[Found],
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
-        let (clones, looked) = clones(workspaces).await;
+        let (clones, looked) = clones(workspaces, found).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut searched = Vec::new();
         for clone in one_each(&clones) {
-            let cwd = &clone.workspace.path;
+            let cwd = &clone.path;
             // The projects of the folders open here, which must answer, and then every other
             // project that has a pull request of yours, found by asking the organization.
             let mut projects: Vec<(String, bool)> = Vec::new();
@@ -191,10 +223,14 @@ impl Pulls {
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
-        people: &[String],
-        repos: &[RepoPick],
-        both: bool,
+        found: &[Found],
+        chosen: Chosen<'_>,
     ) -> Result<Vec<PullRow>, Error> {
+        let Chosen {
+            people,
+            repos,
+            both,
+        } = chosen;
         // By person first: with both, the people's own are asked for and the repos only sift them.
         let narrow = both && !people.is_empty() && !repos.is_empty();
         let mut paths: Vec<String> = people
@@ -217,14 +253,14 @@ impl Pulls {
             return Ok(Vec::new());
         }
 
-        let (clones, _) = clones(workspaces).await;
+        let (clones, _) = clones(workspaces, found).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut seen = HashSet::new();
         // A repo or person that is not in one organization is in another, so one call that
         // fails is passed over. When none answers, the last reason is given.
         let (mut answered, mut failed) = (false, None);
         for clone in one_each(&clones) {
-            let cwd = &clone.workspace.path;
+            let cwd = &clone.path;
             let me = reviews.me(dova, cwd).await?;
             let site = site(organization(&clone.project));
             let teams = self.teams(dova, cwd, &site).await;
@@ -301,11 +337,12 @@ impl Pulls {
         dova: &Dova,
         reviews: &Reviews,
         workspaces: Vec<Workspace>,
+        found: &[Found],
     ) -> Result<Vec<Team>, Error> {
-        let (clones, _) = clones(workspaces).await;
+        let (clones, _) = clones(workspaces, found).await;
         let mut teams = Vec::new();
         for clone in one_each(&clones) {
-            let cwd = &clone.workspace.path;
+            let cwd = &clone.path;
             let me = reviews.me(dova, cwd).await?;
             let site = site(organization(&clone.project));
             for team in self.teams(dova, cwd, &site).await {
@@ -361,6 +398,7 @@ impl Pulls {
         &self,
         dova: &Dova,
         workspaces: Vec<Workspace>,
+        found: &[Found],
         text: &str,
     ) -> (Vec<Person>, Vec<RepoName>, Vec<String>) {
         let text = text.trim().to_lowercase();
@@ -368,9 +406,9 @@ impl Pulls {
         if text.is_empty() {
             return (people, repos, projects);
         }
-        let (clones, _) = clones(workspaces).await;
+        let (clones, _) = clones(workspaces, found).await;
         for clone in one_each(&clones) {
-            let cwd = &clone.workspace.path;
+            let cwd = &clone.path;
             let site = site(organization(&clone.project));
             let all = self.repos(dova, cwd, &site).await;
             let (found, of) = matching(&all, &text);
@@ -680,8 +718,8 @@ fn organization(project: &str) -> &str {
         .map_or(named, |(organization, _)| organization)
 }
 
-/// The workspace that has a pull request's repo: the one on its branch, if
-/// there are several.
+/// Where a pull request opens from: the folder that has its repo. A workspace comes before a
+/// clone that is not one, and among several the one on its branch.
 fn home(clones: &[Clone], row: &PullRow) -> Option<String> {
     let mut here = clones.iter().filter(|clone| {
         project_name(&clone.project).eq_ignore_ascii_case(&row.pr.project)
@@ -690,12 +728,12 @@ fn home(clones: &[Clone], row: &PullRow) -> Option<String> {
     let first = here.clone().next()?;
     let on_branch =
         here.find(|clone| clone.branch.as_deref() == Some(row.pr.source_branch.as_str()));
-    Some(on_branch.unwrap_or(first).workspace.id.clone())
+    Some(on_branch.unwrap_or(first).key.clone())
 }
 
 /// A project as people call it, from its part of a remote: `Shop` from
 /// `https://dev.azure.com/contoso/Shop/_git`.
-fn project_name(project: &str) -> String {
+pub fn project_name(project: &str) -> String {
     let named = project.trim_end_matches("/_git");
     let name = named.rsplit(['/', ':']).next().unwrap_or(named);
     name.replace("%20", " ")
@@ -791,13 +829,8 @@ mod tests {
     #[test]
     fn a_pull_request_belongs_to_the_workspace_on_its_branch() {
         let clone = |id: &str, repo: &str, branch: &str| Clone {
-            workspace: Workspace {
-                id: id.into(),
-                path: String::new(),
-                name: String::new(),
-                opened: 0,
-                scratch: false,
-            },
+            key: id.into(),
+            path: String::new(),
             project: "https://dev.azure.com/contoso/Shop/_git".into(),
             repo: repo.into(),
             branch: Some(branch.into()),

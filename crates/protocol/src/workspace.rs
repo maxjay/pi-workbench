@@ -36,6 +36,25 @@ pub struct WorkspaceView {
     pub branch: Option<String>,
 }
 
+/// Where things are kept, and what the workbench keeps there.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Settings {
+    /// The folder your clones are in, as you wrote it. `~` is your home folder.
+    pub repos: String,
+    /// The folder the workbench keeps its own things in, as you wrote it: a checkout for
+    /// each pull request you work on with the agent.
+    pub own: String,
+    /// How many clones were found in `repos`.
+    pub clones: u32,
+    /// The checkouts of pull requests there are, each by its folder.
+    pub checkouts: Vec<String>,
+    /// The ones whose pull request ended that are kept all the same: they hold work that
+    /// was not committed or not pushed.
+    pub kept: Vec<String>,
+}
+
 /// A folder to pick when opening one.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]

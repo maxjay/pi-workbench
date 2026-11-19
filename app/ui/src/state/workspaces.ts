@@ -13,6 +13,15 @@ export { workspaces };
 
 export const workspaceById = (id: string) => workspaces()?.find((view) => view.workspace.id === id);
 
+/**
+ * The folder a pull request or a ticket is asked from. Its tab names it by a workspace's id, or
+ * for a clone in your repos folder that is not a workspace by the clone's path.
+ */
+export const dirOf = (key: string) => (key.startsWith('/') ? key : workspaceById(key)?.workspace.path);
+
+/** Opens the workspace a pull request or a ticket was asked from. A clone becomes one first. */
+export const openPlace = (key: string) => (key.startsWith('/') ? openFolder(key) : open(`ws:${key}`));
+
 /** Opens a folder as a workspace, and its tab. */
 export async function openFolder(path: string) {
   const view = await ask({ method: 'workspaces.open', params: { path } }, 'workspace');

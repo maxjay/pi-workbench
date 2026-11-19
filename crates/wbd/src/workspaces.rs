@@ -236,7 +236,7 @@ fn name_of(path: &Path) -> String {
 }
 
 /// `~` and `~/x` are in your home folder.
-fn expand(path: &str) -> PathBuf {
+pub fn expand(path: &str) -> PathBuf {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     match path.strip_prefix('~') {
         Some("") => home().unwrap_or_else(|| path.into()),

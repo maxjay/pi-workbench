@@ -9,7 +9,7 @@ import { active, close, open, pullOf, tabs, ticketOf, workspaceOf } from './stat
 import { workspaces } from './state/workspaces';
 import { Home } from './views/Home';
 import { PullPage } from './views/pull/Page';
-import { Settings } from './views/Settings';
+import { SettingsPage } from './views/Settings';
 import { TicketPage } from './views/ticket/Page';
 import { WorkspacePage } from './views/Workspace';
 
@@ -49,7 +49,7 @@ export function App() {
           <Home />
         </Show>
         <Show when={active() === 'settings'}>
-          <Settings />
+          <SettingsPage />
         </Show>
         {/* A workspace's page stays mounted while its tab is open, so its editor keeps its place. */}
         <For each={tabs().filter((tab) => workspaceOf(tab))}>

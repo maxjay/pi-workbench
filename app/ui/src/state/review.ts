@@ -67,8 +67,12 @@ export async function vote(dir: string, pr: number, value: number) {
 export async function setPull(dir: string, pr: number, to: PullTo) {
   await ask({ method: 'pull.set', params: { dir, pr, to } }, 'done');
   wrote();
-  // Azure DevOps takes a moment to complete one: asked again once it has.
-  setTimeout(wrote, 3000);
+  // Azure DevOps takes a moment to complete one: asked again once it has. The checkout of one
+  // that ended is removed then.
+  setTimeout(() => {
+    wrote();
+    if (to === 'complete' || to === 'abandon') void ask({ method: 'pulls.sweep' }, 'done').catch(() => {});
+  }, 3000);
 }
 
 /** Changes the title and the description. */
@@ -97,7 +101,11 @@ export const stepLog = async (dir: string, run: number, log: number) =>
 export const rerun = (dir: string, run: number) =>
   ask({ method: 'pull.rerun', params: { dir, run } }, 'done');
 
-/** The folder the agent works in for a pull request, and what it is told first. */
+/** Where a pull request's own folder is, or will be. Asking makes nothing. */
+export const pullPlace = async (dir: string, pr: number) =>
+  (await ask({ method: 'pull.place', params: { dir, pr } }, 'place')).cwd;
+
+/** Makes a pull request's own folder if it is not there. Gives it, and what the agent is told first. */
 export const session = (dir: string, pr: number) =>
   ask({ method: 'pull.session', params: { dir, pr } }, 'session');
 

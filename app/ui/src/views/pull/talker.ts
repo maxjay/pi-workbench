@@ -29,8 +29,11 @@ export interface Host {
 
 export const why = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/** `session` is the folder the agent works in and what it is told first, once they are ready. */
-export function createTalker(session: Promise<{ cwd: string; brief: string }>) {
+/**
+ * `session` gives the folder the agent works in and what it is told first. It is asked for when
+ * the agent is first told something, so a folder that has to be made is made only then.
+ */
+export function createTalker(session: () => Promise<{ cwd: string; brief: string }>) {
   const [conversation, setConversation] = createSignal<string>();
   /** The agent a new conversation starts with. */
   const [agent, setAgent] = createSignal<Agent>(defaultAgent());
@@ -40,7 +43,7 @@ export function createTalker(session: Promise<{ cwd: string; brief: string }>) {
   /** Says something in the conversation and gives what the agent ends its turn on. */
   const tell = (prompt: string): Promise<string> => {
     const turn = async () => {
-      const ready = await session;
+      const ready = await session();
       const id = conversation();
       if (!id) {
         const started = await start(agent(), ready.cwd, prompt, ready.brief);

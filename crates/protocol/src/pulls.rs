@@ -71,7 +71,8 @@ pub struct PullRow {
     /// Its latest check, if it has one.
     pub check: Option<PipelineRun>,
     pub open_threads: u32,
-    /// The workspace that has this pull request's repo, if one does.
+    /// Where it opens from: the workspace that has its repo, by its id, or else a clone of
+    /// the repo in your repos folder, by its path. Nothing when neither is there.
     #[serde(default)]
     pub workspace: Option<String>,
     /// Who opened it.

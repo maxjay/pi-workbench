@@ -38,6 +38,11 @@ export function Chat(props: {
   onOpenFile: (path: string) => void;
   /** What a new conversation here tells the agent before anything you write. */
   brief?: string;
+  /**
+   * Called before a new conversation starts here, where the folder has to be made first. It
+   * gives the folder and what the agent is told, in place of `cwd` and `brief`.
+   */
+  prepare?: () => Promise<{ cwd: string; brief: string }>;
   /** No title and no list of conversations: where it is says what it is about. */
   plain?: boolean;
   /** Hides the agent's column, where it can be hidden. */
@@ -107,7 +112,8 @@ export function Chat(props: {
     const id = props.shown;
     const words = props.dress ? props.dress.wrap(text) : text;
     if (id) return send(id, words);
-    props.onShow(await start(agent(), props.cwd, words, props.brief));
+    const at = props.prepare ? await props.prepare() : { cwd: props.cwd, brief: props.brief };
+    props.onShow(await start(agent(), at.cwd, words, at.brief));
   });
 
   return (

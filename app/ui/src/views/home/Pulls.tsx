@@ -102,7 +102,7 @@ function byRepo(rows: PullRow[]): Group[] {
 function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: PullRow) => JSX.Element }) {
   const groups = createMemo(() => byRepo(props.rows));
   const projects = () => new Set(props.rows.map((row) => row.project.toLowerCase())).size;
-  /** A row opens here when its repo is open here, and on Azure DevOps when not. */
+  /** A row opens here when its repo is open here or cloned in your repos folder, and on Azure DevOps when not. */
   const go = (row: PullRow) => (row.workspace ? open(`pr:${row.workspace}:${row.id}`) : openUrl(row.url));
   return (
     <For each={groups()}>
@@ -131,7 +131,7 @@ function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: 
                     title={
                       row.workspace
                         ? undefined
-                        : `The ${row.repo} repo is not open here. Opens on Azure DevOps.`
+                        : `The ${row.repo} repo is not open here and not in your repos folder. Opens on Azure DevOps.`
                     }
                     onClick={() => go(row)}
                   >

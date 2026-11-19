@@ -33,7 +33,7 @@ import {
   touched,
   unlinkChild,
 } from '../../state/tickets';
-import { refreshWorkspaces, workspaceById } from '../../state/workspaces';
+import { dirOf, openPlace, refreshWorkspaces } from '../../state/workspaces';
 import { header, shown as shownText } from '../pull/agent';
 import { pullHue, ticketHue } from '../pull/parts';
 import { Said } from '../pull/Said';
@@ -47,11 +47,11 @@ const DRAFT =
 export function TicketPage(props: { tab: TabId; workspace: string; id: number }) {
   return (
     <Show
-      when={workspaceById(props.workspace)}
+      when={dirOf(props.workspace)}
       keyed
       fallback={<p class="pr-pad dim">The folder this ticket was opened from is not on the list any more.</p>}
     >
-      {(view) => <Page tab={props.tab} workspace={props.workspace} dir={view.workspace.path} id={props.id} />}
+      {(dir) => <Page tab={props.tab} workspace={props.workspace} dir={dir} id={props.id} />}
     </Show>
   );
 }
@@ -98,7 +98,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
   // The agent: it works in the repo's folder, and is told the ticket first.
   const placing = ticketSession(dir, id);
   const [place] = createResource(() => placing);
-  const talker = createTalker(placing);
+  const talker = createTalker(() => placing);
   // The tab has the colour of the ticket's type, and says when the agent is working or waiting on you.
   createEffect(() =>
     markTab(props.tab, {
@@ -158,7 +158,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
   const starting = createAction(async () => {
     await startTicket(dir, id);
     refreshWorkspaces();
-    open(`ws:${props.workspace}`);
+    void openPlace(props.workspace);
   });
   const [states, setStates] = createSignal(false);
   let stateBox!: HTMLDivElement;
@@ -548,7 +548,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; id: number })
                   dress={dress}
                   hint="Ask about the ticket"
                   empty="It already has this ticket: its words, its fields, what is above and under it, the discussion, and any pull request linked to it."
-                  onOpenFile={() => open(`ws:${props.workspace}`)}
+                  onOpenFile={() => void openPlace(props.workspace)}
                 />
               )}
             </Show>

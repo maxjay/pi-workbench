@@ -375,8 +375,28 @@ pub enum Call {
         #[ts(type = "number")]
         id: u64,
     },
-    /// Gets a pull request's own folder ready for the agent: a separate
-    /// checkout of its branch. Answers with the folder and what to tell the agent.
+    /// Where a pull request's own folder is, or will be: a separate checkout of
+    /// its branch, in the workbench's own folder. Asking makes nothing.
+    #[serde(rename = "pull.place")]
+    PullPlace {
+        dir: String,
+        #[ts(type = "number")]
+        pr: u64,
+    },
+    /// Removes the checkouts of pull requests that were completed or
+    /// abandoned. One that holds work that was not committed or not pushed
+    /// is kept.
+    #[serde(rename = "pulls.sweep")]
+    PullsSweep,
+    /// The folder your clones are in and the workbench's own, and what is there.
+    #[serde(rename = "settings.get")]
+    SettingsGet,
+    /// Changes those two folders. One left empty goes back to the usual one.
+    #[serde(rename = "settings.set")]
+    SettingsSet { repos: String, own: String },
+    /// Makes a pull request's own folder for the agent, if it is not there:
+    /// a separate checkout of its branch, made from the repo's clone. Answers
+    /// with the folder and what to tell the agent.
     #[serde(rename = "pull.session")]
     PullSession {
         dir: String,
@@ -532,6 +552,10 @@ pub enum Answer {
         cwd: String,
         brief: String,
     },
+    Place {
+        cwd: String,
+    },
+    Settings(Settings),
     Tickets {
         rows: Vec<TicketRow>,
     },

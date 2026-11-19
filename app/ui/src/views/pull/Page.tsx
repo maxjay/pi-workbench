@@ -32,6 +32,7 @@ import {
   loadFiles,
   openReview,
   patchTalk,
+  pullPlace,
   say,
   session,
   setPull,
@@ -42,7 +43,7 @@ import {
   vote,
 } from '../../state/review';
 import { active, markTab, open, type TabId } from '../../state/tabs';
-import { workspaceById } from '../../state/workspaces';
+import { dirOf } from '../../state/workspaces';
 import { Chat, type Dress } from '../workspace/Chat';
 import {
   code,
@@ -71,13 +72,13 @@ type Shown = { kind: 'overview' } | { kind: 'checks' } | { kind: 'file'; path: s
 export function PullPage(props: { tab: TabId; workspace: string; pr: number }) {
   return (
     <Show
-      when={workspaceById(props.workspace)}
+      when={dirOf(props.workspace)}
       keyed
       fallback={
         <p class="pr-pad dim">The folder this pull request was opened from is not on the list any more.</p>
       }
     >
-      {(view) => <Page tab={props.tab} workspace={props.workspace} dir={view.workspace.path} pr={props.pr} />}
+      {(dir) => <Page tab={props.tab} workspace={props.workspace} dir={dir} pr={props.pr} />}
     </Show>
   );
 }
@@ -165,9 +166,19 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
   const [opened, setOpened] = createStore<Record<string, boolean>>({});
 
   // The agent: its own folder, what it is told about the pull request, and its one conversation.
-  const placing = session(dir, pr);
-  const [place] = createResource(() => placing);
-  const talker = createTalker(placing);
+  // Where the folder is, is asked now, so a conversation that is already in it shows. The folder
+  // is made when the agent is first asked something: a checkout of a large repo for every pull
+  // request you only read would be a waste.
+  const [place] = createResource(() => pullPlace(dir, pr));
+  let made: Promise<{ cwd: string; brief: string }> | undefined;
+  const prepare = () => {
+    made ??= session(dir, pr).catch((err) => {
+      made = undefined;
+      throw err;
+    });
+    return made;
+  };
+  const talker = createTalker(prepare);
   // The tab says when the agent is working, or waiting on you.
   createEffect(() => markTab(props.tab, { standing: talker.standing() }));
   onCleanup(() => markTab(props.tab, { standing: undefined }));
@@ -437,17 +448,15 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
                 fallback={
                   <section class="chat pr-nochat" aria-label="The agent">
                     <p classList={{ dim: !place.error, 'note-failed': Boolean(place.error) }}>
-                      {place.error
-                        ? why(place.error)
-                        : "Getting the pull request's own folder ready for the agent"}
+                      {place.error ? why(place.error) : 'Asking where its folder is'}
                     </p>
                   </section>
                 }
               >
-                {(ready) => (
+                {(cwd) => (
                   <Chat
-                    cwd={ready().cwd}
-                    brief={ready().brief}
+                    cwd={cwd()}
+                    prepare={prepare}
                     plain
                     shown={conversation()}
                     onShow={setConversation}
@@ -505,9 +514,7 @@ function Page(props: { tab: TabId; workspace: string; dir: string; pr: number })
                     }
                     onOpenFile={(path) => {
                       // A file the agent touched is in its own checkout. If the pull request changes it, show its diff.
-                      const relative = path.startsWith(`${ready().cwd}/`)
-                        ? path.slice(ready().cwd.length + 1)
-                        : path;
+                      const relative = path.startsWith(`${cwd()}/`) ? path.slice(cwd().length + 1) : path;
                       if (review().files.some((f) => f.path === relative)) showFile(relative);
                     }}
                   />

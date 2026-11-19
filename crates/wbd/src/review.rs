@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -18,7 +18,8 @@ use tokio::process::Command;
 
 use crate::dova::Dova;
 use crate::error::Error;
-use crate::{git, pulls};
+use crate::places::Found;
+use crate::{files, git, pulls};
 
 /// Asked of dova for one file, this many lines around each change is all of the file.
 const WHOLE_FILE: u64 = 1_000_000;
@@ -40,6 +41,44 @@ pub struct Reviews {
     paths: Mutex<HashMap<(String, u64), String>>,
     /// What changed in each pull request's files, as far as it was asked for.
     diffs: Mutex<HashMap<(String, u64), Kept>>,
+    /// Each pull request's project and repo, by folder and number.
+    names: Mutex<HashMap<(String, u64), (String, String)>>,
+    /// The checkouts that were kept at the last sweep though their pull request ended.
+    left: Mutex<Vec<String>>,
+}
+
+/// The folders a pull request's checkout has to do with.
+pub struct Folders<'a> {
+    /// The workbench's own folder: checkouts are in `pulls` there.
+    pub own: &'a Path,
+    /// Where checkouts were made before: `reviews` in wbd's data.
+    pub data: &'a Path,
+    /// The clones in your repos folder.
+    pub found: &'a [Found],
+}
+
+/// A pull request's checkout, as the list of them in the workbench's own folder has it.
+#[derive(Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+struct Checkout {
+    folder: String,
+    /// The clone it was made from, and is a worktree of.
+    clone: String,
+    pr: u64,
+}
+
+/// The checkouts on the list in `own`.
+fn checkouts(own: &Path) -> Vec<Checkout> {
+    std::fs::read_to_string(own.join("pulls.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn keep_checkouts(own: &Path, list: &[Checkout]) {
+    let text = serde_json::to_string_pretty(list).expect("checkouts serialize");
+    if std::fs::create_dir_all(own).is_ok() {
+        let _ = files::write_whole(&own.join("pulls.json"), &text, None);
+    }
 }
 
 /// The files of a pull request that were asked for, each as dova gave it, by its path. They
@@ -186,30 +225,152 @@ impl Reviews {
         Ok(runs)
     }
 
-    /// Gets a pull request's own folder ready for the agent, and what to
-    /// tell the agent about the pull request.
+    /// A pull request's project and repo, by their names.
+    async fn named(&self, dova: &Dova, dir: &str, pr: u64) -> Result<(String, String), Error> {
+        self.at(dova, dir, pr).await?;
+        let names = self.names.lock().expect("not poisoned");
+        names.get(&(dir.to_string(), pr)).cloned().ok_or_else(|| {
+            Error::Dova(format!(
+                "Azure DevOps didn't say which repo pull request {pr} is in"
+            ))
+        })
+    }
+
+    /// Where a pull request's own checkout is, or will be made. Asking makes nothing.
+    pub async fn place(
+        &self,
+        dova: &Dova,
+        at: &Folders<'_>,
+        dir: &str,
+        pr: u64,
+    ) -> Result<PathBuf, Error> {
+        let (project, repo) = self.named(dova, dir, pr).await?;
+        // One made before checkouts were kept in the workbench's own folder is still used:
+        // the conversations in it are tied to where it is.
+        if let Some(clone) = clone_of(dir, &project, &repo, at.found).await {
+            let origin = git::origin(&clone).await.unwrap_or_default();
+            let before = at.data.join("reviews");
+            let old = before.join(format!("{}-{pr}", slug(&origin)));
+            if old.join(".git").exists() {
+                return Ok(old);
+            }
+        }
+        Ok(at.own.join("pulls").join(format!("{}-{pr}", slug(&repo))))
+    }
+
+    /// Makes a pull request's own folder for the agent if it is not there, and gives it
+    /// with what to tell the agent about the pull request. The folder is a worktree of the
+    /// repo's clone: the folder asked from when it is that repo's, or else the repo's clone
+    /// in your repos folder.
     pub async fn session(
         &self,
         dova: &Dova,
-        data: &Path,
+        at: &Folders<'_>,
         dir: &str,
         pr: u64,
     ) -> Result<(String, String), Error> {
         let review = self.open(dova, dir, pr).await?;
-        let folder = Path::new(dir);
-        // The agent works on the code, so the folder asked from must be that repo's.
-        let origin = git::origin(folder).await.unwrap_or_default();
-        let here = pulls::azure(&origin).map(|(_, repo)| repo);
-        if !here.is_some_and(|repo| repo.eq_ignore_ascii_case(&review.pr.repo)) {
-            return Err(Error::NotFound(format!(
-                "The {} repo has no folder open here. Open it to work on this pull request with the agent.",
-                review.pr.repo
-            )));
+        let (project, repo) = (&review.pr.project, &review.pr.repo);
+        let clone = clone_of(dir, project, repo, at.found).await.ok_or_else(|| {
+            Error::NotFound(format!(
+                "The {repo} repo is not open here, and your repos folder has no clone of it. Clone it there to work on this pull request with the agent."
+            ))
+        })?;
+        let own = self.place(dova, at, dir, pr).await?;
+        checkout(&clone, &own, &review.pr.source_branch, &review.head).await?;
+        let made = Checkout {
+            folder: own.display().to_string(),
+            clone: clone.display().to_string(),
+            pr,
+        };
+        let mut list = checkouts(at.own);
+        if !list.contains(&made) {
+            list.retain(|known| known.folder != made.folder);
+            list.push(made);
+            keep_checkouts(at.own, &list);
         }
-        let own = data.join("reviews").join(format!("{}-{pr}", slug(&origin)));
-        checkout(folder, &own, &review.pr.source_branch, &review.head).await?;
         let runs = self.checks(dova, dir, pr).await.unwrap_or_default();
         Ok((own.display().to_string(), brief(&review, &runs)))
+    }
+
+    /// Removes the checkouts whose pull request was completed or abandoned. One that holds
+    /// work that was not committed, or commits that are not in the pull request, is kept.
+    pub async fn sweep(&self, dova: &Dova, own: &Path, data: &Path) {
+        let mut list = checkouts(own);
+        let listed = list.clone();
+        // The ones made before there was a list are put on it.
+        for folder in std::fs::read_dir(data.join("reviews"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let folder = folder.path();
+            let known = list.iter().any(|one| Path::new(&one.folder) == folder);
+            if known || !folder.join(".git").is_file() {
+                continue;
+            }
+            let name = folder.file_name().unwrap_or_default().to_string_lossy();
+            let pr = name.rsplit('-').next().and_then(|n| n.parse().ok());
+            let common = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+            let clone = run(&folder, &common, None).await.ok().and_then(|out| {
+                let git = PathBuf::from(String::from_utf8_lossy(&out).trim());
+                git.parent().map(|clone| clone.display().to_string())
+            });
+            if let (Some(pr), Some(clone)) = (pr, clone) {
+                list.push(Checkout {
+                    folder: folder.display().to_string(),
+                    clone,
+                    pr,
+                });
+            }
+        }
+
+        let mut left = Vec::new();
+        for one in list.clone() {
+            let (folder, clone) = (Path::new(&one.folder), Path::new(&one.clone));
+            let forget = |list: &mut Vec<Checkout>| list.retain(|known| *known != one);
+            // One that was deleted by hand is taken off git's list and off this one.
+            if !folder.join(".git").exists() {
+                let _ = run(clone, &["worktree", "prune"], None).await;
+                forget(&mut list);
+                continue;
+            }
+            let path = format!("_apis/git/pullrequests/{}?api-version=7.1", one.pr);
+            // Not being able to ask is no reason to remove anything.
+            let Ok(raw) = dova.call("api", &one.clone, json!({ "path": path })).await else {
+                continue;
+            };
+            if !matches!(raw["status"].as_str(), Some("completed" | "abandoned")) {
+                continue;
+            }
+            let last = text(&raw["lastMergeSourceCommit"]["commitId"]);
+            let clean = run(folder, &["status", "--porcelain"], None)
+                .await
+                .is_ok_and(|changes| changes.is_empty());
+            // Every commit in it was in the pull request, or is on some branch of the remote.
+            let in_pull = ["merge-base", "--is-ancestor", "HEAD", &last];
+            let pushed = run(folder, &in_pull, None).await.is_ok()
+                || run(folder, &["branch", "-r", "--contains", "HEAD"], None)
+                    .await
+                    .is_ok_and(|branches| !branches.is_empty());
+            let remove = ["worktree", "remove", &one.folder];
+            if clean && pushed && run(clone, &remove, None).await.is_ok() {
+                forget(&mut list);
+            } else {
+                left.push(one.folder.clone());
+            }
+        }
+        if list != listed {
+            keep_checkouts(own, &list);
+        }
+        *self.left.lock().expect("not poisoned") = left;
+    }
+
+    /// Every pull request checkout there is, and the ones the last sweep kept though their
+    /// pull request ended.
+    pub fn kept(&self, own: &Path) -> (Vec<String>, Vec<String>) {
+        let all = checkouts(own).into_iter().map(|one| one.folder).collect();
+        (all, self.left.lock().expect("not poisoned").clone())
     }
 
     /// A pull request's description as it was written.
@@ -288,6 +449,14 @@ impl Reviews {
             ))
         })?;
         let at = format!("_apis/git/repositories/{repo}/pullRequests/{pr}");
+        let names = (
+            text(&raw["repository"]["project"]["name"]),
+            text(&raw["repository"]["name"]),
+        );
+        self.names
+            .lock()
+            .expect("not poisoned")
+            .insert(key.clone(), names);
         self.paths
             .lock()
             .expect("not poisoned")
@@ -312,6 +481,26 @@ impl Reviews {
             .insert(dir.to_string(), id.clone());
         Ok(id)
     }
+}
+
+/// The clone a pull request's checkout is made from: the folder asked from when it is that
+/// repo's, or else a clone of the repo found in your repos folder.
+async fn clone_of(dir: &str, project: &str, repo: &str, found: &[Found]) -> Option<PathBuf> {
+    let same = |remote: &str| {
+        pulls::azure(remote).is_some_and(|(of, name)| {
+            name.eq_ignore_ascii_case(repo)
+                && pulls::project_name(&of).eq_ignore_ascii_case(project)
+        })
+    };
+    if git::origin(Path::new(dir))
+        .await
+        .as_deref()
+        .is_some_and(same)
+    {
+        return Some(PathBuf::from(dir));
+    }
+    let clone = found.iter().find(|clone| same(&clone.remote))?;
+    Some(PathBuf::from(&clone.path))
 }
 
 /// One changed file's diff with every line of the file.

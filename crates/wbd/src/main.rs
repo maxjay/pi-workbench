@@ -10,6 +10,7 @@ mod files;
 mod fold;
 mod git;
 mod health;
+mod places;
 mod pulls;
 mod review;
 mod terminals;
@@ -33,6 +34,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// What wbd keeps between calls.
 struct Ctx {
     workspaces: Workspaces,
+    places: places::Places,
     terminals: Terminals,
     conversations: Conversations,
     dova: dova::Dova,
@@ -74,6 +76,7 @@ async fn main() {
 
     let ctx = Arc::new(Ctx {
         workspaces: Workspaces::new(&data_dir()),
+        places: places::Places::new(&data_dir()),
         terminals: Terminals::new(out.clone()),
         conversations: Conversations::new(&data_dir(), out.clone()),
         dova: dova::Dova::default(),
@@ -82,6 +85,22 @@ async fn main() {
         forms: tickets::Forms::default(),
     });
     ctx.terminals.start();
+
+    // The checkouts of pull requests that ended are removed: a while after starting, then
+    // each hour.
+    let sweeping = ctx.clone();
+    tokio::spawn(async move {
+        let mut wait = std::time::Duration::from_secs(30);
+        loop {
+            tokio::time::sleep(wait).await;
+            let own = sweeping.places.own();
+            sweeping
+                .reviews
+                .sweep(&sweeping.dova, &own, &data_dir())
+                .await;
+            wait = std::time::Duration::from_secs(3600);
+        }
+    });
 
     let _ = out.send(protocol::event(&Event::Ready {
         version: VERSION.into(),
@@ -320,7 +339,11 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::TicketsList { words } => Answer::Tickets {
-            rows: tickets::list(&ctx.dova, ctx.workspaces.all(), &words).await?,
+            rows: {
+                let found = ctx.places.found().await;
+                let (clones, _) = pulls::clones(ctx.workspaces.all(), &found).await;
+                tickets::list(&ctx.dova, &clones, &words).await?
+            },
         },
         Call::TicketOpen { dir, id } => {
             Answer::Ticket(tickets::open(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id).await?)
@@ -383,11 +406,36 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             cwd: dir,
         },
         Call::PullSession { dir, pr } => {
-            let (cwd, brief) = ctx
-                .reviews
-                .session(&ctx.dova, &data_dir(), &dir, pr)
-                .await?;
+            let (own, data, found) = (ctx.places.own(), data_dir(), ctx.places.found().await);
+            let at = review::Folders {
+                own: &own,
+                data: &data,
+                found: &found,
+            };
+            let (cwd, brief) = ctx.reviews.session(&ctx.dova, &at, &dir, pr).await?;
             Answer::Session { cwd, brief }
+        }
+        Call::PullPlace { dir, pr } => {
+            let (own, data, found) = (ctx.places.own(), data_dir(), ctx.places.found().await);
+            let at = review::Folders {
+                own: &own,
+                data: &data,
+                found: &found,
+            };
+            let cwd = ctx.reviews.place(&ctx.dova, &at, &dir, pr).await?;
+            Answer::Place {
+                cwd: cwd.display().to_string(),
+            }
+        }
+        Call::PullsSweep => {
+            let own = ctx.places.own();
+            ctx.reviews.sweep(&ctx.dova, &own, &data_dir()).await;
+            Answer::Done
+        }
+        Call::SettingsGet => Answer::Settings(settings(ctx).await),
+        Call::SettingsSet { repos, own } => {
+            ctx.places.set(&repos, &own)?;
+            Answer::Settings(settings(ctx).await)
         }
         Call::PullReply {
             dir,
@@ -422,12 +470,24 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::PullsTeams => Answer::Teams {
             teams: ctx
                 .pulls
-                .teams_with_members(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .teams_with_members(
+                    &ctx.dova,
+                    &ctx.reviews,
+                    ctx.workspaces.all(),
+                    &ctx.places.found().await,
+                )
                 .await?,
         },
         Call::PullsFind { text } => {
-            let (people, repos, projects) =
-                ctx.pulls.find(&ctx.dova, ctx.workspaces.all(), &text).await;
+            let (people, repos, projects) = ctx
+                .pulls
+                .find(
+                    &ctx.dova,
+                    ctx.workspaces.all(),
+                    &ctx.places.found().await,
+                    &text,
+                )
+                .await;
             Answer::Found {
                 people,
                 repos,
@@ -445,9 +505,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.dova,
                     &ctx.reviews,
                     ctx.workspaces.all(),
-                    &people,
-                    &repos,
-                    both,
+                    &ctx.places.found().await,
+                    pulls::Chosen {
+                        people: &people,
+                        repos: &repos,
+                        both,
+                    },
                 )
                 .await?,
             asked: Vec::new(),
@@ -456,7 +519,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::PullsList { quick: true } => Answer::Pulls {
             rows: ctx
                 .pulls
-                .mine(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .mine(
+                    &ctx.dova,
+                    &ctx.reviews,
+                    ctx.workspaces.all(),
+                    &ctx.places.found().await,
+                )
                 .await?,
             asked: Vec::new(),
             searched: Vec::new(),
@@ -464,7 +532,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
         Call::PullsList { quick: false } => {
             let (rows, asked, searched) = ctx
                 .pulls
-                .list(&ctx.dova, &ctx.reviews, ctx.workspaces.all())
+                .list(
+                    &ctx.dova,
+                    &ctx.reviews,
+                    ctx.workspaces.all(),
+                    &ctx.places.found().await,
+                )
                 .await?;
             Answer::Pulls {
                 rows,
@@ -491,6 +564,19 @@ fn view(workspace: protocol::Workspace) -> WorkspaceView {
         branch: exists.then(|| workspaces::branch(path)).flatten(),
         workspace,
         exists,
+    }
+}
+
+/// The two folders as you wrote them, and what is in them now.
+async fn settings(ctx: &Ctx) -> protocol::Settings {
+    let (repos, own) = ctx.places.written();
+    let (checkouts, kept) = ctx.reviews.kept(&ctx.places.own());
+    protocol::Settings {
+        repos,
+        own,
+        clones: ctx.places.found().await.len() as u32,
+        checkouts,
+        kept,
     }
 }
 
