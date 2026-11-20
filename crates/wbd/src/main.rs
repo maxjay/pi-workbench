@@ -577,8 +577,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::SettingsGet => Answer::Settings(settings(ctx).await),
-        Call::SettingsSet { repos, own } => {
-            ctx.places.set(&repos, &own)?;
+        Call::SettingsSet {
+            repos,
+            own,
+            organizations,
+        } => {
+            ctx.places.set(&repos, &own, &organizations)?;
             Answer::Settings(settings(ctx).await)
         }
         Call::PullReply {
@@ -621,6 +625,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.reviews,
                     ctx.codespaces.all(),
                     &ctx.places.found().await,
+                    ctx.places.organizations().as_deref(),
                 )
                 .await?,
         },
@@ -631,6 +636,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.dova,
                     ctx.codespaces.all(),
                     &ctx.places.found().await,
+                    ctx.places.organizations().as_deref(),
                     &text,
                 )
                 .await;
@@ -652,6 +658,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.reviews,
                     ctx.codespaces.all(),
                     &ctx.places.found().await,
+                    ctx.places.organizations().as_deref(),
                     pulls::Chosen {
                         people: &people,
                         repos: &repos,
@@ -670,6 +677,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.reviews,
                     ctx.codespaces.all(),
                     &ctx.places.found().await,
+                    ctx.places.organizations().as_deref(),
                 )
                 .await?,
             asked: Vec::new(),
@@ -683,6 +691,7 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                     &ctx.reviews,
                     ctx.codespaces.all(),
                     &ctx.places.found().await,
+                    ctx.places.organizations().as_deref(),
                 )
                 .await?;
             Answer::Pulls {
@@ -733,12 +742,17 @@ fn view(codespace: protocol::Codespace) -> CodespaceView {
 async fn settings(ctx: &Ctx) -> protocol::Settings {
     let (repos, own) = ctx.places.written();
     let (checkouts, kept) = ctx.reviews.kept(&ctx.places.own());
+    let found = ctx.places.found().await;
+    let (clones, _) = pulls::clones(ctx.codespaces.all(), &found).await;
+    let written = ctx.places.organizations();
     protocol::Settings {
         repos,
         own,
-        clones: ctx.places.found().await.len() as u32,
+        clones: found.len() as u32,
         checkouts,
         kept,
+        organizations: pulls::organizations(written.as_deref(), &clones),
+        organizations_written: written.is_some(),
     }
 }
 

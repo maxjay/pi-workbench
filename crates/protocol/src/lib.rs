@@ -408,9 +408,16 @@ pub enum Call {
     /// The folder your clones are in and the workbench's own, and what is there.
     #[serde(rename = "settings.get")]
     SettingsGet,
-    /// Changes those two folders. One left empty goes back to the usual one.
+    /// Changes those two folders, and the Azure DevOps organizations that are asked: their
+    /// names, with commas or spaces between them. A folder left empty goes back to the usual
+    /// one. With no organizations, they are the ones your clones are from.
     #[serde(rename = "settings.set")]
-    SettingsSet { repos: String, own: String },
+    SettingsSet {
+        repos: String,
+        own: String,
+        #[serde(default)]
+        organizations: String,
+    },
     /// Makes the agent's folder for a pull request, if it is not there: a separate
     /// checkout of its branch, made from the repo's clone. With no clone here, `clone`
     /// clones the repo into your repos folder first; without it the folder holds nothing

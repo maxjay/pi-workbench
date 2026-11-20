@@ -25,4 +25,12 @@ checkouts: Array<string>,
  * The ones whose pull request ended that are kept all the same: they hold work that
  * was not committed or not pushed.
  */
-kept: Array<string>, };
+kept: Array<string>, 
+/**
+ * The Azure DevOps organizations that are asked for pull requests, by name.
+ */
+organizations: Array<string>, 
+/**
+ * True when you wrote them. False when they are the ones your clones are from.
+ */
+organizationsWritten: boolean, };

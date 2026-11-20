@@ -112,14 +112,20 @@ function Folders() {
     () => active() === 'settings',
     async () => (await ask({ method: 'settings.get' }, 'settings')) as Settings,
   );
-  const saving = createAction(async (next: { repos: string; own: string }) => {
+  const saving = createAction(async (next: { repos: string; own: string; organizations: string }) => {
     mutate((await ask({ method: 'settings.set', params: next }, 'settings')) as Settings);
   });
-  /** Saves a folder when what is written in its field is not what is kept. */
-  const save = (which: 'repos' | 'own', written: string) => {
+  /** What is kept now, as it would be written. The organizations are empty when none was written. */
+  const kept = (now: Settings) => ({
+    repos: now.repos,
+    own: now.own,
+    organizations: now.organizationsWritten ? now.organizations.join(', ') : '',
+  });
+  /** Saves a field when what is written in it is not what is kept. */
+  const save = (which: 'repos' | 'own' | 'organizations', written: string) => {
     const now = settings.latest;
-    if (!now || written.trim() === now[which]) return;
-    void saving.run({ repos: now.repos, own: now.own, [which]: written });
+    if (!now || written.trim() === kept(now)[which]) return;
+    void saving.run({ ...kept(now), [which]: written });
   };
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const name = (path: string) => path.slice(path.lastIndexOf('/') + 1);
@@ -133,40 +139,68 @@ function Folders() {
   );
 
   return (
-    <section class="section" aria-labelledby="folders">
-      <div class="section-head">
-        <h2 id="folders">Folders</h2>
-      </div>
-      <p class="dim">
-        A pull request or a ticket opens from any clone in your repos folder, whether or not it is open as a
-        codespace. The agent works on a pull request in a checkout of its own, in the workbench's folder. It
-        is made from your clone when you first ask the agent something, and removed when the pull request is
-        completed or abandoned.
-      </p>
-      <div class="rows">
-        <div class="row setting-row">
-          <span class="table-name">Your repos</span>
-          {field('repos', 'The folder your clones are in')}
-          <span class="dim">
-            <Show when={settings.latest}>{(s) => count(s().clones, 'clone', 'clones')}</Show>
-          </span>
+    <>
+      <section class="section" aria-labelledby="organizations">
+        <div class="section-head">
+          <h2 id="organizations">Azure DevOps</h2>
         </div>
-        <div class="row setting-row">
-          <span class="table-name">The workbench's own</span>
-          {field('own', 'The folder the workbench keeps its own things in')}
-          <span class="dim">
-            <Show when={settings.latest}>{(s) => count(s().checkouts.length, 'checkout', 'checkouts')}</Show>
-          </span>
-        </div>
-      </div>
-      <Show when={saving.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
-      <Show when={settings.latest?.kept.length}>
         <p class="dim">
-          Kept though their pull request ended, because they hold work that was not committed or not pushed:{' '}
-          {settings.latest?.kept.map(name).join(', ')}.
+          Home asks these organizations for your pull requests and the ones to review. A pull request there
+          opens whether or not you have a clone of its repo. Left empty, they are the organizations your
+          clones are from.
         </p>
-      </Show>
-    </section>
+        <div class="rows">
+          <div class="row setting-row">
+            <span class="table-name">Organizations</span>
+            <input
+              class="field setting-folder"
+              aria-label="The Azure DevOps organizations to ask, by name"
+              value={settings.latest?.organizations.join(', ') ?? ''}
+              onChange={(e) => save('organizations', e.currentTarget.value)}
+            />
+            <span class="dim">
+              <Show when={settings.latest && !settings.latest.organizationsWritten}>from your clones</Show>
+            </span>
+          </div>
+        </div>
+      </section>
+      <section class="section" aria-labelledby="folders">
+        <div class="section-head">
+          <h2 id="folders">Folders</h2>
+        </div>
+        <p class="dim">
+          A pull request or a ticket opens from any clone in your repos folder, whether or not it is open as a
+          codespace. The agent works on a pull request in a checkout of its own, in the workbench's folder. It
+          is made from your clone when you first ask the agent something, and removed when the pull request is
+          completed or abandoned.
+        </p>
+        <div class="rows">
+          <div class="row setting-row">
+            <span class="table-name">Your repos</span>
+            {field('repos', 'The folder your clones are in')}
+            <span class="dim">
+              <Show when={settings.latest}>{(s) => count(s().clones, 'clone', 'clones')}</Show>
+            </span>
+          </div>
+          <div class="row setting-row">
+            <span class="table-name">The workbench's own</span>
+            {field('own', 'The folder the workbench keeps its own things in')}
+            <span class="dim">
+              <Show when={settings.latest}>
+                {(s) => count(s().checkouts.length, 'checkout', 'checkouts')}
+              </Show>
+            </span>
+          </div>
+        </div>
+        <Show when={saving.error()}>{(error) => <p class="note-failed">{error()}</p>}</Show>
+        <Show when={settings.latest?.kept.length}>
+          <p class="dim">
+            Kept though their pull request ended, because they hold work that was not committed or not pushed:{' '}
+            {settings.latest?.kept.map(name).join(', ')}.
+          </p>
+        </Show>
+      </section>
+    </>
   );
 }
 

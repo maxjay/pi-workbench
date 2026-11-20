@@ -67,6 +67,10 @@ pub struct Settings {
     /// The ones whose pull request ended that are kept all the same: they hold work that
     /// was not committed or not pushed.
     pub kept: Vec<String>,
+    /// The Azure DevOps organizations that are asked for pull requests, by name.
+    pub organizations: Vec<String>,
+    /// True when you wrote them. False when they are the ones your clones are from.
+    pub organizations_written: bool,
 }
 
 /// A folder to pick when opening one.

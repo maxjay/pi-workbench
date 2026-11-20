@@ -1,7 +1,7 @@
-//! Where things are: the folder your clones are in, and the folder the
-//! workbench keeps its own things in. Both can be changed. The clones are
-//! found by looking in the first, never listed by hand. Nothing in a clone
-//! is changed by looking.
+//! Where things are: the folder your clones are in, the folder the
+//! workbench keeps its own things in, and the Azure DevOps organizations it
+//! asks. All can be changed. The clones are found by looking in the first
+//! folder, never listed by hand. Nothing in a clone is changed by looking.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -23,11 +23,14 @@ pub struct Found {
     pub remote: String,
 }
 
-/// The two folders, as you wrote them. `~` is your home folder.
+/// The two folders, as you wrote them, and the organizations. `~` is your home folder.
 #[derive(Clone, Deserialize, Serialize)]
 struct Written {
     repos: String,
     own: String,
+    /// The Azure DevOps organizations to ask, by name. With none, the ones your clones are from.
+    #[serde(default)]
+    organizations: Vec<String>,
 }
 
 impl Default for Written {
@@ -35,6 +38,7 @@ impl Default for Written {
         Written {
             repos: "~/Developer".into(),
             own: "~/.workbench".into(),
+            organizations: Vec::new(),
         }
     }
 }
@@ -77,16 +81,34 @@ impl Places {
         codespaces::expand(&self.written().1)
     }
 
-    /// Changes the two folders. One left empty goes back to the usual one.
-    pub fn set(&self, repos: &str, own: &str) -> Result<(), Error> {
+    /// The organizations you wrote. None when you wrote none: then they are the ones your
+    /// clones are from.
+    pub fn organizations(&self) -> Option<Vec<String>> {
+        let written = self.written.lock().expect("not poisoned");
+        (!written.organizations.is_empty()).then(|| written.organizations.clone())
+    }
+
+    /// Changes the two folders and the organizations. A folder left empty goes back to the
+    /// usual one. The organizations are names, or addresses that end in one, with commas or
+    /// spaces between them.
+    pub fn set(&self, repos: &str, own: &str, organizations: &str) -> Result<(), Error> {
         let usual = Written::default();
         let or = |given: &str, usual: String| match given.trim() {
             "" => usual,
             given => given.to_string(),
         };
+        let mut names: Vec<String> = Vec::new();
+        for word in organizations.split([',', ' ', '\n']) {
+            let name = word.trim().trim_end_matches('/').trim_start_matches('@');
+            let name = name.rsplit('/').next().unwrap_or(name);
+            if !name.is_empty() && !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+                names.push(name.to_string());
+            }
+        }
         let next = Written {
             repos: or(repos, usual.repos),
             own: or(own, usual.own),
+            organizations: names,
         };
         let text = serde_json::to_string_pretty(&next).expect("settings serialize");
         if let Some(dir) = self.file.parent() {

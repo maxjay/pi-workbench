@@ -1,7 +1,8 @@
-//! Your pull requests, for Home: asked from dova, once for each Azure DevOps
-//! project your codespaces are cloned from, with the reason under each one
-//! that needs you. And the ones of other people that you chose to see, asked
-//! from Azure DevOps itself: one call for each repo, project or person.
+//! Your pull requests, for Home: asked from dova in each Azure DevOps
+//! organization, with the reason under each one that needs you. And the ones
+//! of other people that you chose to see, asked from Azure DevOps itself: one
+//! call for each repo, project or person. The organizations are the ones
+//! written in Settings, or the ones your clones are from.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -104,12 +105,45 @@ pub async fn clones(codespaces: Vec<Codespace>, found: &[Found]) -> (Vec<Clone>,
     (clones, looked)
 }
 
-/// One folder for each organization: one is enough to ask about the whole of it.
+/// An organization that is asked about: the place dova is given for it, `@` and its name,
+/// and its address on the web.
+struct Org {
+    place: String,
+    site: String,
+}
+
+/// The organizations to ask: the ones written in Settings, or with none written there, the
+/// ones your codespaces and clones are from. Each is asked by its name, so nothing asked
+/// of an organization needs a clone.
+fn asked(written: Option<&[String]>, clones: &[Clone]) -> Vec<Org> {
+    if let Some(names) = written {
+        let org = |name: &String| Org {
+            place: format!("@{name}"),
+            site: format!("https://dev.azure.com/{name}"),
+        };
+        return names.iter().map(org).collect();
+    }
+    let org = |clone: &Clone| Org {
+        place: whole(&clone.project),
+        site: site(organization(&clone.project)),
+    };
+    one_each(clones).into_iter().map(org).collect()
+}
+
+/// The names of the organizations that are asked, for Settings.
+pub fn organizations(written: Option<&[String]>, clones: &[Clone]) -> Vec<String> {
+    let asked = asked(written, clones).into_iter();
+    asked
+        .map(|org| org.place.trim_start_matches('@').to_string())
+        .collect()
+}
+
+/// One folder for each organization: one is enough to know the organization by.
 fn one_each(clones: &[Clone]) -> Vec<&Clone> {
     let mut organizations = HashSet::new();
     clones
         .iter()
-        .filter(|clone| organizations.insert(organization(&clone.project).to_lowercase()))
+        .filter(|clone| organizations.insert(whole(&clone.project).to_lowercase()))
         .collect()
 }
 
@@ -123,13 +157,14 @@ impl Pulls {
         reviews: &Reviews,
         codespaces: Vec<Codespace>,
         found: &[Found],
+        written: Option<&[String]>,
     ) -> Result<Vec<PullRow>, Error> {
         let (clones, _) = clones(codespaces, found).await;
         let mut rows = Vec::new();
-        for clone in one_each(&clones) {
-            let cwd = &clone.path;
+        for org in asked(written, &clones) {
+            let cwd = &org.place;
             let me = reviews.me(dova, cwd).await?;
-            let site = site(organization(&clone.project));
+            let site = org.site.clone();
             // A path that starts with a slash is asked of the organization, not of the folder's project.
             let path = format!(
                 "/_apis/git/pullrequests?searchCriteria.creatorId={me}&searchCriteria.status=active&$top=500&api-version=7.1"
@@ -141,7 +176,7 @@ impl Pulls {
                 };
                 // The ones you opened are listed as yours, even where you are a reviewer too.
                 row.review = None;
-                row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
+                row.codespace = home(&clones, &row).or_else(|| Some(org.place.clone()));
                 rows.push(row);
             }
         }
@@ -158,18 +193,20 @@ impl Pulls {
         reviews: &Reviews,
         codespaces: Vec<Codespace>,
         found: &[Found],
+        written: Option<&[String]>,
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let (clones, looked) = clones(codespaces, found).await;
         let mut rows: Vec<PullRow> = Vec::new();
         let mut searched = Vec::new();
-        for clone in one_each(&clones) {
-            let cwd = &clone.path;
+        for org in asked(written, &clones) {
+            let cwd = &org.place;
             // The projects of the folders open here, which must answer, and then every other
             // project that has a pull request of yours, found by asking the organization.
             let mut projects: Vec<(String, bool)> = Vec::new();
-            for open in clones.iter().filter(|other| {
-                organization(&other.project).eq_ignore_ascii_case(organization(&clone.project))
-            }) {
+            for open in clones
+                .iter()
+                .filter(|other| whole(&other.project).eq_ignore_ascii_case(&org.place))
+            {
                 let name = project_name(&open.project);
                 if !projects
                     .iter()
@@ -203,7 +240,7 @@ impl Pulls {
                     }
                     // The ones you opened are listed as yours, even where you are a reviewer too.
                     row.review = None;
-                    row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
+                    row.codespace = home(&clones, &row).or_else(|| Some(org.place.clone()));
                     rows.push(row);
                 }
                 searched.push(project);
@@ -224,6 +261,7 @@ impl Pulls {
         reviews: &Reviews,
         codespaces: Vec<Codespace>,
         found: &[Found],
+        written: Option<&[String]>,
         chosen: Chosen<'_>,
     ) -> Result<Vec<PullRow>, Error> {
         let Chosen {
@@ -259,10 +297,10 @@ impl Pulls {
         // A repo or person that is not in one organization is in another, so one call that
         // fails is passed over. When none answers, the last reason is given.
         let (mut answered, mut failed) = (false, None);
-        for clone in one_each(&clones) {
-            let cwd = &clone.path;
+        for org in asked(written, &clones) {
+            let cwd = &org.place;
             let me = reviews.me(dova, cwd).await?;
-            let site = site(organization(&clone.project));
+            let site = org.site.clone();
             let teams = self.teams(dova, cwd, &site).await;
             for path in &paths {
                 let path = format!("{path}searchCriteria.status=active&$top=500&api-version=7.1");
@@ -288,7 +326,7 @@ impl Pulls {
                     if !seen.insert(key) {
                         continue;
                     }
-                    row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
+                    row.codespace = home(&clones, &row).or_else(|| Some(org.place.clone()));
                     rows.push(row);
                 }
             }
@@ -338,13 +376,14 @@ impl Pulls {
         reviews: &Reviews,
         codespaces: Vec<Codespace>,
         found: &[Found],
+        written: Option<&[String]>,
     ) -> Result<Vec<Team>, Error> {
         let (clones, _) = clones(codespaces, found).await;
         let mut teams = Vec::new();
-        for clone in one_each(&clones) {
-            let cwd = &clone.path;
+        for org in asked(written, &clones) {
+            let cwd = &org.place;
             let me = reviews.me(dova, cwd).await?;
-            let site = site(organization(&clone.project));
+            let site = org.site.clone();
             for team in self.teams(dova, cwd, &site).await {
                 let members = self.members(dova, cwd, &team).await;
                 teams.push(Team {
@@ -399,6 +438,7 @@ impl Pulls {
         dova: &Dova,
         codespaces: Vec<Codespace>,
         found: &[Found],
+        written: Option<&[String]>,
         text: &str,
     ) -> (Vec<Person>, Vec<RepoName>, Vec<String>) {
         let text = text.trim().to_lowercase();
@@ -407,9 +447,9 @@ impl Pulls {
             return (people, repos, projects);
         }
         let (clones, _) = clones(codespaces, found).await;
-        for clone in one_each(&clones) {
-            let cwd = &clone.path;
-            let site = site(organization(&clone.project));
+        for org in asked(written, &clones) {
+            let cwd = &org.place;
+            let site = org.site.clone();
             let all = self.repos(dova, cwd, &site).await;
             let (found, of) = matching(&all, &text);
             repos.extend(found);
