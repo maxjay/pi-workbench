@@ -4,11 +4,16 @@
 
 use std::path::{Path, PathBuf};
 
-use protocol::{GitFile, GitMark, GitStatus, GitSummary};
+use protocol::{GitFile, GitMark, GitStatus, GitSummary, LogKind};
 use tokio::process::Command;
 
-/// Runs git in `dir`, giving what it printed if it succeeded.
+use crate::log;
+
+/// Runs git in `dir`, giving what it printed if it succeeded. These are asked often, and git
+/// refusing one is an answer, such as a folder that is not a repo. So in the log they are
+/// quiet: one is written only if it takes long or git could not be run.
 async fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let running = log::begin_quiet(LogKind::Git, &args.join(" "), dir.to_str());
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -18,8 +23,12 @@ async fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output()
-        .await
-        .ok()?;
+        .await;
+    match &output {
+        Ok(_) => running.done(),
+        Err(err) => running.failed(&format!("couldn't run git: {err}")),
+    }
+    let output = output.ok()?;
     output.status.success().then_some(output.stdout)
 }
 
@@ -30,6 +39,7 @@ pub async fn run(
     args: &[&str],
     patience: Option<std::time::Duration>,
 ) -> Result<Vec<u8>, String> {
+    let running = log::begin(LogKind::Git, &args.join(" "), dir.to_str());
     let going = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -40,16 +50,22 @@ pub async fn run(
         .kill_on_drop(true)
         .output();
     let output = match patience {
-        Some(patience) => tokio::time::timeout(patience, going)
-            .await
-            .map_err(|_| "git took too long".to_string())?,
+        Some(patience) => match tokio::time::timeout(patience, going).await {
+            Ok(output) => output,
+            Err(_) => Err(std::io::Error::other(format!(
+                "it took more than {} s",
+                patience.as_secs()
+            ))),
+        },
         None => going.await,
-    }
-    .map_err(|err| format!("couldn't run git: {err}"))?;
-    match output.status.success() {
-        true => Ok(output.stdout),
-        false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-    }
+    };
+    let result = match output {
+        Ok(output) if output.status.success() => Ok(output.stdout),
+        Ok(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        Err(err) => Err(format!("couldn't run git: {err}")),
+    };
+    running.end(&result);
+    result
 }
 
 /// Where the repository `dir` is in stands, with changed files relative to

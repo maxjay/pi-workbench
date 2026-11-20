@@ -20,6 +20,7 @@ const numberOf = (tab: TabId) => pullOf(tab)?.pr ?? ticketOf(tab)?.id;
 /** What a tab is called: Home, its codespace's name, or its pull request's or ticket's number and title. */
 export function titleOf(tab: TabId) {
   if (tab === 'settings') return 'Settings';
+  if (tab === 'log') return 'Log';
   const numbered = numberOf(tab);
   if (numbered !== undefined) return titles[tab] ? `#${numbered} ${titles[tab]}` : `#${numbered}`;
   const id = codespaceOf(tab);

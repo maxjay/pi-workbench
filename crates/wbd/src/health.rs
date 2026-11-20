@@ -3,8 +3,10 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use protocol::Health;
+use protocol::{Health, LogKind};
 use tokio::process::Command;
+
+use crate::log;
 
 pub async fn check() -> Health {
     let (pi, claude, dova) = tokio::join!(
@@ -25,16 +27,29 @@ pub async fn check() -> Health {
 /// doesn't answer. `var` names another binary to run in its place.
 async fn version(var: &str, program: &str) -> Option<String> {
     let program = std::env::var(var).unwrap_or_else(|_| program.into());
+    let running = log::begin(LogKind::Run, &format!("{program} --version"), None);
     // Its own stdin: wbd's stdin is the page's, and a child must not read it.
     let run = Command::new(program)
         .arg("--version")
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
-    let output = tokio::time::timeout(Duration::from_secs(5), run)
-        .await
-        .ok()?
-        .ok()?;
+    let output = match tokio::time::timeout(Duration::from_secs(5), run).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        Ok(Ok(output)) => {
+            running.failed(String::from_utf8_lossy(&output.stderr).trim());
+            return None;
+        }
+        Ok(Err(err)) => {
+            running.failed(&format!("couldn't run it: {err}"));
+            return None;
+        }
+        Err(_) => {
+            running.failed("it did not answer in 5 s");
+            return None;
+        }
+    };
+    running.done();
     output
         .status
         .success()

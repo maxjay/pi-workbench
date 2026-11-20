@@ -9,7 +9,7 @@ import type { Agent } from '../protocol/Agent';
 import type { Settings } from '../protocol/Settings';
 import { agentName, askOffer, defaultAgent, setDefaultAgent } from '../state/conversations';
 import { health } from '../state/health';
-import { active } from '../state/tabs';
+import { active, open } from '../state/tabs';
 import { setTheme, type Theme, theme } from '../state/theme';
 
 export function SettingsPage() {
@@ -71,6 +71,13 @@ export function SettingsPage() {
               <dd>{h().distro ?? 'Linux, outside WSL'}</dd>
               <dt>dova</dt>
               <dd classList={{ dim: !h().dova }}>{h().dova ?? 'not found in WSL'}</dd>
+              <dt>Log</dt>
+              <dd class="setting-theme">
+                <span class="dim">What wbd asked and ran, and what failed.</span>
+                <button type="button" class="quiet" onClick={() => open('log')}>
+                  open
+                </button>
+              </dd>
               <dt>Theme</dt>
               <dd class="setting-theme">
                 {/* System follows Windows. */}

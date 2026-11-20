@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use protocol::{Agent, Ask, Conversation, ConversationView, Entry, Event};
+use protocol::{Agent, Ask, Conversation, ConversationView, Entry, Event, LogKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -24,7 +24,7 @@ use crate::codespaces::Codespaces;
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
-use crate::{repos, wb};
+use crate::{log, repos, wb};
 
 /// How often what an agent says goes to the page. A reply streaming word
 /// by word is then a couple of dozen events a second, not hundreds.
@@ -362,6 +362,8 @@ impl Conversations {
             .env("WB_CONVERSATION", &id)
             .spawn()
             .map_err(|err| Error::Agent(format!("couldn't start {}: {err}", name(agent))))?;
+        let started = format!("{} started in {}", name(agent), cwd.display());
+        log::note(LogKind::Run, &started);
         let live = Arc::new(Live {
             agent,
             stdin: tokio::sync::Mutex::new(child.stdin.take().expect("stdin is piped")),
@@ -384,6 +386,7 @@ impl Conversations {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if !line.trim().is_empty() {
+                        log::note(LogKind::Run, &format!("{} printed: {line}", name(agent)));
                         *last_error.lock().expect("not poisoned") = line;
                     }
                 }
@@ -413,6 +416,7 @@ impl Conversations {
                     "" => format!("{} stopped", name(agent)),
                     last => format!("{} stopped: {last}", name(agent)),
                 };
+                log::note(LogKind::Run, &reason);
                 live.folded.lock().expect("not poisoned").stopped(reason);
                 all.tell(&id, &live);
                 all.save(&live);

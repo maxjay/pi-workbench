@@ -8,6 +8,7 @@ import { createStore } from 'solid-js/store';
 export type TabId =
   | 'home'
   | 'settings'
+  | 'log'
   | `cs:${string}`
   | `pr:${string}:${number}`
   | `wi:${string}:${number}`;

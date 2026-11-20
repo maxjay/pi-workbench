@@ -140,12 +140,19 @@ pub async fn serve(listener: UnixListener, ctx: Arc<Ctx>) {
             let hung_up = async {
                 let _ = lines.next_line().await;
             };
+            let what = format!(
+                "an agent ran wb {} {}",
+                asked["ask"].as_str().unwrap_or_default(),
+                crate::log::given(&asked, "ask")
+            );
+            let running = crate::log::begin(protocol::LogKind::Run, what.trim_end(), None);
             let said = match asked["ask"].as_str() {
                 Some("repos") => Ok(listed(&ctx, &words(&asked["words"])).await),
                 Some("add") => add(&ctx, &asked, hung_up).await,
                 Some("name") => name(&ctx, &asked).await,
                 _ => Err(USAGE.to_string()),
             };
+            running.end(&said);
             let answer = match said {
                 Ok(text) => json!({ "ok": true, "text": text }),
                 Err(text) => json!({ "ok": false, "text": text }),

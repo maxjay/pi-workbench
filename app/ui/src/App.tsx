@@ -12,6 +12,7 @@ import { Home } from './views/Home';
 import { PullPage } from './views/pull/Page';
 import { SettingsPage } from './views/Settings';
 import { TicketPage } from './views/ticket/Page';
+import { LogPage } from './views/WbdLog';
 
 /** Ctrl K's list: the open tabs, every codespace, and what you can do. */
 function go() {
@@ -25,6 +26,7 @@ function go() {
     })),
     { group: 'Do', title: 'Open folder', detail: 'as a codespace', run: openFolderDialog },
     { group: 'Do', title: 'Settings', detail: 'agents, this machine', run: () => open('settings') },
+    { group: 'Do', title: 'Log', detail: 'what wbd asked and ran, and what failed', run: () => open('log') },
   ];
   openPalette(items, 'Go to anything');
 }
@@ -50,6 +52,9 @@ export function App() {
         </Show>
         <Show when={active() === 'settings'}>
           <SettingsPage />
+        </Show>
+        <Show when={active() === 'log'}>
+          <LogPage />
         </Show>
         {/* A codespace's page stays mounted while its tab is open, so its editor keeps its place. */}
         <For each={tabs().filter((tab) => codespaceOf(tab))}>

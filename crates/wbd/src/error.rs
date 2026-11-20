@@ -25,6 +25,18 @@ impl Error {
     }
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Error::NotFound(message)
+        | Error::Io(message)
+        | Error::Conflict(message)
+        | Error::Agent(message)
+        | Error::NotSignedIn(message)
+        | Error::Dova(message)) = self;
+        f.write_str(message)
+    }
+}
+
 impl From<Error> for Failure {
     fn from(err: Error) -> Self {
         match err {

@@ -10,12 +10,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use protocol::LogKind;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::oneshot;
 
 use crate::error::Error;
+use crate::log;
 
 /// A call that takes longer than this is given up on. dova makes several
 /// requests to Azure DevOps for some of them.
@@ -36,15 +38,24 @@ impl Dova {
     /// Asks dova one thing about the folder `cwd`.
     pub async fn call(&self, method: &str, cwd: &str, mut params: Value) -> Result<Value, Error> {
         params["cwd"] = json!(cwd);
+        let what = format!("{method} {}", log::given(&params, "cwd"));
+        let running = log::begin(LogKind::Dova, what.trim_end(), Some(cwd));
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        let result = self.asked(id, method, format!("{line}\n")).await;
+        running.end(&result);
+        result
+    }
+
+    /// Writes a call to dova and waits for its answer.
+    async fn asked(&self, id: u64, method: &str, line: String) -> Result<Value, Error> {
         let (answer, answered) = oneshot::channel();
         self.waiting
             .lock()
             .expect("not poisoned")
             .insert(id, answer);
 
-        if let Err(err) = self.write(format!("{line}\n")).await {
+        if let Err(err) = self.write(line).await {
             self.waiting.lock().expect("not poisoned").remove(&id);
             return Err(err);
         }
@@ -55,7 +66,8 @@ impl Dova {
             Err(_) => {
                 self.waiting.lock().expect("not poisoned").remove(&id);
                 Err(Error::Dova(format!(
-                    "dova took too long to answer {method}"
+                    "dova took too long to answer {method}: more than {} s",
+                    PATIENCE.as_secs()
                 )))
             }
         }
@@ -87,12 +99,23 @@ impl Dova {
             .arg("rpc")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|err| Error::Dova(format!("couldn't start dova: {err}")))?;
+        log::note(LogKind::Dova, "dova rpc started");
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
+        // What it prints beside its answers is for the log.
+        let stderr = child.stderr.take().expect("stderr is piped");
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if !line.trim().is_empty() {
+                    log::note(LogKind::Dova, &format!("dova printed: {line}"));
+                }
+            }
+        });
         let (waiting, gone) = (self.waiting.clone(), self.stdin.clone());
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -107,7 +130,11 @@ impl Dova {
                     let _ = answer.send(read(reply));
                 }
             }
-            let _ = child.wait().await;
+            let ended = match child.wait().await {
+                Ok(status) => format!("dova rpc ended: {status}"),
+                Err(err) => format!("dova rpc ended: {err}"),
+            };
+            log::note(LogKind::Dova, &ended);
             // Nobody waiting will be answered now.
             waiting.lock().expect("not poisoned").clear();
             *gone.lock().await = None;

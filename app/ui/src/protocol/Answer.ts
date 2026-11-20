@@ -10,6 +10,7 @@ import type { FileView } from "./FileView";
 import type { Folder } from "./Folder";
 import type { GitStatus } from "./GitStatus";
 import type { Health } from "./Health";
+import type { LogEntry } from "./LogEntry";
 import type { Offer } from "./Offer";
 import type { Person } from "./Person";
 import type { PullBefore } from "./PullBefore";
@@ -70,4 +71,12 @@ errors: Array<string>, } | { "kind": "session",
 /**
  * The folder the agent works in.
  */
-cwd: string, brief: string, } | { "kind": "place", cwd: string, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, };
+cwd: string, brief: string, } | { "kind": "place", cwd: string, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, } | { "kind": "log", entries: Array<LogEntry>, 
+/**
+ * What to give as `after` the next time.
+ */
+rev: number, 
+/**
+ * wbd's clock now, in milliseconds since 1970: how long something has run is counted from it.
+ */
+now: number, };

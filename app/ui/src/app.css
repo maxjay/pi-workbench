@@ -1583,3 +1583,76 @@ svg.glyph {
   align-items: center;
   padding: 6px 0;
 }
+
+/* The Log tab: what wbd did, a line each, the oldest on top. The line is as wide as the window,
+   because what was asked and why it failed are long. */
+
+.log {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.log-find {
+  width: 260px;
+  margin-right: 12px;
+}
+
+.log-silent,
+.log-none {
+  padding: 10px 20px;
+}
+
+.log-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0 20px;
+  user-select: text;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 64px 36px minmax(0, 1fr) auto;
+  column-gap: 16px;
+  padding: 2px 20px;
+  font-size: 12px;
+}
+
+.log-row:hover {
+  background: var(--hover);
+}
+
+.log-what {
+  overflow-wrap: anywhere;
+}
+
+/* Why it failed: under what failed, in full. */
+.log-why {
+  display: block;
+  color: var(--failed);
+  white-space: pre-wrap;
+}
+
+.log-took {
+  color: var(--dim);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.log-row[data-state="running"] .log-took {
+  color: var(--working);
+}
+
+.log-row[data-state="failed"] .log-took {
+  color: var(--failed);
+}

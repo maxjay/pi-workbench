@@ -11,7 +11,6 @@ use protocol::{
     Child, Comment, Field, FieldKind, Part, PartEdit, Ticket, TicketRow, TicketState, WorkItemRef,
 };
 use serde_json::{Value, json};
-use tokio::process::Command;
 
 use crate::dova::Dova;
 use crate::error::Error;
@@ -1023,20 +1022,8 @@ fn branch_name(kind: &str, id: u64, title: &str) -> String {
 
 /// Runs git in `dir`, giving what it printed, or why it failed.
 async fn run(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|err| format!("couldn't run git: {err}"))?;
-    match output.status.success() {
-        true => Ok(String::from_utf8_lossy(&output.stdout).to_string()),
-        false => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-    }
+    let printed = crate::git::run(dir, args, None).await?;
+    Ok(String::from_utf8_lossy(&printed).to_string())
 }
 
 #[cfg(test)]

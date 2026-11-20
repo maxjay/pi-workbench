@@ -458,6 +458,13 @@ pub enum Call {
         #[ts(type = "Array<number>")]
         ids: Vec<u64>,
     },
+    /// What wbd did: the entries that are new or changed since `after`, the `rev` an earlier
+    /// answer gave. 0 asks for all that is kept.
+    #[serde(rename = "log.read")]
+    LogRead {
+        #[ts(type = "number")]
+        after: u64,
+    },
 }
 
 /// A call, with the id its answer will carry.
@@ -585,6 +592,56 @@ pub enum Answer {
     Started {
         branch: String,
     },
+    Log {
+        entries: Vec<LogEntry>,
+        /// What to give as `after` the next time.
+        #[ts(type = "number")]
+        rev: u64,
+        /// wbd's clock now, in milliseconds since 1970: how long something has run is counted from it.
+        #[ts(type = "number")]
+        now: u64,
+    },
+}
+
+/// One thing wbd did: a call from the page, something asked of dova, a command it ran, or
+/// something it only says.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LogEntry {
+    #[ts(type = "number")]
+    pub id: u64,
+    /// When it started, in milliseconds since 1970, by wbd's clock.
+    #[ts(type = "number")]
+    pub at: u64,
+    pub kind: LogKind,
+    /// The call or the command with what it was given, or what was said.
+    pub what: String,
+    /// The folder it was about.
+    pub place: Option<String>,
+    /// True until it ended.
+    pub running: bool,
+    /// How long it took, in milliseconds. None while it runs, and for what is only said.
+    #[ts(type = "number | null")]
+    pub took: Option<u64>,
+    /// Why it failed.
+    pub failed: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum LogKind {
+    /// A call from the page.
+    Call,
+    /// Something asked of dova, or something dova printed.
+    Dova,
+    /// A git command.
+    Git,
+    /// Another program: an agent, or one asked for its version.
+    Run,
+    /// wbd itself.
+    Wbd,
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.

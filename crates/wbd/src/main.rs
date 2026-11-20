@@ -11,6 +11,7 @@ mod files;
 mod fold;
 mod git;
 mod health;
+mod log;
 mod places;
 mod pulls;
 mod repos;
@@ -26,7 +27,7 @@ use std::sync::Arc;
 use codespaces::Codespaces;
 use conversations::Conversations;
 use error::Error;
-use protocol::{Answer, Call, CodespaceView, Event, Failure, FailureKind, Request};
+use protocol::{Answer, Call, CodespaceView, Event, Failure, FailureKind, LogKind, Request};
 use terminals::Terminals;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -60,6 +61,18 @@ async fn main() -> ExitCode {
         println!("{VERSION}");
         return ExitCode::SUCCESS;
     }
+    // A bug that stops one call is written where the Log page shows it.
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::note(LogKind::Wbd, &format!("wbd failed: {info}"));
+        before(info);
+    }));
+    let started = format!(
+        "wbd {VERSION} started. Its own files are in {}",
+        data_dir().display()
+    );
+    log::note(LogKind::Wbd, &started);
+
     // Everything wbd says goes through this one writer, a line at a time.
     // It stops when told to, after writing what was already said: the
     // terminals keep a sender for as long as wbd runs, so the channel
@@ -180,15 +193,57 @@ fn data_dir() -> PathBuf {
 /// The line that answers one line from the page.
 async fn respond(ctx: &Ctx, line: &str) -> String {
     match serde_json::from_str::<Request>(line) {
-        Ok(Request { id, call }) => match answer(ctx, call).await {
-            Ok(answer) => protocol::reply(id, &answer),
-            Err(err) => protocol::failed(Some(id), &err.into()),
-        },
-        Err(err) => protocol::failed(
-            id_of(line),
-            &Failure::new(FailureKind::BadRequest, err.to_string()),
-        ),
+        Ok(Request { id, call }) => {
+            let running = written(&call);
+            match answer(ctx, call).await {
+                Ok(answer) => {
+                    if let Some(running) = running {
+                        running.done();
+                    }
+                    protocol::reply(id, &answer)
+                }
+                Err(err) => {
+                    let failure: Failure = err.into();
+                    if let Some(running) = running {
+                        running.failed(&failure.message);
+                    }
+                    protocol::failed(Some(id), &failure)
+                }
+            }
+        }
+        Err(err) => {
+            let said = format!("the page sent a line that is not a call: {err}");
+            log::note(LogKind::Wbd, &said);
+            protocol::failed(
+                id_of(line),
+                &Failure::new(FailureKind::BadRequest, err.to_string()),
+            )
+        }
     }
+}
+
+/// Writes a call in the log, with what it was given. What you type in a terminal and the
+/// reading of the log itself are left out. What the page asks every few seconds is quiet.
+fn written(call: &Call) -> Option<log::Running> {
+    let quiet = match call {
+        Call::LogRead { .. } | Call::TerminalInput { .. } | Call::TerminalResize { .. } => {
+            return None;
+        }
+        Call::GitStatus { .. } | Call::FilesStat { .. } => true,
+        _ => false,
+    };
+    let said = serde_json::to_value(call).ok()?;
+    let params = &said["params"];
+    let place = ["dir", "cwd", "path"]
+        .into_iter()
+        .find(|name| params[name].is_string());
+    let given = log::given(params, place.unwrap_or_default());
+    let what = format!("{} {given}", said["method"].as_str()?);
+    let place = place.and_then(|name| params[name].as_str());
+    Some(match quiet {
+        true => log::begin_quiet(LogKind::Call, what.trim_end(), place),
+        false => log::begin(LogKind::Call, what.trim_end(), place),
+    })
 }
 
 async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
@@ -629,6 +684,14 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 .answer(&id, &ask, answer.as_deref())
                 .await?;
             Answer::Done
+        }
+        Call::LogRead { after } => {
+            let (entries, rev) = log::read(after);
+            Answer::Log {
+                entries,
+                rev,
+                now: log::now(),
+            }
         }
     })
 }
