@@ -1,9 +1,10 @@
-//! Reviewing a pull request. All of it comes through dova: the pull
-//! request, its diff and comments on its lines from dova's own commands,
-//! and what dova has no command for yet (votes, completing, a run's steps)
-//! from `dova api`, any Azure DevOps REST call, signed in.
+//! Reviewing a pull request. All of it comes through dova. What is read of
+//! a pull request is asked of Azure DevOps with `dova api`, any REST call,
+//! signed in: each thing once, and what does not change between two reads is
+//! kept. What changed in a file, and writing a comment or a description, are
+//! dova's own commands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -33,9 +34,15 @@ const BRIEF: usize = 60_000;
 /// How the name of a pull request's folder ends when it is not a checkout: no clone of the
 /// repo was here to make one from.
 const PLAIN: &str = "-quick";
-/// dova's own view of a pull request and the list of its files are asked for again after this
-/// long, even when nothing that they depend on changed.
+/// A pull request's files and work items are asked for again after this long, even when it
+/// was not pushed to.
 const WHOLE: Duration = Duration::from_secs(600);
+/// A pull request that was read to find where it is counts as read now for this long.
+const JUST: Duration = Duration::from_secs(5);
+/// A push's changed files are asked for this many at a time.
+const PAGE: u64 = 2000;
+/// Work items are asked about this many at a time: Azure DevOps takes no more.
+const ITEMS: usize = 200;
 /// What was read this lately is used again where the agent's folder is made and the agent is
 /// told about the pull request, in place of reading it once more.
 const FRESH: Duration = Duration::from_secs(60);
@@ -44,13 +51,17 @@ const FETCH: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub struct Reviews {
-    /// Who you are to Azure DevOps, by the folder asked from.
+    /// Who you are to each organization, by its place.
     me: Mutex<HashMap<String, String>>,
+    /// The organization each folder that was asked from is cloned from, as its place.
+    orgs: Mutex<HashMap<String, String>>,
+    /// Each pull request as Azure DevOps gave it when it was looked for, until it is read.
+    seen: Mutex<HashMap<(String, u64), (Instant, Value)>>,
     /// What Azure DevOps said each pull request is in, by the place asked from and number.
     known: Mutex<HashMap<(String, u64), Known>>,
     /// The project of each pipeline run that was listed, by the run's id.
     runs: Mutex<HashMap<u64, String>>,
-    /// Each pull request as it was last read, with the parts that are costly to ask for.
+    /// Each pull request as it was last read, with the parts that are not asked for each time.
     held: Mutex<HashMap<(String, u64), Held>>,
     /// Each pull request's pipeline runs as they were last listed, and when.
     checked: Mutex<HashMap<(String, u64), Checked>>,
@@ -84,18 +95,32 @@ struct Known {
 /// A pull request's pipeline runs, and when they were listed.
 type Checked = (Instant, Vec<CheckRun>);
 
-/// A pull request as it was last read. What changes while it is open is asked each time:
-/// itself, its threads, its policies. dova's own view of it and the list of its files take
-/// several requests each, and change only with what `mark` holds, so they are kept.
+/// A pull request as it was last read.
 struct Held {
-    /// When the view and the list of files were asked for.
-    asked: Instant,
-    mark: String,
-    view: Value,
-    diff: Value,
+    lasting: Lasting,
+    /// Its description as it was written, with no picture put in place.
+    written: String,
     /// What was made of it all, and when.
     review: Review,
     read: Instant,
+}
+
+/// What is kept of a pull request from one read to the next. What changes while it is open
+/// is asked each time: itself, its threads, its policies. Its files change only when it is
+/// pushed to or aimed at another branch, which `mark` holds, so they are kept until then.
+#[derive(Clone)]
+struct Lasting {
+    /// When the files and the work items were asked for.
+    asked: Instant,
+    mark: String,
+    /// Its latest push, by its number.
+    push: u64,
+    /// What that push changes: the commits it is between and its files' names, as dova's
+    /// diff has them.
+    diff: Value,
+    work_items: Vec<WorkItemRef>,
+    /// Each text that shows a picture, with the picture where its address was.
+    pictured: HashMap<String, String>,
 }
 
 impl Known {
@@ -165,64 +190,146 @@ impl Reviews {
     /// A pull request to review.
     pub async fn open(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
         let known = self.known(dova, dir, pr).await?;
-        let (at, link) = (&known.at, known.link(pr));
+        let at = &known.at;
+        let key = (dir.to_string(), pr);
+        let before = {
+            let held = self.held.lock().expect("not poisoned");
+            held.get(&key).map(|held| held.lasting.clone())
+        };
         // What changes while a pull request is open is asked each time: itself, its threads
         // and its policies. Three requests. The policies are asked for by the project's own
-        // id, and not being able to ask counts as not met.
+        // id, and not being able to ask counts as not met. The threads are asked for as they
+        // are after its latest push, so the first time they wait until that is known.
         let evaluations = format!(
             "/{0}/_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{0}/{pr}&api-version=7.1-preview.1",
             known.project_id
         );
-        let (raw, threads, policies, me) = tokio::join!(
-            get(dova, dir, format!("{at}?api-version=7.1")),
-            get(dova, dir, format!("{at}/threads?api-version=7.1")),
+        let placed = before.as_ref().map(|kept| kept.push);
+        let (raw, policies, me, threads) = tokio::join!(
+            self.raw(dova, dir, pr),
             get(dova, dir, evaluations),
             self.me(dova, dir),
+            async {
+                match placed {
+                    Some(push) => Some(get(dova, dir, threads_of(at, push)).await),
+                    None => None,
+                }
+            },
         );
-        let (raw, threads, me) = (raw?, threads?, me?);
+        let (raw, me, mut threads) = (raw?, me?, threads);
 
-        // dova's own view of it and the list of its files are asked for only when something
-        // they depend on changed, or they are old.
-        let (key, mark) = ((dir.to_string(), pr), mark(&raw, &threads));
-        let kept = {
-            let held = self.held.lock().expect("not poisoned");
-            let same = held
-                .get(&key)
-                .filter(|held| held.mark == mark && held.asked.elapsed() < WHOLE);
-            same.map(|held| (held.view.clone(), held.diff.clone(), held.asked))
-        };
-        let (view, diff, asked) = match kept {
-            Some(kept) => kept,
+        // Its pushes, its files and its work items are asked for only when it was pushed to
+        // or aimed at another branch, or they are old.
+        let mark = mark(&raw);
+        let same = before
+            .as_ref()
+            .filter(|kept| kept.mark == mark && kept.asked.elapsed() < WHOLE);
+        let (asked, push, diff, work_items) = match same {
+            Some(kept) => (
+                kept.asked,
+                kept.push,
+                kept.diff.clone(),
+                kept.work_items.clone(),
+            ),
             None => {
-                let id = json!({ "idOrUrl": link, "inlineImages": true });
-                // Which files changed, not what changed in them: a few requests, however many there are.
-                let names = json!({ "pr": link, "names": true });
-                let (view, diff) = tokio::join!(
-                    dova.call("pr.view", dir, id),
-                    dova.call("pr.diff", dir, names),
-                );
-                (view?, diff?, Instant::now())
+                let pushed = async {
+                    let pushes = format!("{at}/iterations?api-version=7.1");
+                    let (push, mut diff) =
+                        latest(&get(dova, dir, pushes).await?).ok_or_else(|| {
+                            Error::Dova(format!("pull request {pr} has nothing pushed to it"))
+                        })?;
+                    // Threads that were placed for an earlier push are asked for again.
+                    let moved = async {
+                        match placed == Some(push) {
+                            true => None,
+                            false => Some(get(dova, dir, threads_of(at, push)).await),
+                        }
+                    };
+                    let (files, moved) = tokio::join!(changes(dova, dir, at, push), moved);
+                    diff["files"] = files?;
+                    Ok::<_, Error>((push, diff, moved))
+                };
+                let (pushed, items) = tokio::join!(pushed, work_items(dova, dir, at));
+                let (push, diff, moved) = pushed?;
+                threads = moved.or(threads);
+                (Instant::now(), push, diff, items?)
             }
         };
+        let Some(threads) = threads else {
+            return Err(Error::Dova(format!(
+                "pull request {pr}'s threads were not asked for"
+            )));
+        };
+        let threads = threads?;
 
-        // dova says where each thread is after the latest push. Azure DevOps,
-        // asked plainly, says where it was written.
-        let places: HashMap<u64, Option<Place>> = view["threads"]
+        // A text that shows a picture is asked for with the picture once, and kept with it:
+        // each picture is a request of its own.
+        let written = text(&raw["description"]);
+        let kept = before.map(|kept| kept.pictured).unwrap_or_default();
+        let lacks = |text: &str| pictured(text) && !kept.contains_key(text);
+        let said = words(&threads);
+        let (described, spoken) = tokio::join!(
+            async {
+                match lacks(&written) {
+                    true => get_pictured(dova, dir, format!("{at}?api-version=7.1"))
+                        .await
+                        .ok(),
+                    false => None,
+                }
+            },
+            async {
+                match said.values().any(|text| lacks(text)) {
+                    true => get_pictured(dova, dir, threads_of(at, push)).await.ok(),
+                    false => None,
+                }
+            },
+        );
+        let spoken = spoken.as_ref().map(words);
+        let mut shown: HashMap<String, String> = HashMap::new();
+        if pictured(&written) {
+            let with = described.map(|raw| text(&raw["description"]));
+            if let Some(with) = with.or_else(|| kept.get(&written).cloned()) {
+                shown.insert(written.clone(), with);
+            }
+        }
+        for (ids, plain) in said.iter().filter(|(_, plain)| pictured(plain)) {
+            let with = spoken.as_ref().and_then(|spoken| spoken.get(ids));
+            let with = with.map(|with| with.to_string());
+            if let Some(with) = with.or_else(|| kept.get(*plain).cloned()) {
+                shown.insert(plain.to_string(), with);
+            }
+        }
+
+        let changed: HashSet<&str> = diff["files"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|thread| Some((thread["id"].as_u64()?, place(&thread["location"]))))
+            .filter_map(|file| file["path"].as_str())
             .collect();
         let reviewers = raw["reviewers"].as_array().into_iter().flatten();
         let vote = reviewers
             .clone()
             .find(|reviewer| reviewer["id"].as_str() == Some(me.as_str()))
             .map_or(0, vote_of);
-        let head = text(&diff["head"]);
+        let branch = |name: &str| {
+            text(&raw[name])
+                .trim_start_matches("refs/heads/")
+                .to_string()
+        };
         let review = Review {
-            pr: shape::<PullRequest>(view.clone())?,
-            author: text(&view["author"]),
-            description: text(&view["description"]),
+            pr: PullRequest {
+                id: pr,
+                title: text(&raw["title"]),
+                status: raw["status"].as_str().unwrap_or("unknown").to_string(),
+                is_draft: raw["isDraft"].as_bool() == Some(true),
+                source_branch: branch("sourceRefName"),
+                target_branch: branch("targetRefName"),
+                project: known.project.clone(),
+                repo: known.repo.clone(),
+                url: known.link.clone().unwrap_or_default(),
+            },
+            author: text(&raw["createdBy"]["displayName"]),
+            description: shown.get(&written).cloned().unwrap_or(written.clone()),
             merge: raw["mergeStatus"].as_str().map(str::to_string),
             auto_complete: raw["autoCompleteSetBy"]["id"].is_string(),
             ready: policies.as_ref().is_ok_and(met),
@@ -236,22 +343,28 @@ impl Reviews {
                 })
                 .collect(),
             vote,
-            work_items: shape::<Vec<WorkItemRef>>(view["workItems"].clone())?,
+            work_items: work_items.clone(),
             threads: threads["value"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|raw| thread(raw, &places))
+                .filter_map(|raw| thread(raw, &changed, &shown))
                 .collect(),
             files: self.listed(dir, pr, &diff),
             base: text(&diff["base"]),
-            head,
+            head: text(&diff["head"]),
         };
-        let held = Held {
+        let lasting = Lasting {
             asked,
             mark,
-            view,
+            push,
             diff,
+            work_items,
+            pictured: shown,
+        };
+        let held = Held {
+            lasting,
+            written,
             review: review.clone(),
             read: Instant::now(),
         };
@@ -573,13 +686,20 @@ impl Reviews {
         (all, self.left.lock().expect("not poisoned").clone())
     }
 
-    /// A pull request's description as it was written.
+    /// A pull request's description as it was written: with its pictures put in place, it
+    /// could not be written back. What was read a moment ago is used.
     pub async fn description(&self, dova: &Dova, dir: &str, pr: u64) -> Result<String, Error> {
-        let at = self.at(dova, dir, pr).await?;
-        // Asked plainly: with its pictures put in place, it could not be written back.
-        let path = format!("{at}?api-version=7.1");
-        let raw = dova.call("api", dir, json!({ "path": path })).await?;
-        Ok(text(&raw["description"]))
+        let lately = {
+            let held = self.held.lock().expect("not poisoned");
+            let lately = held
+                .get(&(dir.to_string(), pr))
+                .filter(|held| held.read.elapsed() < FRESH);
+            lately.map(|held| held.written.clone())
+        };
+        match lately {
+            Some(written) => Ok(written),
+            None => Ok(text(&self.raw(dova, dir, pr).await?["description"])),
+        }
     }
 
     /// A pull request's files, from dova's list of their names. The ones that were asked
@@ -666,13 +786,40 @@ impl Reviews {
         self.known
             .lock()
             .expect("not poisoned")
-            .insert(key, known.clone());
+            .insert(key.clone(), known.clone());
+        // It was read whole to find it. Reading it right after uses this.
+        self.seen
+            .lock()
+            .expect("not poisoned")
+            .insert(key, (Instant::now(), raw));
         Ok(known)
     }
 
-    /// Who you are to the organization `dir` is cloned from. Asked once.
+    /// A pull request as Azure DevOps has it now: asked of its organization by its number.
+    /// When it was read a moment ago to find where it is, that is used, once.
+    async fn raw(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Value, Error> {
+        let seen = self
+            .seen
+            .lock()
+            .expect("not poisoned")
+            .remove(&(dir.to_string(), pr));
+        match seen {
+            Some((when, raw)) if when.elapsed() < JUST => Ok(raw),
+            _ => {
+                get(
+                    dova,
+                    dir,
+                    format!("/_apis/git/pullrequests/{pr}?api-version=7.1"),
+                )
+                .await
+            }
+        }
+    }
+
+    /// Who you are to the organization `dir` is in. Asked once for each organization.
     pub async fn me(&self, dova: &Dova, dir: &str) -> Result<String, Error> {
-        if let Some(known) = self.me.lock().expect("not poisoned").get(dir) {
+        let org = self.org(dir).await;
+        if let Some(known) = self.me.lock().expect("not poisoned").get(&org) {
             return Ok(known.clone());
         }
         let path = "/_apis/connectionData?api-version=7.1-preview.1".to_string();
@@ -684,8 +831,29 @@ impl Reviews {
         self.me
             .lock()
             .expect("not poisoned")
-            .insert(dir.to_string(), id.clone());
+            .insert(org, id.clone());
         Ok(id)
+    }
+
+    /// The organization a place is in, as its own place: `@name`. A folder's is read from
+    /// where it is cloned from, once. The folder itself when that is not Azure DevOps.
+    async fn org(&self, dir: &str) -> String {
+        if dir.starts_with('@') {
+            return dir.to_lowercase();
+        }
+        if let Some(org) = self.orgs.lock().expect("not poisoned").get(dir) {
+            return org.clone();
+        }
+        let remote = git::origin(Path::new(dir)).await;
+        let org = match remote.as_deref().and_then(pulls::azure) {
+            Some((project, _)) => pulls::whole(&project).to_lowercase(),
+            None => dir.to_string(),
+        };
+        self.orgs
+            .lock()
+            .expect("not poisoned")
+            .insert(dir.to_string(), org.clone());
+        org
     }
 }
 
@@ -748,26 +916,120 @@ async fn clone_into(repos: &Path, known: &Known, found: &[Found]) -> Result<Path
     Ok(target)
 }
 
-/// What of a pull request dova's view of it and the list of its files depend on: its last
-/// commit, where it stands, its title and description, and which threads it has. While this
-/// is as it was, they are not asked for again. A new thread changes it, so a comment you
-/// just posted is placed by dova at once.
-fn mark(raw: &Value, threads: &Value) -> String {
-    let all = threads["value"].as_array().into_iter().flatten();
-    let ids: Vec<String> = all
-        .filter_map(|thread| thread["id"].as_u64())
-        .map(|id| id.to_string())
-        .collect();
+/// What a pull request's files depend on: its last commit and the branch it is aimed at.
+/// While this is as it was, its pushes and its files are not asked for again.
+fn mark(raw: &Value) -> String {
     format!(
-        "{} {} {} {} {} {} {}",
-        raw["lastMergeSourceCommit"]["commitId"],
-        raw["status"],
-        raw["isDraft"],
-        raw["targetRefName"],
-        raw["title"],
-        raw["description"],
-        ids.join(",")
+        "{} {}",
+        raw["lastMergeSourceCommit"]["commitId"], raw["targetRefName"]
     )
+}
+
+/// Where a pull request's threads are asked for: each as it is after `push`, compared with
+/// the target. Asked plainly, Azure DevOps gives the lines a thread was written on, which
+/// later pushes move or remove.
+fn threads_of(at: &str, push: u64) -> String {
+    format!("{at}/threads?$iteration={push}&$baseIteration=0&api-version=7.1")
+}
+
+/// A pull request's latest push: its number, and the commits its diff is between, named as
+/// dova's diff names them.
+fn latest(pushes: &Value) -> Option<(u64, Value)> {
+    let latest = pushes["value"].as_array()?.last()?;
+    let commit = |name: &str| text(&latest[name]["commitId"]);
+    let between = json!({ "base": commit("commonRefCommit"), "head": commit("sourceRefCommit") });
+    Some((latest["id"].as_u64()?, between))
+}
+
+/// Every file a push of a pull request changes, against where its branch left the target:
+/// its name and how it changed, as dova's diff lists them.
+async fn changes(dova: &Dova, dir: &str, at: &str, push: u64) -> Result<Value, Error> {
+    let (mut files, mut skip) = (Vec::new(), 0);
+    loop {
+        let path = format!(
+            "{at}/iterations/{push}/changes?$compareTo=0&$top={PAGE}&$skip={skip}&api-version=7.1"
+        );
+        let page = get(dova, dir, path).await?;
+        let entries = page["changeEntries"].as_array().into_iter().flatten();
+        files.extend(entries.filter_map(change));
+        match page["nextSkip"].as_u64() {
+            Some(next) if next > skip => skip = next,
+            _ => return Ok(Value::Array(files)),
+        }
+    }
+}
+
+/// One file of a push's changes. None for what is not a file.
+fn change(raw: &Value) -> Option<Value> {
+    let item = &raw["item"];
+    if item["isFolder"] == true || item["gitObjectType"] == "tree" {
+        return None;
+    }
+    let kinds = raw["changeType"].as_str().unwrap_or_default();
+    // Only a file that moved, or went, has its old path spelled out.
+    let (path, moved) = (item["path"].as_str(), raw["originalPath"].as_str());
+    Some(if kinds.contains("delete") {
+        json!({ "path": moved.or(path), "change": "deleted" })
+    } else if kinds.contains("add") {
+        json!({ "path": path, "change": "added" })
+    } else if kinds.contains("rename") {
+        json!({ "path": path, "oldPath": moved.or(path), "change": "renamed" })
+    } else {
+        json!({ "path": path, "change": "edited" })
+    })
+}
+
+/// The work items linked to a pull request, each with its title, type and state. One
+/// request when there are none, two otherwise.
+async fn work_items(dova: &Dova, dir: &str, at: &str) -> Result<Vec<WorkItemRef>, Error> {
+    let linked = get(dova, dir, format!("{at}/workitems?api-version=7.1")).await?;
+    let mut ids: Vec<u64> = Vec::new();
+    for item in linked["value"].as_array().into_iter().flatten() {
+        let id = &item["id"];
+        let id = id.as_u64().or_else(|| id.as_str()?.parse().ok());
+        ids.extend(id.filter(|id| !ids.contains(id)));
+    }
+    let mut items = Vec::new();
+    for some in ids.chunks(ITEMS) {
+        let some: Vec<String> = some.iter().map(u64::to_string).collect();
+        // A path that starts with a slash is asked of the organization, not of a project.
+        let path = format!(
+            "/_apis/wit/workitems?ids={}&fields=System.Title,System.WorkItemType,System.State&errorPolicy=omit&api-version=7.1",
+            some.join(",")
+        );
+        let found = get(dova, dir, path).await?;
+        // One that can't be read comes as nothing in its place.
+        let found = found["value"].as_array().into_iter().flatten();
+        items.extend(found.filter_map(|item| {
+            let field = |name: &str| item["fields"][name].as_str().map(str::to_string);
+            Some(WorkItemRef {
+                id: item["id"].as_u64()?,
+                title: field("System.Title"),
+                kind: field("System.WorkItemType"),
+                state: field("System.State"),
+            })
+        }));
+    }
+    Ok(items)
+}
+
+/// Whether a text may show a picture. Only such a text is asked for with its pictures.
+fn pictured(text: &str) -> bool {
+    text.contains("![") || text.contains("<img")
+}
+
+/// What each comment of some threads says, by its thread's id and its own.
+fn words(threads: &Value) -> HashMap<(u64, u64), &str> {
+    let mut said = HashMap::new();
+    for thread in threads["value"].as_array().into_iter().flatten() {
+        for comment in thread["comments"].as_array().into_iter().flatten() {
+            let ids = (thread["id"].as_u64(), comment["id"].as_u64());
+            if let ((Some(of), Some(id)), Some(text)) = (ids, comment["content"].as_str()) {
+                said.insert((of, id), text);
+            }
+        }
+    }
+    said
 }
 
 /// The clone a pull request's checkout is made from: the folder asked from when it is that
@@ -866,6 +1128,12 @@ pub async fn edit(
 }
 
 async fn get(dova: &Dova, dir: &str, path: String) -> Result<Value, Error> {
+    dova.call("api", dir, json!({ "path": path })).await
+}
+
+/// The same, with each picture that a text of the answer shows put where its address was.
+/// Each picture is a request more, so this is asked only for a text that was not seen yet.
+async fn get_pictured(dova: &Dova, dir: &str, path: String) -> Result<Value, Error> {
     dova.call("api", dir, json!({ "path": path, "inlineImages": true }))
         .await
 }
@@ -879,11 +1147,6 @@ async fn send(
 ) -> Result<(), Error> {
     let params = json!({ "path": path, "method": method, "body": body.to_string() });
     dova.call("api", dir, params).await.map(|_| ())
-}
-
-fn shape<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
-    serde_json::from_value(value)
-        .map_err(|err| Error::Dova(format!("couldn't read what dova said: {err}")))
 }
 
 fn text(value: &Value) -> String {
@@ -926,24 +1189,38 @@ fn vote_of(reviewer: &Value) -> i8 {
     reviewer["vote"].as_i64().unwrap_or_default() as i8
 }
 
-/// Where a thread is, from dova's `location`. None for one about the whole pull request.
-fn place(location: &Value) -> Option<Place> {
-    let line = |key: &str| location[key].as_u64().map(|line| line as u32);
+/// Where a thread is, from what Azure DevOps says of it when asked as of the latest push.
+/// None for one about the whole pull request. `changed` is the files that push changes.
+fn place(context: &Value, changed: &HashSet<&str>) -> Option<Place> {
+    let file = context["filePath"].as_str()?;
+    // On the pull request's side of the file when it is on both. On neither when it is
+    // about the whole file.
+    let side = ["right", "left"]
+        .into_iter()
+        .find(|side| context[format!("{side}FileStart")]["line"].is_u64());
+    // Line 0 is where Azure DevOps puts a thread whose lines a later push removed.
+    let line = |end: &str| {
+        let line = context[format!("{}File{end}", side?)]["line"].as_u64();
+        line.filter(|line| *line > 0).map(|line| line as u32)
+    };
+    // A thread on a file the pull request does not change, as it is now, is on no line of
+    // it: the file was deleted again, or put back as it was. Azure DevOps keeps such a
+    // thread where it was written.
+    let still = changed.contains(file);
+    let from = line("Start").filter(|_| still);
     Some(Place {
-        file: location["file"]
-            .as_str()?
-            .trim_start_matches('/')
-            .to_string(),
-        from: line("line"),
-        line: line("endLine").or(line("line")),
-        old: location["side"].as_str() == Some("old"),
-        outdated: location["outdated"].as_bool() == Some(true),
+        file: file.trim_start_matches('/').to_string(),
+        from,
+        line: from.map(|from| line("End").filter(|last| *last >= from).unwrap_or(from)),
+        old: side == Some("left"),
+        outdated: !still || (side.is_some() && from.is_none()),
     })
 }
 
-/// A thread people wrote in, placed where dova says it is now. None for
-/// one Azure DevOps wrote itself, such as "added a reviewer", and for a deleted one.
-fn thread(raw: &Value, places: &HashMap<u64, Option<Place>>) -> Option<Thread> {
+/// A thread people wrote in, placed where it is after the latest push. None for one Azure
+/// DevOps wrote itself, such as "added a reviewer", and for a deleted one. `shown` has the
+/// texts that show a picture, each with the picture in place.
+fn thread(raw: &Value, changed: &HashSet<&str>, shown: &HashMap<String, String>) -> Option<Thread> {
     if raw["isDeleted"].as_bool() == Some(true) {
         return None;
     }
@@ -954,13 +1231,16 @@ fn thread(raw: &Value, places: &HashMap<u64, Option<Place>>) -> Option<Thread> {
             comment["isDeleted"].as_bool() != Some(true)
                 && comment["commentType"].as_str() != Some("system")
         })
-        .map(|comment| Comment {
-            id: comment["id"].as_u64().unwrap_or_default(),
-            author: comment["author"]["displayName"]
-                .as_str()
-                .map(str::to_string),
-            published_at: comment["publishedDate"].as_str().map(str::to_string),
-            text: text(&comment["content"]),
+        .map(|comment| {
+            let said = text(&comment["content"]);
+            Comment {
+                id: comment["id"].as_u64().unwrap_or_default(),
+                author: comment["author"]["displayName"]
+                    .as_str()
+                    .map(str::to_string),
+                published_at: comment["publishedDate"].as_str().map(str::to_string),
+                text: shown.get(&said).cloned().unwrap_or(said),
+            }
         })
         .collect();
     if comments.is_empty() {
@@ -973,7 +1253,7 @@ fn thread(raw: &Value, places: &HashMap<u64, Option<Place>>) -> Option<Thread> {
         id,
         status: status.to_string(),
         unresolved: matches!(status, "active" | "pending"),
-        place: places.get(&id).cloned().flatten(),
+        place: place(&raw["threadContext"], changed),
         comments,
     })
 }
@@ -1390,19 +1670,16 @@ mod tests {
 
     #[test]
     fn keeps_the_threads_people_wrote_and_places_them() {
-        let none = HashMap::new();
+        let (changed, shown) = (HashSet::from(["/src/auth.ts"]), HashMap::new());
         let system = json!({ "id": 19, "comments": [{ "id": 1, "commentType": "system", "content": "added a reviewer" }] });
-        assert_eq!(thread(&system, &none), None);
+        assert_eq!(thread(&system, &changed, &shown), None);
 
-        let raw = json!({
-            "id": 4, "status": "active",
-            "comments": [{ "id": 1, "commentType": "text", "content": "Why?", "author": { "displayName": "Sam Lee" }, "publishedDate": "2026-11-14T19:47:13Z" }],
+        let on = |file: &str, side: &str, from: u64, to: u64| json!({ "filePath": file, format!("{side}FileStart"): { "line": from, "offset": 1 }, format!("{side}FileEnd"): { "line": to, "offset": 9 } });
+        let mut raw = json!({
+            "id": 4, "status": "active", "threadContext": on("/src/auth.ts", "right", 42, 44),
+            "comments": [{ "id": 1, "commentType": "text", "content": "Why? ![shot](a)", "author": { "displayName": "Sam Lee" }, "publishedDate": "2026-11-14T19:47:13Z" }],
         });
-        let at = place(
-            &json!({ "file": "/src/auth.ts", "line": 42, "endLine": 44, "side": "new", "outdated": false }),
-        );
-        let places = HashMap::from([(4, at)]);
-        let read = thread(&raw, &places).unwrap();
+        let read = thread(&raw, &changed, &shown).unwrap();
         assert!(read.unresolved);
         assert_eq!(
             read.place,
@@ -1416,11 +1693,75 @@ mod tests {
         );
         assert_eq!(read.comments[0].author.as_deref(), Some("Sam Lee"));
         assert_eq!(wherabouts(read.place.as_ref()), "on src/auth.ts:42-44");
+        // A text that was read with its picture is shown with it.
+        let shown = HashMap::from([(
+            "Why? ![shot](a)".to_string(),
+            "Why? ![shot](data:x)".to_string(),
+        )]);
+        let read = thread(&raw, &changed, &shown).unwrap();
+        assert_eq!(read.comments[0].text, "Why? ![shot](data:x)");
 
-        let gone = place(&json!({ "file": "/a.rs", "line": null, "endLine": null, "side": "old", "outdated": true })).unwrap();
+        // A later push removed its lines: Azure DevOps puts it on line 0.
+        let gone = place(&on("/src/auth.ts", "left", 0, 0), &changed).unwrap();
         assert!(gone.old && gone.outdated && gone.line.is_none());
-        assert_eq!(place(&Value::Null), None);
-        assert_eq!(thread(&raw, &none).unwrap().place, None);
+        // The pull request no longer changes its file.
+        let unchanged = place(&on("/a.rs", "right", 3, 3), &changed).unwrap();
+        assert!(unchanged.outdated && unchanged.from.is_none());
+        // About the whole file, and about the whole pull request.
+        let whole = place(&json!({ "filePath": "/src/auth.ts" }), &changed).unwrap();
+        assert!(!whole.outdated && whole.line.is_none());
+        raw["threadContext"] = Value::Null;
+        assert_eq!(thread(&raw, &changed, &shown).unwrap().place, None);
+    }
+
+    #[test]
+    fn reads_a_push_and_what_it_changes() {
+        let pushes = json!({ "value": [
+            { "id": 1, "commonRefCommit": { "commitId": "a" }, "sourceRefCommit": { "commitId": "b" } },
+            { "id": 2, "commonRefCommit": { "commitId": "a" }, "sourceRefCommit": { "commitId": "c" } },
+        ] });
+        assert_eq!(
+            latest(&pushes),
+            Some((2, json!({ "base": "a", "head": "c" })))
+        );
+        assert_eq!(latest(&json!({ "value": [] })), None);
+
+        let entry = |kind: &str, path: &str, from: Option<&str>| json!({ "changeType": kind, "originalPath": from, "item": { "path": path, "gitObjectType": "blob" } });
+        assert_eq!(
+            change(&json!({ "changeType": "add", "item": { "path": "/src", "isFolder": true } })),
+            None
+        );
+        assert_eq!(
+            change(&entry("add", "/a", None)),
+            Some(json!({ "path": "/a", "change": "added" }))
+        );
+        assert_eq!(
+            change(&entry("edit", "/a", None)),
+            Some(json!({ "path": "/a", "change": "edited" }))
+        );
+        assert_eq!(
+            change(&entry("edit, rename", "/b", Some("/a"))),
+            Some(json!({ "path": "/b", "oldPath": "/a", "change": "renamed" }))
+        );
+        assert_eq!(
+            change(&entry("delete", "/a", None)),
+            Some(json!({ "path": "/a", "change": "deleted" }))
+        );
+
+        let raw = |commit: &str, target: &str| json!({ "lastMergeSourceCommit": { "commitId": commit }, "targetRefName": target, "title": "x" });
+        assert_eq!(
+            mark(&raw("c", "refs/heads/main")),
+            mark(&raw("c", "refs/heads/main"))
+        );
+        assert_ne!(
+            mark(&raw("c", "refs/heads/main")),
+            mark(&raw("d", "refs/heads/main"))
+        );
+        assert_ne!(
+            mark(&raw("c", "refs/heads/main")),
+            mark(&raw("c", "refs/heads/next"))
+        );
+        assert!(pictured("see ![a](b)") && pictured("<img src=x>") && !pictured("plain"));
     }
 
     #[test]
