@@ -1,37 +1,26 @@
-// The Log tab: what wbd did, the oldest on top. Each call from the page, each
-// thing asked of dova, each git command and each program it ran, with how
-// long it took or has run so far, and why it failed. It is where to look when
-// something waits and does not say why.
+// The Log tab: the end of wbd's log file, as it is written, and under it what
+// runs now. The file has a line for each call from the page, each thing asked
+// of dova and each command wbd ran, with how long it took or why it failed.
+// It is where to look when something waits and does not say why.
 
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { copy } from '../components/code';
-import type { LogEntry } from '../protocol/LogEntry';
-import { asked, clock, entries, watchLog } from '../state/log';
+import { asked, type Entry, entries, file, running, watchLog } from '../state/log';
 
-type Only = 'all' | 'running' | 'failed';
+/** A line starts with its day. The tab leaves it out: the time is enough to read by. */
+const DAY = /^\d{4}-\d\d-\d\d /;
+/** How wide the time is, in characters. */
+const TIME = 12;
 
-/** Who did it, as the row says it. A call is something the page asked. */
-const who: Record<LogEntry['kind'], string> = {
-  call: 'page',
-  dova: 'dova',
-  git: 'git',
-  run: 'run',
-  wbd: 'wbd',
-};
-
-const time = (at: number) => new Date(at).toLocaleTimeString('en-GB');
-
-/** How long, in the largest two units that say something. */
-function span(ms: number, whole = false) {
-  if (ms < 1000 && !whole) return `${ms} ms`;
-  const s = ms / 1000;
-  if (s < 60) return `${whole ? Math.floor(s) : s.toFixed(1)} s`;
-  return `${Math.floor(s / 60)} min ${Math.floor(s % 60)} s`;
+/** How long something has run, in whole seconds. */
+function span(ms: number) {
+  const s = Math.floor(ms / 1000);
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
 export function LogPage() {
   const [words, setWords] = createSignal('');
-  const [only, setOnly] = createSignal<Only>('all');
+  const [failed, setFailed] = createSignal(false);
   const [tick, setTick] = createSignal(Date.now());
   const [said, setSaid] = createSignal('Copy');
   let list!: HTMLDivElement;
@@ -47,40 +36,31 @@ export function LogPage() {
     });
   });
 
-  const count = (which: Only) =>
-    entries().filter((entry) => (which === 'running' ? entry.running : entry.failed !== null)).length;
+  const failures = () => entries().filter((entry) => entry.outcome?.state === 'failed').length;
   const shown = createMemo(() => {
     const find = words().trim().toLowerCase();
     return entries().filter((entry) => {
-      if (only() === 'running' && !entry.running) return false;
-      if (only() === 'failed' && entry.failed === null) return false;
-      return !find || line(entry).toLowerCase().includes(find);
+      if (failed() && entry.outcome?.state !== 'failed') return false;
+      return !find || entry.text.toLowerCase().includes(find);
     });
   });
   createEffect(() => {
     shown();
+    running();
     if (following) queueMicrotask(() => list.scrollTo(0, list.scrollHeight));
   });
 
-  /** wbd's clock now: its last answer, and the time since. */
-  const now = () => clock().wbd + (tick() - clock().here);
-  const took = (entry: LogEntry) => {
-    if (entry.running) return `running ${span(Math.max(0, now() - entry.at), true)}`;
-    return entry.took === null ? '' : span(entry.took);
+  /** An entry in three parts: its time, what it was, and how it went if that is to be coloured. */
+  const parts = (entry: Entry) => {
+    const day = DAY.test(entry.text) ? 11 : 0;
+    const at = entry.outcome?.at ?? entry.text.length;
+    return {
+      time: entry.text.slice(day, day + TIME),
+      what: entry.text.slice(day + TIME, at),
+      outcome: entry.text.slice(at),
+    };
   };
-  /** One entry as a line of text, for the filter and for Copy. */
-  const line = (entry: LogEntry) =>
-    [
-      time(entry.at),
-      who[entry.kind],
-      entry.what,
-      entry.place,
-      took(entry),
-      entry.failed && `FAILED: ${entry.failed}`,
-    ]
-      .filter(Boolean)
-      .join('  ');
-  /** How long wbd has not answered the read of this log, in seconds. */
+  /** How long wbd has not answered the read of its log, in seconds. */
   const silent = () => Math.floor((tick() - (asked() ?? tick())) / 1000);
 
   return (
@@ -93,20 +73,21 @@ export function LogPage() {
           value={words()}
           onInput={(e) => setWords(e.currentTarget.value)}
         />
-        <For each={['all', 'running', 'failed'] as Only[]}>
-          {(each) => (
-            <button type="button" class="quiet" aria-pressed={only() === each} onClick={() => setOnly(each)}>
-              {each}
-              <Show when={each !== 'all' && count(each) > 0}> {count(each)}</Show>
-            </button>
-          )}
-        </For>
+        <button type="button" class="quiet" aria-pressed={!failed()} onClick={() => setFailed(false)}>
+          all
+        </button>
+        <button type="button" class="quiet" aria-pressed={failed()} onClick={() => setFailed(true)}>
+          failed
+          <Show when={failures() > 0}> {failures()}</Show>
+        </button>
         <span class="top-gap" />
+        <span class="dim log-file">{file()}</span>
         <button
           type="button"
           class="quiet"
           onClick={async () => {
-            setSaid((await copy(shown().map(line).join('\n'))) ? 'Copied' : 'Could not copy');
+            const text = shown().map((entry) => entry.text);
+            setSaid((await copy(text.join('\n'))) ? 'Copied' : 'Could not copy');
             setTimeout(() => setSaid('Copy'), 1500);
           }}
         >
@@ -114,8 +95,9 @@ export function LogPage() {
         </button>
       </div>
       <Show when={silent() >= 3}>
-        <p class="note-failed log-silent">
+        <p class="note-failed log-note">
           wbd has not answered for {silent()} s. It is busy with something that holds it up, or it stopped.
+          The file still shows what it wrote.
         </p>
       </Show>
       <div
@@ -127,25 +109,23 @@ export function LogPage() {
       >
         <For
           each={shown()}
-          fallback={<p class="dim log-none">{entries().length ? 'None match.' : 'Nothing yet.'}</p>}
+          fallback={<p class="dim log-note">{entries().length ? 'None match.' : 'Nothing yet.'}</p>}
         >
           {(entry) => (
-            <div
-              class="log-row"
-              data-state={entry.running ? 'running' : entry.failed !== null ? 'failed' : undefined}
-            >
-              <span class="dim">{time(entry.at)}</span>
-              <span class="dim">{who[entry.kind]}</span>
-              <span class="log-what">
-                {entry.what}
-                <Show when={entry.place}>
-                  <span class="dim"> {entry.place}</span>
-                </Show>
-                <Show when={entry.failed}>
-                  <span class="log-why">{entry.failed}</span>
-                </Show>
-              </span>
-              <span class="log-took">{took(entry)}</span>
+            <div class="log-row" data-state={entry.outcome?.state}>
+              <span class="dim">{parts(entry).time}</span>
+              {parts(entry).what}
+              <span class="log-outcome">{parts(entry).outcome}</span>
+            </div>
+          )}
+        </For>
+        {/* What has not ended is not in the file yet, or only as still running. wbd says it apart. */}
+        <For each={running()}>
+          {(one) => (
+            <div class="log-row" data-state="running">
+              <span class="dim">{'running now'.padEnd(TIME)}</span>
+              {`  ${one.who.padEnd(4)}  ${one.what}${one.place ? `  ${one.place}` : ''}`}
+              <span class="log-outcome">{`  ${span(one.ms)}`}</span>
             </div>
           )}
         </For>

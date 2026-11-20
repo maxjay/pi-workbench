@@ -458,8 +458,8 @@ pub enum Call {
         #[ts(type = "Array<number>")]
         ids: Vec<u64>,
     },
-    /// What wbd did: the entries that are new or changed since `after`, the `rev` an earlier
-    /// answer gave. 0 asks for all that is kept.
+    /// What wbd wrote to its log file after byte `after`, the `end` an earlier answer gave,
+    /// and what runs now. 0 asks for the end of the file.
     #[serde(rename = "log.read")]
     LogRead {
         #[ts(type = "number")]
@@ -593,55 +593,33 @@ pub enum Answer {
         branch: String,
     },
     Log {
-        entries: Vec<LogEntry>,
-        /// What to give as `after` the next time.
+        /// What was written to the log file since `after`: whole lines.
+        text: String,
+        /// Where the file ends now: what to give as `after` the next time.
         #[ts(type = "number")]
-        rev: u64,
-        /// wbd's clock now, in milliseconds since 1970: how long something has run is counted from it.
-        #[ts(type = "number")]
-        now: u64,
+        end: u64,
+        /// What runs now and has for more than a moment, the longest first.
+        running: Vec<LogRunning>,
+        /// Where the file is.
+        file: String,
     },
 }
 
-/// One thing wbd did: a call from the page, something asked of dova, a command it ran, or
-/// something it only says.
+/// Something wbd started that has not ended: a call from the page, something asked of dova,
+/// or a command.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct LogEntry {
-    #[ts(type = "number")]
-    pub id: u64,
-    /// When it started, in milliseconds since 1970, by wbd's clock.
-    #[ts(type = "number")]
-    pub at: u64,
-    pub kind: LogKind,
-    /// The call or the command with what it was given, or what was said.
+pub struct LogRunning {
+    /// `page`, `dova`, `git`, `run` or `wbd`.
+    pub who: String,
+    /// The call or the command, with what it was given.
     pub what: String,
-    /// The folder it was about.
+    /// The folder it is about.
     pub place: Option<String>,
-    /// True until it ended.
-    pub running: bool,
-    /// How long it took, in milliseconds. None while it runs, and for what is only said.
-    #[ts(type = "number | null")]
-    pub took: Option<u64>,
-    /// Why it failed.
-    pub failed: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub enum LogKind {
-    /// A call from the page.
-    Call,
-    /// Something asked of dova, or something dova printed.
-    Dova,
-    /// A git command.
-    Git,
-    /// Another program: an agent, or one asked for its version.
-    Run,
-    /// wbd itself.
-    Wbd,
+    /// How long it has run, in milliseconds.
+    #[ts(type = "number")]
+    pub ms: u64,
 }
 
 /// wbd, and the programs it works with. A program that isn't found has no version.

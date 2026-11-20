@@ -3,10 +3,10 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use protocol::{Health, LogKind};
+use protocol::Health;
 use tokio::process::Command;
 
-use crate::log;
+use crate::log::{self, LogKind};
 
 pub async fn check() -> Health {
     let (pi, claude, dova) = tokio::join!(

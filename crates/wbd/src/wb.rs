@@ -145,7 +145,7 @@ pub async fn serve(listener: UnixListener, ctx: Arc<Ctx>) {
                 asked["ask"].as_str().unwrap_or_default(),
                 crate::log::given(&asked, "ask")
             );
-            let running = crate::log::begin(protocol::LogKind::Run, what.trim_end(), None);
+            let running = crate::log::begin(crate::log::LogKind::Run, what.trim_end(), None);
             let said = match asked["ask"].as_str() {
                 Some("repos") => Ok(listed(&ctx, &words(&asked["words"])).await),
                 Some("add") => add(&ctx, &asked, hung_up).await,

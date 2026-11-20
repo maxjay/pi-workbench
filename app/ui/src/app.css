@@ -1584,8 +1584,8 @@ svg.glyph {
   padding: 6px 0;
 }
 
-/* The Log tab: what wbd did, a line each, the oldest on top. The line is as wide as the window,
-   because what was asked and why it failed are long. */
+/* The Log tab: wbd's log file, a line for each thing it did, as the file has it. The line is as
+   wide as the window, because what was asked and why it failed are long. */
 
 .log {
   height: 100%;
@@ -1607,8 +1607,14 @@ svg.glyph {
   margin-right: 12px;
 }
 
-.log-silent,
-.log-none {
+/* Where the file is, to read it somewhere else. */
+.log-file {
+  margin-right: 8px;
+  font-size: 12px;
+  user-select: text;
+}
+
+.log-note {
   padding: 10px 20px;
 }
 
@@ -1620,39 +1626,23 @@ svg.glyph {
   user-select: text;
 }
 
+/* A line as it is in the file. Where it wraps, and where it carries on, it stands in from its time. */
 .log-row {
-  display: grid;
-  grid-template-columns: 64px 36px minmax(0, 1fr) auto;
-  column-gap: 16px;
-  padding: 2px 20px;
+  padding: 2px 20px 2px calc(20px + 14ch);
+  text-indent: -14ch;
   font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .log-row:hover {
   background: var(--hover);
 }
 
-.log-what {
-  overflow-wrap: anywhere;
-}
-
-/* Why it failed: under what failed, in full. */
-.log-why {
-  display: block;
+.log-row[data-state="failed"] .log-outcome {
   color: var(--failed);
-  white-space: pre-wrap;
 }
 
-.log-took {
-  color: var(--dim);
-  white-space: nowrap;
-  text-align: right;
-}
-
-.log-row[data-state="running"] .log-took {
+.log-row[data-state="running"] .log-outcome {
   color: var(--working);
-}
-
-.log-row[data-state="failed"] .log-took {
-  color: var(--failed);
 }

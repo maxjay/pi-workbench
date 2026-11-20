@@ -10,14 +10,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use protocol::LogKind;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::oneshot;
 
 use crate::error::Error;
-use crate::log;
+use crate::log::{self, LogKind};
 
 /// A call that takes longer than this is given up on. dova makes several
 /// requests to Azure DevOps for some of them.

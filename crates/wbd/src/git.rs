@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use protocol::{GitFile, GitMark, GitStatus, GitSummary, LogKind};
+use protocol::{GitFile, GitMark, GitStatus, GitSummary};
 use tokio::process::Command;
 
-use crate::log;
+use crate::log::{self, LogKind};
 
 /// Runs git in `dir`, giving what it printed if it succeeded. These are asked often, and git
 /// refusing one is an answer, such as a folder that is not a repo. So in the log they are

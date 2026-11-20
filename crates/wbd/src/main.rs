@@ -27,7 +27,8 @@ use std::sync::Arc;
 use codespaces::Codespaces;
 use conversations::Conversations;
 use error::Error;
-use protocol::{Answer, Call, CodespaceView, Event, Failure, FailureKind, LogKind, Request};
+use log::LogKind;
+use protocol::{Answer, Call, CodespaceView, Event, Failure, FailureKind, Request};
 use terminals::Terminals;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
@@ -67,11 +68,8 @@ async fn main() -> ExitCode {
         log::note(LogKind::Wbd, &format!("wbd failed: {info}"));
         before(info);
     }));
-    let started = format!(
-        "wbd {VERSION} started. Its own files are in {}",
-        data_dir().display()
-    );
-    log::note(LogKind::Wbd, &started);
+    log::open(&data_dir());
+    log::note(LogKind::Wbd, &format!("wbd {VERSION} started"));
 
     // Everything wbd says goes through this one writer, a line at a time.
     // It stops when told to, after writing what was already said: the
@@ -686,11 +684,12 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             Answer::Done
         }
         Call::LogRead { after } => {
-            let (entries, rev) = log::read(after);
+            let (text, end, running, file) = log::read(after);
             Answer::Log {
-                entries,
-                rev,
-                now: log::now(),
+                text,
+                end,
+                running,
+                file,
             }
         }
     })

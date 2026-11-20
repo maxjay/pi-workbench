@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use protocol::{Agent, Ask, Conversation, ConversationView, Entry, Event, LogKind};
+use protocol::{Agent, Ask, Conversation, ConversationView, Entry, Event};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -24,7 +24,8 @@ use crate::codespaces::Codespaces;
 use crate::error::Error;
 use crate::files;
 use crate::fold::{Folded, Update};
-use crate::{log, repos, wb};
+use crate::log::{self, LogKind};
+use crate::{repos, wb};
 
 /// How often what an agent says goes to the page. A reply streaming word
 /// by word is then a couple of dozen events a second, not hundreds.

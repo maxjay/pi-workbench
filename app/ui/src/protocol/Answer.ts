@@ -10,7 +10,7 @@ import type { FileView } from "./FileView";
 import type { Folder } from "./Folder";
 import type { GitStatus } from "./GitStatus";
 import type { Health } from "./Health";
-import type { LogEntry } from "./LogEntry";
+import type { LogRunning } from "./LogRunning";
 import type { Offer } from "./Offer";
 import type { Person } from "./Person";
 import type { PullBefore } from "./PullBefore";
@@ -71,12 +71,20 @@ errors: Array<string>, } | { "kind": "session",
 /**
  * The folder the agent works in.
  */
-cwd: string, brief: string, } | { "kind": "place", cwd: string, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, } | { "kind": "log", entries: Array<LogEntry>, 
+cwd: string, brief: string, } | { "kind": "place", cwd: string, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, } | { "kind": "log", 
 /**
- * What to give as `after` the next time.
+ * What was written to the log file since `after`: whole lines.
  */
-rev: number, 
+text: string, 
 /**
- * wbd's clock now, in milliseconds since 1970: how long something has run is counted from it.
+ * Where the file ends now: what to give as `after` the next time.
  */
-now: number, };
+end: number, 
+/**
+ * What runs now and has for more than a moment, the longest first.
+ */
+running: Array<LogRunning>, 
+/**
+ * Where the file is.
+ */
+file: string, };
