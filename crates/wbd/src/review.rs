@@ -30,6 +30,9 @@ const LARGE: usize = 10_000;
 const LOG_LINES: usize = 5_000;
 /// What the agent is told is no longer than this: it is one argument on its command line.
 const BRIEF: usize = 60_000;
+/// How the name of a pull request's folder ends when it is not a checkout: no clone of the
+/// repo was here to make one from.
+const PLAIN: &str = "-quick";
 /// git gets this long to fetch a pull request's commits.
 const FETCH: Duration = Duration::from_secs(60);
 
@@ -37,14 +40,40 @@ const FETCH: Duration = Duration::from_secs(60);
 pub struct Reviews {
     /// Who you are to Azure DevOps, by the folder asked from.
     me: Mutex<HashMap<String, String>>,
-    /// Each pull request's place in Azure DevOps' REST paths, by folder and number.
-    paths: Mutex<HashMap<(String, u64), String>>,
+    /// What Azure DevOps said each pull request is in, by the place asked from and number.
+    known: Mutex<HashMap<(String, u64), Known>>,
+    /// The project of each pipeline run that was listed, by the run's id.
+    runs: Mutex<HashMap<u64, String>>,
     /// What changed in each pull request's files, as far as it was asked for.
     diffs: Mutex<HashMap<(String, u64), Kept>>,
-    /// Each pull request's project and repo, by folder and number.
-    names: Mutex<HashMap<(String, u64), (String, String)>>,
     /// The checkouts that were kept at the last sweep though their pull request ended.
     left: Mutex<Vec<String>>,
+}
+
+/// Where a pull request is, asked once. A pull request is found by its number in its
+/// organization, so the place it is asked from can be a clone of any repo there, or the
+/// organization alone. Everything after that names its own project and repo.
+#[derive(Clone)]
+struct Known {
+    /// Its place in Azure DevOps' REST paths.
+    at: String,
+    /// Its project's id: the paths of its builds and policies start with it.
+    project_id: String,
+    project: String,
+    repo: String,
+    /// Its address on the web. dova reads the organization, project and repo from it, so
+    /// dova is given this and not the bare number.
+    link: Option<String>,
+    /// Where its repo is cloned from, over https and over ssh.
+    https: Option<String>,
+    ssh: Option<String>,
+}
+
+impl Known {
+    /// What dova is given to name the pull request.
+    fn link(&self, pr: u64) -> String {
+        self.link.clone().unwrap_or_else(|| pr.to_string())
+    }
 }
 
 /// The folders a pull request's checkout has to do with.
@@ -106,10 +135,11 @@ impl Kept {
 impl Reviews {
     /// A pull request to review.
     pub async fn open(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
-        let id = json!({ "idOrUrl": pr.to_string(), "inlineImages": true });
-        let at = self.at(dova, dir, pr).await?;
+        let known = self.known(dova, dir, pr).await?;
+        let (at, link) = (&known.at, known.link(pr));
+        let id = json!({ "idOrUrl": link, "inlineImages": true });
         // Which files changed, not what changed in them: a few requests, however many there are.
-        let names = json!({ "pr": pr.to_string(), "names": true });
+        let names = json!({ "pr": link, "names": true });
         let (view, raw, threads, diff, me) = tokio::join!(
             dova.call("pr.view", dir, id),
             get(dova, dir, format!("{at}?api-version=7.1")),
@@ -138,8 +168,8 @@ impl Reviews {
             dova,
             dir,
             format!(
-                "_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{}/{pr}&api-version=7.1-preview.1",
-                text(&raw["repository"]["project"]["id"])
+                "/{0}/_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{0}/{pr}&api-version=7.1-preview.1",
+                known.project_id
             ),
         )
         .await;
@@ -209,78 +239,142 @@ impl Reviews {
 
     /// The pipeline runs on a pull request's branch and on its merge, the newest first.
     pub async fn checks(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Vec<CheckRun>, Error> {
-        let at = self.at(dova, dir, pr).await?;
-        let raw = get(dova, dir, format!("{at}?api-version=7.1")).await?;
+        let known = self.known(dova, dir, pr).await?;
+        let raw = get(dova, dir, format!("{}?api-version=7.1", known.at)).await?;
         let branches = [text(&raw["sourceRefName"]), format!("refs/pull/{pr}/merge")];
-        let mut runs = Vec::new();
+        let mut runs: Vec<CheckRun> = Vec::new();
         for branch in branches {
             let path = format!(
-                "_apis/build/builds?branchName={}&$top=10&queryOrder=queueTimeDescending&api-version=7.1",
+                "/{}/_apis/build/builds?branchName={}&$top=10&queryOrder=queueTimeDescending&api-version=7.1",
+                known.project_id,
                 encoded(&branch)
             );
             let listed = get(dova, dir, path).await?;
             runs.extend(listed["value"].as_array().into_iter().flatten().map(check));
         }
         runs.sort_by_key(|run| std::cmp::Reverse(run.id));
+        // A run is asked about later by its id alone, and its path starts with its project.
+        let mut projects = self.runs.lock().expect("not poisoned");
+        for run in &runs {
+            projects.insert(run.id, known.project_id.clone());
+        }
+        drop(projects);
         Ok(runs)
     }
 
     /// A pull request's project and repo, by their names.
     async fn named(&self, dova: &Dova, dir: &str, pr: u64) -> Result<(String, String), Error> {
-        self.at(dova, dir, pr).await?;
-        let names = self.names.lock().expect("not poisoned");
-        names.get(&(dir.to_string(), pr)).cloned().ok_or_else(|| {
-            Error::Dova(format!(
-                "Azure DevOps didn't say which repo pull request {pr} is in"
-            ))
-        })
+        let known = self.known(dova, dir, pr).await?;
+        Ok((known.project, known.repo))
     }
 
-    /// Where a pull request's own checkout is, or will be made. Asking makes nothing.
+    /// What dova is given to name a pull request: its address, which says where it is. Its
+    /// bare number when the address is not known, which works from a clone in its organization.
+    pub async fn handle(&self, dova: &Dova, dir: &str, pr: u64) -> String {
+        match self.known(dova, dir, pr).await {
+            Ok(known) => known.link(pr),
+            Err(_) => pr.to_string(),
+        }
+    }
+
+    /// The start of a pipeline run's REST path: its project, where a listing said it.
+    fn run_at(&self, run: u64) -> String {
+        match self.runs.lock().expect("not poisoned").get(&run) {
+            Some(project) => format!("/{project}/_apis/build/builds/{run}"),
+            None => format!("_apis/build/builds/{run}"),
+        }
+    }
+
+    /// A run's jobs, each followed by its steps, and what the pipeline said
+    /// went wrong outside any of them.
+    pub async fn steps(
+        &self,
+        dova: &Dova,
+        dir: &str,
+        run: u64,
+    ) -> Result<(Vec<Step>, Vec<String>), Error> {
+        let path = format!("{}/timeline?api-version=7.1", self.run_at(run));
+        Ok(read_timeline(&get(dova, dir, path).await?))
+    }
+
+    /// What one step of a run printed: the end of it, without each line's time.
+    pub async fn step_log(
+        &self,
+        dova: &Dova,
+        dir: &str,
+        run: u64,
+        log: u64,
+    ) -> Result<String, Error> {
+        let path = format!("{}/logs/{log}?api-version=7.1", self.run_at(run));
+        let printed = get(dova, dir, path).await?;
+        let lines: Vec<&str> = printed["value"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(untimed)
+            .collect();
+        Ok(lines[lines.len().saturating_sub(LOG_LINES)..].join("\n"))
+    }
+
+    /// Runs a run's failed jobs again.
+    pub async fn rerun(&self, dova: &Dova, dir: &str, run: u64) -> Result<(), Error> {
+        let path = format!("{}?retry=true&api-version=7.1", self.run_at(run));
+        send(dova, dir, "PATCH", path, &json!({})).await
+    }
+
+    /// Where the agent's folder for a pull request is, or will be made, and whether it is a
+    /// checkout: whether a clone of the repo is here to make one from. Asking makes nothing.
     pub async fn place(
         &self,
         dova: &Dova,
         at: &Folders<'_>,
         dir: &str,
         pr: u64,
-    ) -> Result<PathBuf, Error> {
+    ) -> Result<(PathBuf, bool), Error> {
         let (project, repo) = self.named(dova, dir, pr).await?;
-        // One made before checkouts were kept in the workbench's own folder is still used:
-        // the conversations in it are tied to where it is.
-        if let Some(clone) = clone_of(dir, &project, &repo, at.found).await {
-            let origin = git::origin(&clone).await.unwrap_or_default();
-            let before = at.data.join("reviews");
-            let old = before.join(format!("{}-{pr}", slug(&origin)));
-            if old.join(".git").exists() {
-                return Ok(old);
-            }
-        }
-        Ok(at.own.join("pulls").join(format!("{}-{pr}", slug(&repo))))
+        let clone = clone_of(dir, &project, &repo, at.found).await;
+        Ok(folder(at, clone.as_deref(), &repo, pr).await)
     }
 
-    /// Makes a pull request's own folder for the agent if it is not there, and gives it
-    /// with what to tell the agent about the pull request. The folder is a worktree of the
-    /// repo's clone: the folder asked from when it is that repo's, or else the repo's clone
-    /// in your repos folder.
+    /// Makes the agent's folder for a pull request if it is not there, and gives it with
+    /// what to tell the agent about the pull request.
+    ///
+    /// With a clone of the repo, the folder is a worktree of it at the pull request's last
+    /// commit, so the agent has all the code. The clone is the folder asked from when it is
+    /// that repo's, or else the repo's clone in your repos folder. Without one, `clone_it`
+    /// clones the repo into `repos` first. Otherwise the folder holds nothing, and the agent
+    /// reads what the pull request changes through dova.
     pub async fn session(
         &self,
         dova: &Dova,
         at: &Folders<'_>,
+        repos: &Path,
         dir: &str,
         pr: u64,
+        clone_it: bool,
     ) -> Result<(String, String), Error> {
         let review = self.open(dova, dir, pr).await?;
-        let (project, repo) = (&review.pr.project, &review.pr.repo);
-        let clone = clone_of(dir, project, repo, at.found).await.ok_or_else(|| {
-            Error::NotFound(format!(
-                "The {repo} repo is not open here, and your repos folder has no clone of it. Clone it there to work on this pull request with the agent."
-            ))
-        })?;
-        let own = self.place(dova, at, dir, pr).await?;
-        checkout(&clone, &own, &review.pr.source_branch, &review.head).await?;
+        let known = self.known(dova, dir, pr).await?;
+        let mut clone = clone_of(dir, &known.project, &known.repo, at.found).await;
+        if clone.is_none() && clone_it {
+            clone = Some(clone_into(repos, &known, at.found).await?);
+        }
+        let (own, _) = folder(at, clone.as_deref(), &known.repo, pr).await;
+        let made = match &clone {
+            Some(clone) => {
+                checkout(clone, &own, &review.pr.source_branch, &review.head).await?;
+                clone.display().to_string()
+            }
+            None => {
+                std::fs::create_dir_all(&own).map_err(|err| Error::io(&own, err))?;
+                // Where it is asked about later, to remove it when the pull request ends.
+                dir.to_string()
+            }
+        };
         let made = Checkout {
             folder: own.display().to_string(),
-            clone: clone.display().to_string(),
+            clone: made,
             pr,
         };
         let mut list = checkouts(at.own);
@@ -290,7 +384,11 @@ impl Reviews {
             keep_checkouts(at.own, &list);
         }
         let runs = self.checks(dova, dir, pr).await.unwrap_or_default();
-        Ok((own.display().to_string(), brief(&review, &runs)))
+        let link = clone.is_none().then(|| known.link(pr));
+        Ok((
+            own.display().to_string(),
+            brief(&review, &runs, link.as_deref()),
+        ))
     }
 
     /// Removes the checkouts whose pull request was completed or abandoned. One that holds
@@ -329,18 +427,32 @@ impl Reviews {
         for one in list.clone() {
             let (folder, clone) = (Path::new(&one.folder), Path::new(&one.clone));
             let forget = |list: &mut Vec<Checkout>| list.retain(|known| *known != one);
+            // A folder made without a clone holds nothing of the repo: only what the agent left.
+            let plain = one.folder.ends_with(PLAIN);
+            if plain && !folder.is_dir() {
+                forget(&mut list);
+                continue;
+            }
             // One that was deleted by hand is taken off git's list and off this one.
-            if !folder.join(".git").exists() {
+            if !plain && !folder.join(".git").exists() {
                 let _ = run(clone, &["worktree", "prune"], None).await;
                 forget(&mut list);
                 continue;
             }
-            let path = format!("_apis/git/pullrequests/{}?api-version=7.1", one.pr);
+            let path = format!("/_apis/git/pullrequests/{}?api-version=7.1", one.pr);
             // Not being able to ask is no reason to remove anything.
             let Ok(raw) = dova.call("api", &one.clone, json!({ "path": path })).await else {
                 continue;
             };
             if !matches!(raw["status"].as_str(), Some("completed" | "abandoned")) {
+                continue;
+            }
+            if plain {
+                // Only a folder the workbench made itself, in its own place, is deleted.
+                if folder.starts_with(own.join("pulls")) && std::fs::remove_dir_all(folder).is_ok()
+                {
+                    forget(&mut list);
+                }
                 continue;
             }
             let last = text(&raw["lastMergeSourceCommit"]["commitId"]);
@@ -408,7 +520,7 @@ impl Reviews {
         paths: &[String],
     ) -> Result<Vec<ChangedFile>, Error> {
         let named: Vec<String> = paths.iter().map(|path| format!("/{path}")).collect();
-        let asked = json!({ "pr": pr.to_string(), "files": named });
+        let asked = json!({ "pr": self.handle(dova, dir, pr).await, "files": named });
         let mut diff = dova.call("pr.diff", dir, asked).await?;
         let head = text(&diff["head"]);
         let mut diffs = self.diffs.lock().expect("not poisoned");
@@ -433,35 +545,40 @@ impl Reviews {
     /// Where a pull request is in Azure DevOps' REST paths. A pull request
     /// is asked for by number in its project, and written to in its repo.
     async fn at(&self, dova: &Dova, dir: &str, pr: u64) -> Result<String, Error> {
+        Ok(self.known(dova, dir, pr).await?.at)
+    }
+
+    /// Where a pull request is: asked of its organization by number, once.
+    async fn known(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Known, Error> {
         let key = (dir.to_string(), pr);
-        if let Some(known) = self.paths.lock().expect("not poisoned").get(&key) {
+        if let Some(known) = self.known.lock().expect("not poisoned").get(&key) {
             return Ok(known.clone());
         }
-        let raw = get(
-            dova,
-            dir,
-            format!("_apis/git/pullrequests/{pr}?api-version=7.1"),
-        )
-        .await?;
-        let repo = raw["repository"]["id"].as_str().ok_or_else(|| {
-            Error::Dova(format!(
+        // A path that starts with a slash is asked of the organization, not of a project.
+        let path = format!("/_apis/git/pullrequests/{pr}?api-version=7.1");
+        let raw = get(dova, dir, path).await?;
+        let repo = &raw["repository"];
+        let (Some(id), Some(project_id)) = (repo["id"].as_str(), repo["project"]["id"].as_str())
+        else {
+            return Err(Error::Dova(format!(
                 "Azure DevOps didn't say which repo pull request {pr} is in"
-            ))
-        })?;
-        let at = format!("_apis/git/repositories/{repo}/pullRequests/{pr}");
-        let names = (
-            text(&raw["repository"]["project"]["name"]),
-            text(&raw["repository"]["name"]),
-        );
-        self.names
+            )));
+        };
+        let web = repo["webUrl"].as_str();
+        let known = Known {
+            at: format!("/{project_id}/_apis/git/repositories/{id}/pullRequests/{pr}"),
+            project_id: project_id.to_string(),
+            project: text(&repo["project"]["name"]),
+            repo: text(&repo["name"]),
+            link: web.map(|web| format!("{web}/pullrequest/{pr}")),
+            https: repo["remoteUrl"].as_str().map(str::to_string),
+            ssh: repo["sshUrl"].as_str().map(str::to_string),
+        };
+        self.known
             .lock()
             .expect("not poisoned")
-            .insert(key.clone(), names);
-        self.paths
-            .lock()
-            .expect("not poisoned")
-            .insert(key, at.clone());
-        Ok(at)
+            .insert(key, known.clone());
+        Ok(known)
     }
 
     /// Who you are to the organization `dir` is cloned from. Asked once.
@@ -481,6 +598,65 @@ impl Reviews {
             .insert(dir.to_string(), id.clone());
         Ok(id)
     }
+}
+
+/// Where the agent's folder for a pull request is, and whether it is a checkout. With a
+/// clone of the repo it is a checkout, in `pulls` in the workbench's own folder. Without
+/// one it is a folder beside those, named apart, so a checkout can still be made later.
+async fn folder(at: &Folders<'_>, clone: Option<&Path>, repo: &str, pr: u64) -> (PathBuf, bool) {
+    let pulls = at.own.join("pulls");
+    let own = pulls.join(format!("{}-{pr}", slug(repo)));
+    // One made before checkouts were kept in the workbench's own folder is still used:
+    // the conversations in it are tied to where it is.
+    if let Some(clone) = clone {
+        let origin = git::origin(clone).await.unwrap_or_default();
+        let old = at
+            .data
+            .join("reviews")
+            .join(format!("{}-{pr}", slug(&origin)));
+        if old.join(".git").exists() {
+            return (old, true);
+        }
+    }
+    match clone.is_some() || own.join(".git").exists() {
+        true => (own, true),
+        false => (pulls.join(format!("{}-{pr}{PLAIN}", slug(repo))), false),
+    }
+}
+
+/// Clones a pull request's repo into your repos folder, the way your other clones from
+/// Azure Repos were cloned: over ssh if one of them was, or else over https. So git signs in
+/// the way that already works for you.
+async fn clone_into(repos: &Path, known: &Known, found: &[Found]) -> Result<PathBuf, Error> {
+    let target = repos.join(&known.repo);
+    if target.exists() {
+        return Err(Error::Conflict(format!(
+            "{} is there already and is not a clone of the {} repo. Move it, or clone the repo yourself under another name.",
+            target.display(),
+            known.repo
+        )));
+    }
+    let over_ssh = found.iter().any(|clone| {
+        pulls::azure(&clone.remote).is_some()
+            && (clone.remote.starts_with("git@") || clone.remote.starts_with("ssh://"))
+    });
+    let (first, second) = match over_ssh {
+        true => (&known.ssh, &known.https),
+        false => (&known.https, &known.ssh),
+    };
+    let url = first.as_ref().or(second.as_ref()).ok_or_else(|| {
+        Error::Dova(format!(
+            "Azure DevOps didn't say where the {} repo is cloned from",
+            known.repo
+        ))
+    })?;
+    std::fs::create_dir_all(repos).map_err(|err| Error::io(repos, err))?;
+    let to = target.display().to_string();
+    // A large repo takes minutes, so this is not given up on.
+    run(repos, &["clone", "--quiet", url, &to], None)
+        .await
+        .map_err(|why| Error::Io(format!("git couldn't clone {}: {why}", known.repo)))?;
+    Ok(target)
 }
 
 /// The clone a pull request's checkout is made from: the folder asked from when it is that
@@ -504,9 +680,8 @@ async fn clone_of(dir: &str, project: &str, repo: &str, found: &[Found]) -> Opti
 }
 
 /// One changed file's diff with every line of the file.
-pub async fn diff(dova: &Dova, dir: &str, pr: u64, path: &str) -> Result<Vec<DiffLine>, Error> {
-    let params =
-        json!({ "pr": pr.to_string(), "files": [format!("/{path}")], "context": WHOLE_FILE });
+pub async fn diff(dova: &Dova, dir: &str, pr: &str, path: &str) -> Result<Vec<DiffLine>, Error> {
+    let params = json!({ "pr": pr, "files": [format!("/{path}")], "context": WHOLE_FILE });
     let diff = dova.call("pr.diff", dir, params).await?;
     let file = diff["files"]
         .get(0)
@@ -518,11 +693,11 @@ pub async fn diff(dova: &Dova, dir: &str, pr: u64, path: &str) -> Result<Vec<Dif
 pub async fn comment(
     dova: &Dova,
     dir: &str,
-    pr: u64,
+    pr: &str,
     words: &str,
     place: Option<Place>,
 ) -> Result<(), Error> {
-    let mut params = json!({ "pr": pr.to_string(), "text": words });
+    let mut params = json!({ "pr": pr, "text": words });
     if let Some(place) = place {
         let (Some(from), Some(line)) = (place.from, place.line) else {
             return Err(Error::NotFound(
@@ -538,35 +713,6 @@ pub async fn comment(
     dova.call("pr.comment", dir, params).await.map(|_| ())
 }
 
-/// A run's jobs, each followed by its steps, and what the pipeline said
-/// went wrong outside any of them.
-pub async fn steps(dova: &Dova, dir: &str, run: u64) -> Result<(Vec<Step>, Vec<String>), Error> {
-    let path = format!("_apis/build/builds/{run}/timeline?api-version=7.1");
-    Ok(read_timeline(&get(dova, dir, path).await?))
-}
-
-/// What one step of a run printed: the end of it, without each line's time.
-pub async fn step_log(dova: &Dova, dir: &str, run: u64, log: u64) -> Result<String, Error> {
-    let path = format!("_apis/build/builds/{run}/logs/{log}?api-version=7.1");
-    let printed = get(dova, dir, path).await?;
-    let lines: Vec<&str> = printed["value"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(untimed)
-        .collect();
-    Ok(lines[lines.len().saturating_sub(LOG_LINES)..].join("\n"))
-}
-
-/// Runs a run's failed jobs again.
-pub async fn rerun(dova: &Dova, dir: &str, run: u64) -> Result<(), Error> {
-    let path = format!("_apis/build/builds/{run}?retry=true&api-version=7.1");
-    send(dova, dir, "PATCH", path, &json!({})).await
-}
-
-/// A REST call through dova. A picture kept on Azure DevOps that the
-/// answer links to comes back as the picture itself.
 /// Keeps a picture in a file under `data`, so a description can name it. Gives the file's path.
 pub fn keep_picture(data: &Path, name: &str, base64: &str) -> Result<String, Error> {
     use base64::Engine as _;
@@ -594,11 +740,11 @@ pub fn keep_picture(data: &Path, name: &str, base64: &str) -> Result<String, Err
 pub async fn edit(
     dova: &Dova,
     dir: &str,
-    pr: u64,
+    pr: &str,
     title: Option<String>,
     description: Option<String>,
 ) -> Result<(), Error> {
-    let mut params = json!({ "idOrUrl": pr.to_string() });
+    let mut params = json!({ "idOrUrl": pr });
     if let Some(title) = title {
         params["title"] = json!(title);
     }
@@ -924,22 +1070,41 @@ async fn checkout(repo: &Path, own: &Path, branch: &str, head: &str) -> Result<(
     Ok(())
 }
 
-/// What the agent is told about a pull request before anything you write.
-fn brief(review: &Review, runs: &[CheckRun]) -> String {
+/// What the agent is told about a pull request before anything you write. With `link`, the
+/// pull request's address, the agent has no checkout and is told to read through dova.
+fn brief(review: &Review, runs: &[CheckRun], link: Option<&str>) -> String {
     let pr = &review.pr;
     let short = |commit: &str| commit.get(..9).unwrap_or(commit).to_string();
     let clip = |words: &str, most: usize| match words.char_indices().nth(most) {
         Some((cut, _)) => format!("{} […]", &words[..cut]),
         None => words.to_string(),
     };
+    let code = match link {
+        Some(link) => format!(
+            "The repository is not cloned on this machine, so this folder holds no code. \
+             Read the code through dova, which is installed, and name the pull request by its address. \
+             `dova pr diff {link}` shows what changed. \
+             `dova pr diff {link} --files <path>...` gives those files whole, before and after, as JSON. \
+             `dova pr view {link}` and `dova pr thread {link} <thread>` read the pull request as it is now. \
+             You cannot read a file the pull request does not change. When an answer needs one, say so: \
+             the person can clone the repository from the Workbench for a thorough review.\n"
+        ),
+        None => format!(
+            "This folder is a separate checkout of the pull request's branch, at {head}, not on any branch. \
+             The whole change is `git diff {base} {head}`. \
+             To push a fix to the pull request: commit here, then `git push origin HEAD:refs/heads/{source}`.\n\
+             dova is installed. `dova pr view {id}`, `dova pr diff {id}` and `dova pr thread {id} <thread>` read the pull request as it is now, \
+             and `dova pipeline log <run>` reads why a run failed.\n",
+            id = pr.id,
+            source = pr.source_branch,
+            head = short(&review.head),
+            base = short(&review.base),
+        ),
+    };
     let mut out = format!(
         "You are helping someone review pull request #{id} \"{title}\" in the {repo} repository on Azure DevOps.\n\
          Opened by {author}. It merges {source} into {target}. It is {state}.\n\n\
-         This folder is a separate checkout of the pull request's branch, at {head}, not on any branch. \
-         The whole change is `git diff {base} {head}`. \
-         To push a fix to the pull request: commit here, then `git push origin HEAD:refs/heads/{source}`.\n\
-         dova is installed. `dova pr view {id}`, `dova pr diff {id}` and `dova pr thread {id} <thread>` read the pull request as it is now, \
-         and `dova pipeline log <run>` reads why a run failed.\n\
+         {code}\
          Do not post comments, vote, or push unless you are asked to: the person posts from the Workbench.\n\
          When you are asked about lines of a file, answer about those lines. \
          When you are asked to draft a comment or a reply, answer with only the text to post.\n\
@@ -956,8 +1121,6 @@ fn brief(review: &Review, runs: &[CheckRun]) -> String {
         } else {
             pr.status.as_str()
         },
-        head = short(&review.head),
-        base = short(&review.base),
     );
     if !review.description.trim().is_empty() {
         out += &format!("\n## Description\n{}\n", clip(&review.description, 4_000));

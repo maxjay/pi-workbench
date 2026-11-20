@@ -98,6 +98,11 @@ impl Places {
         Ok(())
     }
 
+    /// Has the repos folder looked in again the next time: something was cloned into it.
+    pub fn changed(&self) {
+        *self.found.lock().expect("not poisoned") = None;
+    }
+
     /// The clones in your repos folder. It is looked in at most once a minute.
     pub async fn found(&self) -> Vec<Found> {
         let folder = self.repos();

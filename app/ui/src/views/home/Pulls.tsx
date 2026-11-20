@@ -125,16 +125,7 @@ function Table(props: { list: 'yours' | 'review'; rows: PullRow[]; facts: (row: 
             <Show when={!shut[key]}>
               <For each={group.rows}>
                 {(row) => (
-                  <button
-                    type="button"
-                    class="row table-row"
-                    title={
-                      row.codespace
-                        ? undefined
-                        : `The ${row.repo} repo is not open here and not in your repos folder. Opens on Azure DevOps.`
-                    }
-                    onClick={() => go(row)}
-                  >
+                  <button type="button" class="row table-row" onClick={() => go(row)}>
                     <span style={{ color: pullHue(row.id) }}>#{row.id}</span>
                     <span class="table-name">
                       {row.title}

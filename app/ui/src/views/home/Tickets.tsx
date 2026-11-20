@@ -13,7 +13,9 @@ import { fileTicket, findTickets, tickets, words } from '../../state/tickets';
 export function Tickets() {
   const [title, setTitle] = createSignal('');
   /** A folder to file a new ticket from: one that a ticket or a pull request was listed from. */
-  const from = () => tickets.latest?.[0]?.codespace ?? pulls.latest?.find((row) => row.codespace)?.codespace;
+  const from = () =>
+    tickets.latest?.[0]?.codespace ??
+    pulls.latest?.find((row) => row.codespace && !row.codespace.startsWith('@'))?.codespace;
   /** The type last asked for, kept so a team can be picked for it. */
   const [kind, setKind] = createSignal('Task');
   const filing = createAction(async (type: string, team: string | null = null) => {

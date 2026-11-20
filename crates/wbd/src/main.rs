@@ -422,7 +422,10 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             files: ctx.reviews.files(&ctx.dova, &dir, pr, &paths).await?,
         },
         Call::PullDiff { dir, pr, path } => Answer::FileDiff {
-            lines: review::diff(&ctx.dova, &dir, pr, &path).await?,
+            lines: {
+                let pr = ctx.reviews.handle(&ctx.dova, &dir, pr).await;
+                review::diff(&ctx.dova, &dir, &pr, &path).await?
+            },
         },
         Call::PullComment {
             dir,
@@ -430,7 +433,8 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             text,
             place,
         } => {
-            review::comment(&ctx.dova, &dir, pr, &text, place).await?;
+            let pr = ctx.reviews.handle(&ctx.dova, &dir, pr).await;
+            review::comment(&ctx.dova, &dir, &pr, &text, place).await?;
             Answer::Done
         }
         Call::PullVote { dir, pr, vote } => {
@@ -443,7 +447,8 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             title,
             description,
         } => {
-            review::edit(&ctx.dova, &dir, pr, title, description).await?;
+            let pr = ctx.reviews.handle(&ctx.dova, &dir, pr).await;
+            review::edit(&ctx.dova, &dir, &pr, title, description).await?;
             Answer::Done
         }
         Call::PullDescription { dir, pr } => Answer::Printed {
@@ -460,14 +465,14 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             runs: ctx.reviews.checks(&ctx.dova, &dir, pr).await?,
         },
         Call::PullRun { dir, run } => {
-            let (steps, errors) = review::steps(&ctx.dova, &dir, run).await?;
+            let (steps, errors) = ctx.reviews.steps(&ctx.dova, &dir, run).await?;
             Answer::Run { steps, errors }
         }
         Call::PullStepLog { dir, run, log } => Answer::Printed {
-            text: review::step_log(&ctx.dova, &dir, run, log).await?,
+            text: ctx.reviews.step_log(&ctx.dova, &dir, run, log).await?,
         },
         Call::PullRerun { dir, run } => {
-            review::rerun(&ctx.dova, &dir, run).await?;
+            ctx.reviews.rerun(&ctx.dova, &dir, run).await?;
             Answer::Done
         }
         Call::TicketsList { words } => Answer::Tickets {
@@ -537,14 +542,20 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             brief: tickets::brief(&ctx.dova, &ctx.reviews, &ctx.forms, &dir, id).await?,
             cwd: dir,
         },
-        Call::PullSession { dir, pr } => {
+        Call::PullSession { dir, pr, clone } => {
             let (own, data, found) = (ctx.places.own(), data_dir(), ctx.places.found().await);
             let at = review::Folders {
                 own: &own,
                 data: &data,
                 found: &found,
             };
-            let (cwd, brief) = ctx.reviews.session(&ctx.dova, &at, &dir, pr).await?;
+            let repos = ctx.places.repos();
+            let made = ctx.reviews.session(&ctx.dova, &at, &repos, &dir, pr, clone);
+            let made = made.await;
+            if clone {
+                ctx.places.changed();
+            }
+            let (cwd, brief) = made?;
             Answer::Session { cwd, brief }
         }
         Call::PullPlace { dir, pr } => {
@@ -554,9 +565,10 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
                 data: &data,
                 found: &found,
             };
-            let cwd = ctx.reviews.place(&ctx.dova, &at, &dir, pr).await?;
+            let (cwd, checkout) = ctx.reviews.place(&ctx.dova, &at, &dir, pr).await?;
             Answer::Place {
                 cwd: cwd.display().to_string(),
+                checkout,
             }
         }
         Call::PullsSweep => {
@@ -576,7 +588,8 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             text,
             resolve,
         } => {
-            pulls::reply(&ctx.dova, &dir, pr, thread, &text, resolve).await?;
+            let pr = ctx.reviews.handle(&ctx.dova, &dir, pr).await;
+            pulls::reply(&ctx.dova, &dir, &pr, thread, &text, resolve).await?;
             Answer::Done
         }
         Call::PullResolve {
@@ -585,7 +598,8 @@ async fn answer(ctx: &Ctx, call: Call) -> Result<Answer, Error> {
             thread,
             status,
         } => {
-            pulls::resolve(&ctx.dova, &dir, pr, thread, &status).await?;
+            let pr = ctx.reviews.handle(&ctx.dova, &dir, pr).await;
+            pulls::resolve(&ctx.dova, &dir, &pr, thread, &status).await?;
             Answer::Done
         }
         Call::PullBefore { dir } => Answer::Before(pulls::before(&ctx.dova, &dir).await?),

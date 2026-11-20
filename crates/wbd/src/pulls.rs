@@ -141,7 +141,7 @@ impl Pulls {
                 };
                 // The ones you opened are listed as yours, even where you are a reviewer too.
                 row.review = None;
-                row.codespace = home(&clones, &row);
+                row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
                 rows.push(row);
             }
         }
@@ -203,7 +203,7 @@ impl Pulls {
                     }
                     // The ones you opened are listed as yours, even where you are a reviewer too.
                     row.review = None;
-                    row.codespace = home(&clones, &row);
+                    row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
                     rows.push(row);
                 }
                 searched.push(project);
@@ -288,7 +288,7 @@ impl Pulls {
                     if !seen.insert(key) {
                         continue;
                     }
-                    row.codespace = home(&clones, &row);
+                    row.codespace = home(&clones, &row).or_else(|| Some(whole(&clone.project)));
                     rows.push(row);
                 }
             }
@@ -491,12 +491,12 @@ pub async fn status(dova: &Dova, dir: &str, pr: Option<u64>) -> Result<PullView,
 pub async fn reply(
     dova: &Dova,
     dir: &str,
-    pr: u64,
+    pr: &str,
     thread: u64,
     text: &str,
     resolve: bool,
 ) -> Result<(), Error> {
-    let mut params = json!({ "pr": pr.to_string(), "thread": thread.to_string(), "text": text });
+    let mut params = json!({ "pr": pr, "thread": thread.to_string(), "text": text });
     if resolve {
         params["resolve"] = json!("resolved");
     }
@@ -507,11 +507,11 @@ pub async fn reply(
 pub async fn resolve(
     dova: &Dova,
     dir: &str,
-    pr: u64,
+    pr: &str,
     thread: u64,
     status: &str,
 ) -> Result<(), Error> {
-    let params = json!({ "pr": pr.to_string(), "thread": thread.to_string(), "status": status });
+    let params = json!({ "pr": pr, "thread": thread.to_string(), "status": status });
     dova.call("pr.resolve", dir, params).await.map(|_| ())
 }
 
@@ -718,6 +718,25 @@ fn organization(project: &str) -> &str {
         .map_or(named, |(organization, _)| organization)
 }
 
+/// The place a pull request opens from when no folder here has its repo: its organization,
+/// as `@name`. `project` is the project's part of a remote in that organization. dova is
+/// told the name, so old remotes of the form `name.visualstudio.com` give their name too.
+fn whole(project: &str) -> String {
+    let organization = organization(project);
+    let host = organization
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split('/').next())
+        .map(|host| host.rsplit('@').next().unwrap_or(host));
+    let name = match host.and_then(|host| host.strip_suffix(".visualstudio.com")) {
+        Some(name) => name,
+        None => organization
+            .rsplit(['/', ':'])
+            .next()
+            .unwrap_or(organization),
+    };
+    format!("@{name}")
+}
+
 /// Where a pull request opens from: the folder that has its repo. A codespace comes before a
 /// clone that is not one, and among several the one on its branch.
 fn home(clones: &[Clone], row: &PullRow) -> Option<String> {
@@ -769,6 +788,16 @@ mod tests {
     use protocol::PullRequest;
 
     use super::*;
+
+    #[test]
+    fn names_the_organization_to_ask_when_no_folder_has_the_repo() {
+        assert_eq!(whole("https://dev.azure.com/contoso/Shop/_git"), "@contoso");
+        assert_eq!(whole("git@ssh.dev.azure.com:v3/contoso/Shop"), "@contoso");
+        assert_eq!(
+            whole("https://contoso.visualstudio.com/DefaultCollection/Shop/_git"),
+            "@contoso"
+        );
+    }
 
     #[test]
     fn knows_an_azure_remote_from_any_other() {

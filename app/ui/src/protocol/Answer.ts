@@ -71,7 +71,11 @@ errors: Array<string>, } | { "kind": "session",
 /**
  * The folder the agent works in.
  */
-cwd: string, brief: string, } | { "kind": "place", cwd: string, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, } | { "kind": "log", 
+cwd: string, brief: string, } | { "kind": "place", cwd: string, 
+/**
+ * True when the folder is, or will be, a checkout: a clone of the repo is here.
+ */
+checkout: boolean, } | { "kind": "settings" } & Settings | { "kind": "tickets", rows: Array<TicketRow>, } | { "kind": "ticket" } & Ticket | { "kind": "filed", id: number, } | { "kind": "started", branch: string, } | { "kind": "log", 
 /**
  * What was written to the log file since `after`: whole lines.
  */

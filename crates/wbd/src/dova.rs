@@ -2,7 +2,8 @@
 //! object per line. It starts with the first call and starts again if it
 //! has gone. Each call names the folder it is about, so one process serves
 //! every codespace, and dova reads the org, project and repo from that
-//! folder's git remote.
+//! folder's git remote. A call can name an organization in place of a folder,
+//! as `@name`: what is asked of a whole organization needs no clone.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -34,9 +35,16 @@ pub struct Dova {
 }
 
 impl Dova {
-    /// Asks dova one thing about the folder `cwd`.
+    /// Asks dova one thing about the folder `cwd`, or about the organization `@name`.
     pub async fn call(&self, method: &str, cwd: &str, mut params: Value) -> Result<Value, Error> {
-        params["cwd"] = json!(cwd);
+        match cwd.strip_prefix('@') {
+            Some(organization) => {
+                params["org"] = json!(organization);
+                // dova looks at the folder it is given first. This one is no repo.
+                params["cwd"] = json!("/");
+            }
+            None => params["cwd"] = json!(cwd),
+        }
         let what = format!("{method} {}", log::given(&params, "cwd"));
         let running = log::begin(LogKind::Dova, what.trim_end(), Some(cwd));
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;

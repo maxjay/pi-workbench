@@ -101,13 +101,19 @@ export const stepLog = async (dir: string, run: number, log: number) =>
 export const rerun = (dir: string, run: number) =>
   ask({ method: 'pull.rerun', params: { dir, run } }, 'done');
 
-/** Where a pull request's own folder is, or will be. Asking makes nothing. */
-export const pullPlace = async (dir: string, pr: number) =>
-  (await ask({ method: 'pull.place', params: { dir, pr } }, 'place')).cwd;
+/**
+ * Where the agent's folder for a pull request is, or will be, and whether it is a checkout: whether
+ * a clone of the repo is here to make one from. Asking makes nothing.
+ */
+export const pullPlace = (dir: string, pr: number) =>
+  ask({ method: 'pull.place', params: { dir, pr } }, 'place');
 
-/** Makes a pull request's own folder if it is not there. Gives it, and what the agent is told first. */
-export const session = (dir: string, pr: number) =>
-  ask({ method: 'pull.session', params: { dir, pr } }, 'session');
+/**
+ * Makes the agent's folder for a pull request if it is not there. Gives it, and what the agent is
+ * told first. With `clone`, a repo that has no clone here is cloned into your repos folder first.
+ */
+export const session = (dir: string, pr: number, clone = false) =>
+  ask({ method: 'pull.session', params: { dir, pr, clone } }, 'session');
 
 /** Each open pull request's title, for its tab. */
 const [titles, setTitles] = createStore<Record<string, string>>({});

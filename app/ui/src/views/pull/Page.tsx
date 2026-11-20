@@ -166,19 +166,40 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
   const [opened, setOpened] = createStore<Record<string, boolean>>({});
 
   // The agent: its own folder, what it is told about the pull request, and its one conversation.
-  // Where the folder is, is asked now, so a conversation that is already in it shows. The folder
-  // is made when the agent is first asked something: a checkout of a large repo for every pull
-  // request you only read would be a waste.
-  const [place] = createResource(() => pullPlace(dir, pr));
+  // Where the folder is, is asked now, so a conversation that is already in it shows.
+  const [place, { refetch: placeAgain }] = createResource(() => pullPlace(dir, pr));
+  const placed = () => place.latest?.cwd;
   let made: Promise<{ cwd: string; brief: string }> | undefined;
-  const prepare = () => {
-    made ??= session(dir, pr).catch((err) => {
+  const prepare = (clone = false) => {
+    made ??= session(dir, pr, clone).catch((err) => {
       made = undefined;
       throw err;
     });
     return made;
   };
-  const talker = createTalker(prepare);
+  // With a clone of the repo here, the folder is a checkout of the pull request. It is made while
+  // you read, so the agent has all the code by the time you ask. A failure shows when you ask.
+  createEffect(() => {
+    if (place.latest?.checkout) prepare().catch(() => {});
+  });
+  const talker = createTalker(() => prepare());
+  // With no clone the agent reads only what the pull request changes. A thorough review clones
+  // the repo into your repos folder and checks the pull request out. That is another folder,
+  // so the conversation starts again there.
+  const cloning = createAction(async () => {
+    made = undefined;
+    await prepare(true);
+    talker.setConversation(undefined);
+    await placeAgain();
+  });
+  const [cloningFor, setCloningFor] = createSignal(0);
+  createEffect(() => {
+    if (!cloning.busy()) return;
+    const from = Date.now();
+    setCloningFor(0);
+    const timer = setInterval(() => setCloningFor(Math.floor((Date.now() - from) / 1000)), 1000);
+    onCleanup(() => clearInterval(timer));
+  });
   // The tab says when the agent is working, or waiting on you.
   createEffect(() => markTab(props.tab, { standing: talker.standing() }));
   onCleanup(() => markTab(props.tab, { standing: undefined }));
@@ -444,7 +465,8 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
               </section>
 
               <Show
-                when={place.latest}
+                when={placed()}
+                keyed
                 fallback={
                   <section class="chat pr-nochat" aria-label="The agent">
                     <p classList={{ dim: !place.error, 'note-failed': Boolean(place.error) }}>
@@ -455,8 +477,8 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
               >
                 {(cwd) => (
                   <Chat
-                    cwd={cwd()}
-                    prepare={prepare}
+                    cwd={cwd}
+                    prepare={() => prepare()}
                     plain
                     shown={conversation()}
                     onShow={setConversation}
@@ -477,20 +499,50 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
                     }
                     empty="It already has this pull request: the description, the tickets, the diff, the threads and the checks. Click a line, a thread or a run, and it is told about that too. Right-click a line to ask about it there."
                     top={
-                      <Show when={small().length > 0}>
-                        <div class="chat-small">
-                          <span class="chat-small-label">Under the lines</span>
-                          <For each={small()}>
-                            {(one) => (
-                              <button type="button" class="row" onClick={() => goTo(one.card, one.place)}>
-                                <span class="sq" data-tone="agent" />
-                                <span class="chat-small-place">{one.label}</span>
-                                <span class="chat-small-text">{one.text}</span>
+                      <>
+                        <Show when={place.latest?.checkout === false}>
+                          <div class="chat-quick">
+                            <Show
+                              when={!cloning.busy()}
+                              fallback={
+                                <p class="dim">
+                                  Cloning {review().pr.repo} into your repos folder, {cloningFor()} s
+                                </p>
+                              }
+                            >
+                              <p class="dim">
+                                Quick review. There is no clone of {review().pr.repo} here, so the agent reads
+                                only what the pull request changes.
+                              </p>
+                              <button
+                                type="button"
+                                class="button"
+                                title="Clones the repo into your repos folder and checks the pull request out, so the agent has all the code"
+                                onClick={() => void cloning.run()}
+                              >
+                                Thorough
                               </button>
-                            )}
-                          </For>
-                        </div>
-                      </Show>
+                            </Show>
+                            <Show when={cloning.error()}>
+                              {(error) => <p class="note-failed">{error()}</p>}
+                            </Show>
+                          </div>
+                        </Show>
+                        <Show when={small().length > 0}>
+                          <div class="chat-small">
+                            <span class="chat-small-label">Under the lines</span>
+                            <For each={small()}>
+                              {(one) => (
+                                <button type="button" class="row" onClick={() => goTo(one.card, one.place)}>
+                                  <span class="sq" data-tone="agent" />
+                                  <span class="chat-small-place">{one.label}</span>
+                                  <span class="chat-small-text">{one.text}</span>
+                                </button>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                      </>
                     }
                     above={
                       <Show when={about()}>
@@ -514,7 +566,7 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
                     }
                     onOpenFile={(path) => {
                       // A file the agent touched is in its own checkout. If the pull request changes it, show its diff.
-                      const relative = path.startsWith(`${cwd()}/`) ? path.slice(cwd().length + 1) : path;
+                      const relative = path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path;
                       if (review().files.some((f) => f.path === relative)) showFile(relative);
                     }}
                   />

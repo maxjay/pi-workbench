@@ -391,8 +391,9 @@ pub enum Call {
         #[ts(type = "number")]
         id: u64,
     },
-    /// Where a pull request's own folder is, or will be: a separate checkout of
-    /// its branch, in the workbench's own folder. Asking makes nothing.
+    /// Where the agent's folder for a pull request is, or will be, in the workbench's own
+    /// folder: a separate checkout of its branch when a clone of its repo is here, or else
+    /// a folder with nothing in it. Asking makes nothing.
     #[serde(rename = "pull.place")]
     PullPlace {
         dir: String,
@@ -410,14 +411,18 @@ pub enum Call {
     /// Changes those two folders. One left empty goes back to the usual one.
     #[serde(rename = "settings.set")]
     SettingsSet { repos: String, own: String },
-    /// Makes a pull request's own folder for the agent, if it is not there:
-    /// a separate checkout of its branch, made from the repo's clone. Answers
-    /// with the folder and what to tell the agent.
+    /// Makes the agent's folder for a pull request, if it is not there: a separate
+    /// checkout of its branch, made from the repo's clone. With no clone here, `clone`
+    /// clones the repo into your repos folder first; without it the folder holds nothing
+    /// and the agent reads the pull request through dova. Answers with the folder and what
+    /// to tell the agent.
     #[serde(rename = "pull.session")]
     PullSession {
         dir: String,
         #[ts(type = "number")]
         pr: u64,
+        #[serde(default)]
+        clone: bool,
     },
     /// Answers a thread, and resolves it too with `resolve`.
     #[serde(rename = "pull.reply")]
@@ -577,6 +582,8 @@ pub enum Answer {
     },
     Place {
         cwd: String,
+        /// True when the folder is, or will be, a checkout: a clone of the repo is here.
+        checkout: bool,
     },
     Settings(Settings),
     Tickets {
