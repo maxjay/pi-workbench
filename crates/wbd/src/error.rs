@@ -4,7 +4,7 @@ use std::path::Path;
 
 use protocol::{Failure, FailureKind};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     NotFound(String),
     Io(String),

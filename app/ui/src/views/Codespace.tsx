@@ -15,7 +15,7 @@ import type { GitMark } from '../protocol/GitMark';
 import { codespaceById, forget } from '../state/codespaces';
 import { buffers, checkDisk, forgetBuffer } from '../state/editor';
 import { allFiles, readFolder, refreshGit, refreshRepo, repos } from '../state/repo';
-import { open } from '../state/tabs';
+import { active, open } from '../state/tabs';
 import { Chat } from './codespace/Chat';
 import { createEditor } from './codespace/Editor';
 import { NewPull } from './codespace/NewPull';
@@ -267,6 +267,7 @@ function Page(props: { view: CodespaceView }) {
                           {git().summary.branch} · +{git().summary.added} -{git().summary.removed}
                         </p>
                         <BranchPull
+                          shown={() => active() === `cs:${id}`}
                           dir={part.path}
                           onNew={() => openTab(id, part.name ? `newpr:${part.path}` : 'newpr')}
                           onOpen={(pr) => open(`pr:${part.name ? part.path : id}:${pr}`)}

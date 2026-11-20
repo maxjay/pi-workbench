@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use protocol::{
     Asked, Codespace, Person, PipelineRun, PullBefore, PullRequest, PullRow, PullView, RepoName,
@@ -28,7 +29,23 @@ pub struct Pulls {
     members: Mutex<HashMap<String, Vec<Person>>>,
     /// Every repo of an organization, by organization. Asked once: the search reads from it.
     repos: Mutex<HashMap<String, Vec<RepoName>>>,
+    /// Your pull requests as they were last listed in full.
+    listed: Mutex<Option<Listed>>,
 }
+
+/// Your pull requests as they were listed in full: when, what Azure DevOps' own list of them
+/// said then, the rows, and the projects that were asked.
+#[derive(Clone)]
+struct Listed {
+    when: Instant,
+    said: String,
+    rows: Vec<PullRow>,
+    searched: Vec<String>,
+}
+
+/// The full list is made again after this long, even when Azure DevOps' own list of your
+/// pull requests is as it was: a check that finished or a new thread does not show there.
+const LISTED: Duration = Duration::from_secs(300);
 
 /// Whose pull requests to list, and in which repos.
 pub struct Chosen<'a> {
@@ -196,9 +213,31 @@ impl Pulls {
         written: Option<&[String]>,
     ) -> Result<(Vec<PullRow>, Vec<Asked>, Vec<String>), Error> {
         let (clones, looked) = clones(codespaces, found).await;
+        let orgs = asked(written, &clones);
+        // One request to each organization says which pull requests are yours and where each
+        // stands. While that is as it was, the rows last listed are given again: listing them
+        // in full takes three requests for each pull request.
+        let mut opened = Vec::new();
+        for org in &orgs {
+            opened.push(opened_by_you(dova, reviews, &org.place).await);
+        }
+        let now = said(&opened);
+        let listed = self.listed.lock().expect("not poisoned").clone();
+        if let Some(mut listed) = listed
+            && listed.when.elapsed() < LISTED
+            && listed.said == now
+        {
+            // A repo may have been cloned since.
+            for row in &mut listed.rows {
+                if let Some(key) = home(&clones, row) {
+                    row.codespace = Some(key);
+                }
+            }
+            return Ok((listed.rows, looked, listed.searched));
+        }
         let mut rows: Vec<PullRow> = Vec::new();
         let mut searched = Vec::new();
-        for org in asked(written, &clones) {
+        for (org, opened) in orgs.iter().zip(&opened) {
             let cwd = &org.place;
             // The projects of the folders open here, which must answer, and then every other
             // project that has a pull request of yours, found by asking the organization.
@@ -215,7 +254,7 @@ impl Pulls {
                     projects.push((name, true));
                 }
             }
-            for name in elsewhere(dova, reviews, cwd).await {
+            for name in projects_in(opened.as_ref()) {
                 if !projects
                     .iter()
                     .any(|(known, _)| known.eq_ignore_ascii_case(&name))
@@ -246,6 +285,12 @@ impl Pulls {
                 searched.push(project);
             }
         }
+        *self.listed.lock().expect("not poisoned") = Some(Listed {
+            when: Instant::now(),
+            said: now,
+            rows: rows.clone(),
+            searched: searched.clone(),
+        });
         Ok((rows, looked, searched))
     }
 
@@ -586,27 +631,52 @@ fn shape<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
         .map_err(|err| Error::Dova(format!("couldn't read what dova said: {err}")))
 }
 
-/// The projects, anywhere in the organization `cwd` is cloned from, that have an open pull
-/// request you opened. Nothing when the organization will not say.
-async fn elsewhere(dova: &Dova, reviews: &Reviews, cwd: &str) -> Vec<String> {
-    let Ok(me) = reviews.me(dova, cwd).await else {
-        return Vec::new();
-    };
-    // A path that starts with a slash is asked of the organization, not of the folder's project.
+/// The open pull requests you opened, anywhere in the organization at `cwd`, as Azure
+/// DevOps' own list has them: one request. Nothing when the organization will not say.
+async fn opened_by_you(dova: &Dova, reviews: &Reviews, cwd: &str) -> Option<Value> {
+    let me = reviews.me(dova, cwd).await.ok()?;
+    // A path that starts with a slash is asked of the organization, not of a project.
     let path = format!(
         "/_apis/git/pullrequests?searchCriteria.creatorId={me}&searchCriteria.status=active&$top=500&api-version=7.1"
     );
-    let Ok(found) = dova.call("api", cwd, json!({ "path": path })).await else {
-        return Vec::new();
-    };
+    dova.call("api", cwd, json!({ "path": path })).await.ok()
+}
+
+/// The projects that have a pull request in such a list.
+fn projects_in(opened: Option<&Value>) -> Vec<String> {
     let mut projects: Vec<String> = Vec::new();
-    for pull in found["value"].as_array().into_iter().flatten() {
+    let pulls = opened.and_then(|opened| opened["value"].as_array());
+    for pull in pulls.into_iter().flatten() {
         let name = pull["repository"]["project"]["name"].as_str();
         if let Some(name) = name.filter(|name| !projects.iter().any(|known| known == name)) {
             projects.push(name.to_string());
         }
     }
     projects
+}
+
+/// What such lists say, as one text to compare: each pull request with its last commit,
+/// where it stands and its title. A list that could not be asked for says so.
+fn said(lists: &[Option<Value>]) -> String {
+    let mut said = String::new();
+    for list in lists {
+        let Some(list) = list else {
+            said.push_str("not said;");
+            continue;
+        };
+        for pull in list["value"].as_array().into_iter().flatten() {
+            said.push_str(&format!(
+                "{} {} {} {} {};",
+                pull["pullRequestId"],
+                pull["lastMergeSourceCommit"]["commitId"],
+                pull["status"],
+                pull["isDraft"],
+                pull["title"]
+            ));
+        }
+        said.push('|');
+    }
+    said
 }
 
 /// Whether a row is in a repo you chose.
@@ -761,7 +831,7 @@ fn organization(project: &str) -> &str {
 /// The place a pull request opens from when no folder here has its repo: its organization,
 /// as `@name`. `project` is the project's part of a remote in that organization. dova is
 /// told the name, so old remotes of the form `name.visualstudio.com` give their name too.
-fn whole(project: &str) -> String {
+pub fn whole(project: &str) -> String {
     let organization = organization(project);
     let host = organization
         .split_once("://")

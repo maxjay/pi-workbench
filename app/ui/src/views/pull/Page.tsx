@@ -152,12 +152,13 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
   const [runs, { refetch: recheck }] = createResource(() => checks(dir, pr));
   createEffect(on(changed, () => void load()));
   onMount(() => {
-    // Asked again every half minute while its tab is the one shown.
+    // Asked again every minute while its tab is the one shown. wbd asks Azure DevOps only for
+    // what can have changed since: the pull request, its threads, its policies and its runs.
     const timer = setInterval(() => {
       if (document.hidden || active() !== props.tab) return;
       void load();
       void recheck();
-    }, 30_000);
+    }, 60_000);
     onCleanup(() => clearInterval(timer));
   });
 
@@ -170,11 +171,17 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
   const [place, { refetch: placeAgain }] = createResource(() => pullPlace(dir, pr));
   const placed = () => place.latest?.cwd;
   let made: Promise<{ cwd: string; brief: string }> | undefined;
+  let madeAt = 0;
   const prepare = (clone = false) => {
-    made ??= session(dir, pr, clone).catch((err) => {
-      made = undefined;
-      throw err;
-    });
+    // What the agent is told is of the moment it was made, so one made a while ago is made
+    // again. wbd makes it from what it last read of the pull request, if that was lately.
+    if (!made || Date.now() - madeAt > 60_000) {
+      madeAt = Date.now();
+      made = session(dir, pr, clone).catch((err) => {
+        made = undefined;
+        throw err;
+      });
+    }
     return made;
   };
   // With a clone of the repo here, the folder is a checkout of the pull request. It is made while
@@ -457,7 +464,12 @@ function Page(props: { tab: TabId; codespace: string; dir: string; pr: number })
                   <Overview p={p} onChecks={() => setShown({ kind: 'checks' })} />
                 </Show>
                 <Show when={shown().kind === 'checks'}>
-                  <Checks p={p} runs={runs.latest} onChanged={() => void recheck()} />
+                  <Checks
+                    p={p}
+                    runs={runs.latest}
+                    onChanged={() => void recheck()}
+                    shown={() => active() === props.tab}
+                  />
                 </Show>
                 <Show when={shownFile()?.path} keyed>
                   {(path) => <Diff p={p} path={path} at={shownFile()?.at} />}

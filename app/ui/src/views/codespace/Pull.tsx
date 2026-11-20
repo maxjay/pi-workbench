@@ -13,6 +13,8 @@ export function BranchPull(props: {
   onNew: () => void;
   /** Opens a pull request's own tab. */
   onOpen: (pr: number) => void;
+  /** Whether the codespace's tab is the one shown. */
+  shown: () => boolean;
 }) {
   // Nothing to ask without dova. A folder that isn't cloned from Azure Repos just has no line.
   const [view, { refetch }] = createResource(
@@ -24,9 +26,10 @@ export function BranchPull(props: {
       view.latest && !view.latest.pr ? ([props.dir, view.latest.branch, written()] as const) : undefined,
     ([dir]) => pullBefore(dir).catch(() => undefined),
   );
-  // Asked again every half minute while Changes is shown.
+  // Asked again every minute while Changes is shown. A codespace's page stays where it is
+  // while another tab is shown, and asks nothing then.
   onMount(() => {
-    const timer = setInterval(() => document.hidden || void refetch(), 30_000);
+    const timer = setInterval(() => document.hidden || !props.shown() || void refetch(), 60_000);
     onCleanup(() => clearInterval(timer));
   });
   const ahead = () => before.latest?.commits.length ?? 0;

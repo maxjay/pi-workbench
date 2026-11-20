@@ -24,6 +24,8 @@ use crate::log::{self, LogKind};
 const PATIENCE: Duration = Duration::from_secs(45);
 
 type Waiting = Mutex<HashMap<u64, oneshot::Sender<Result<Value, Error>>>>;
+/// What is being read now, each with whoever else asked for the same while it was.
+type Asking = Mutex<HashMap<String, Vec<oneshot::Sender<Result<Value, Error>>>>>;
 
 #[derive(Default)]
 pub struct Dova {
@@ -31,6 +33,8 @@ pub struct Dova {
     stdin: Arc<tokio::sync::Mutex<Option<ChildStdin>>>,
     /// The calls waiting for their answer, by id.
     waiting: Arc<Waiting>,
+    /// The reads on their way. The same read asked again meanwhile waits for the one answer.
+    asking: Asking,
     next: AtomicU64,
 }
 
@@ -45,13 +49,53 @@ impl Dova {
             }
             None => params["cwd"] = json!(cwd),
         }
+        // Something that is only read, asked for while it is already being asked for, is not
+        // asked twice: whoever asks second gets the first one's answer.
+        let mut leading = None;
+        if reads(method, &params) {
+            let key = format!("{method} {params}");
+            match self.join(&key) {
+                Some(answered) => {
+                    if let Ok(result) = answered.await {
+                        return result;
+                    }
+                    // The one that asked was given up on before it was answered. This one asks.
+                }
+                None => {
+                    leading = Some(Leading {
+                        asking: &self.asking,
+                        key,
+                    });
+                }
+            }
+        }
         let what = format!("{method} {}", log::given(&params, "cwd"));
         let running = log::begin(LogKind::Dova, what.trim_end(), Some(cwd));
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         let result = self.asked(id, method, format!("{line}\n")).await;
         running.end(&result);
+        if let Some(leading) = leading {
+            leading.answer(&result);
+        }
         result
+    }
+
+    /// Waits for a read that is on its way, if `key` is one. Otherwise marks it as on its way
+    /// and gives nothing: the caller asks, and answers whoever joins.
+    fn join(&self, key: &str) -> Option<oneshot::Receiver<Result<Value, Error>>> {
+        let mut asking = self.asking.lock().expect("not poisoned");
+        match asking.get_mut(key) {
+            Some(others) => {
+                let (answer, answered) = oneshot::channel();
+                others.push(answer);
+                Some(answered)
+            }
+            None => {
+                asking.insert(key.to_string(), Vec::new());
+                None
+            }
+        }
     }
 
     /// Writes a call to dova and waits for its answer.
@@ -150,6 +194,39 @@ impl Dova {
     }
 }
 
+/// The one call that asks for a read. Whoever joined it is answered when it is. If it is
+/// given up on first, they are let go, and each asks for itself.
+struct Leading<'a> {
+    asking: &'a Asking,
+    key: String,
+}
+
+impl Leading<'_> {
+    fn answer(self, result: &Result<Value, Error>) {
+        let others = self.asking.lock().expect("not poisoned").remove(&self.key);
+        for other in others.into_iter().flatten() {
+            let _ = other.send(result.clone());
+        }
+    }
+}
+
+impl Drop for Leading<'_> {
+    fn drop(&mut self) {
+        self.asking.lock().expect("not poisoned").remove(&self.key);
+    }
+}
+
+/// Whether a call only reads. A read can be shared; something that changes Azure DevOps is
+/// always sent, each time it is asked.
+fn reads(method: &str, params: &Value) -> bool {
+    if method == "api" {
+        let how = params["method"].as_str().unwrap_or("GET");
+        return how.eq_ignore_ascii_case("GET");
+    }
+    let ends = [".view", ".diff", ".list", ".search", ".thread"];
+    matches!(method, "status" | "summarize") || ends.iter().any(|end| method.ends_with(end))
+}
+
 /// A reply from dova: its result, or why it refused.
 fn read(mut reply: Value) -> Result<Value, Error> {
     let error = &reply["error"];
@@ -176,6 +253,43 @@ fn read(mut reply: Value) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_reads_are_shared() {
+        assert!(reads("api", &json!({ "path": "/_apis/x" })));
+        assert!(reads("pr.view", &json!({})));
+        assert!(reads("status", &json!({})));
+        assert!(!reads(
+            "api",
+            &json!({ "path": "/_apis/x", "method": "PATCH" })
+        ));
+        assert!(!reads("pr.comment", &json!({})));
+        assert!(!reads("pr.create", &json!({})));
+    }
+
+    #[tokio::test]
+    async fn the_same_read_asked_meanwhile_gets_the_one_answer() {
+        let dova = Dova::default();
+        assert!(dova.join("pr.view 1").is_none());
+        let second = dova.join("pr.view 1").expect("it is on its way");
+        let third = dova.join("pr.view 1").expect("it is on its way");
+        let leading = Leading {
+            asking: &dova.asking,
+            key: "pr.view 1".into(),
+        };
+        leading.answer(&Ok(json!(7)));
+        assert_eq!(second.await.unwrap().unwrap(), json!(7));
+        assert_eq!(third.await.unwrap().unwrap(), json!(7));
+        // Asked again later, it is asked for again.
+        assert!(dova.join("pr.view 1").is_none());
+        // One that is given up on lets the others go.
+        let waiting = dova.join("pr.view 1").expect("it is on its way");
+        drop(Leading {
+            asking: &dova.asking,
+            key: "pr.view 1".into(),
+        });
+        assert!(waiting.await.is_err());
+    }
 
     #[test]
     fn a_refusal_carries_its_kind_and_what_to_do() {

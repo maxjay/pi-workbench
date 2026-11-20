@@ -43,6 +43,8 @@ export function Checks(props: {
   runs: CheckRun[] | undefined;
   /** Asks for the runs again. */
   onChanged: () => void;
+  /** Whether the pull request's tab is the one shown. */
+  shown: () => boolean;
 }) {
   const p = () => props.p;
   const [picked, setPicked] = createSignal<number>();
@@ -55,7 +57,7 @@ export function Checks(props: {
   createEffect(() => {
     if (!run() || run()?.status === 'completed') return;
     const timer = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || !props.shown()) return;
       props.onChanged();
       void refetch();
     }, 10_000);

@@ -415,8 +415,15 @@ pub async fn list(
     let mut rows = Vec::new();
     let mut asked = HashSet::new();
     for clone in clones {
-        // dova searches a whole project at once, so each project is asked once.
-        if !asked.insert(clone.project.to_lowercase()) {
+        // dova searches a whole project at once, so each project is asked once, by its
+        // organization's name and its own: two clones' remotes can write the same project
+        // in two ways.
+        let project = format!(
+            "{}/{}",
+            pulls::whole(&clone.project),
+            pulls::project_name(&clone.project)
+        );
+        if !asked.insert(project.to_lowercase()) {
             continue;
         }
         let params = match words.trim() {

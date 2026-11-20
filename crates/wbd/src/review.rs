@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use protocol::{
     ChangedFile, CheckRun, Comment, DiffKind, DiffLine, FileChange, Place, Policy, PullRequest,
@@ -33,6 +33,12 @@ const BRIEF: usize = 60_000;
 /// How the name of a pull request's folder ends when it is not a checkout: no clone of the
 /// repo was here to make one from.
 const PLAIN: &str = "-quick";
+/// dova's own view of a pull request and the list of its files are asked for again after this
+/// long, even when nothing that they depend on changed.
+const WHOLE: Duration = Duration::from_secs(600);
+/// What was read this lately is used again where the agent's folder is made and the agent is
+/// told about the pull request, in place of reading it once more.
+const FRESH: Duration = Duration::from_secs(60);
 /// git gets this long to fetch a pull request's commits.
 const FETCH: Duration = Duration::from_secs(60);
 
@@ -44,6 +50,10 @@ pub struct Reviews {
     known: Mutex<HashMap<(String, u64), Known>>,
     /// The project of each pipeline run that was listed, by the run's id.
     runs: Mutex<HashMap<u64, String>>,
+    /// Each pull request as it was last read, with the parts that are costly to ask for.
+    held: Mutex<HashMap<(String, u64), Held>>,
+    /// Each pull request's pipeline runs as they were last listed, and when.
+    checked: Mutex<HashMap<(String, u64), Checked>>,
     /// What changed in each pull request's files, as far as it was asked for.
     diffs: Mutex<HashMap<(String, u64), Kept>>,
     /// The checkouts that were kept at the last sweep though their pull request ended.
@@ -67,6 +77,25 @@ struct Known {
     /// Where its repo is cloned from, over https and over ssh.
     https: Option<String>,
     ssh: Option<String>,
+    /// The branch it merges from, as a ref. It is the same for as long as the pull request is.
+    source: String,
+}
+
+/// A pull request's pipeline runs, and when they were listed.
+type Checked = (Instant, Vec<CheckRun>);
+
+/// A pull request as it was last read. What changes while it is open is asked each time:
+/// itself, its threads, its policies. dova's own view of it and the list of its files take
+/// several requests each, and change only with what `mark` holds, so they are kept.
+struct Held {
+    /// When the view and the list of files were asked for.
+    asked: Instant,
+    mark: String,
+    view: Value,
+    diff: Value,
+    /// What was made of it all, and when.
+    review: Review,
+    read: Instant,
 }
 
 impl Known {
@@ -137,17 +166,44 @@ impl Reviews {
     pub async fn open(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
         let known = self.known(dova, dir, pr).await?;
         let (at, link) = (&known.at, known.link(pr));
-        let id = json!({ "idOrUrl": link, "inlineImages": true });
-        // Which files changed, not what changed in them: a few requests, however many there are.
-        let names = json!({ "pr": link, "names": true });
-        let (view, raw, threads, diff, me) = tokio::join!(
-            dova.call("pr.view", dir, id),
+        // What changes while a pull request is open is asked each time: itself, its threads
+        // and its policies. Three requests. The policies are asked for by the project's own
+        // id, and not being able to ask counts as not met.
+        let evaluations = format!(
+            "/{0}/_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{0}/{pr}&api-version=7.1-preview.1",
+            known.project_id
+        );
+        let (raw, threads, policies, me) = tokio::join!(
             get(dova, dir, format!("{at}?api-version=7.1")),
             get(dova, dir, format!("{at}/threads?api-version=7.1")),
-            dova.call("pr.diff", dir, names),
+            get(dova, dir, evaluations),
             self.me(dova, dir),
         );
-        let (view, raw, threads, diff, me) = (view?, raw?, threads?, diff?, me?);
+        let (raw, threads, me) = (raw?, threads?, me?);
+
+        // dova's own view of it and the list of its files are asked for only when something
+        // they depend on changed, or they are old.
+        let (key, mark) = ((dir.to_string(), pr), mark(&raw, &threads));
+        let kept = {
+            let held = self.held.lock().expect("not poisoned");
+            let same = held
+                .get(&key)
+                .filter(|held| held.mark == mark && held.asked.elapsed() < WHOLE);
+            same.map(|held| (held.view.clone(), held.diff.clone(), held.asked))
+        };
+        let (view, diff, asked) = match kept {
+            Some(kept) => kept,
+            None => {
+                let id = json!({ "idOrUrl": link, "inlineImages": true });
+                // Which files changed, not what changed in them: a few requests, however many there are.
+                let names = json!({ "pr": link, "names": true });
+                let (view, diff) = tokio::join!(
+                    dova.call("pr.view", dir, id),
+                    dova.call("pr.diff", dir, names),
+                );
+                (view?, diff?, Instant::now())
+            }
+        };
 
         // dova says where each thread is after the latest push. Azure DevOps,
         // asked plainly, says where it was written.
@@ -163,17 +219,7 @@ impl Reviews {
             .find(|reviewer| reviewer["id"].as_str() == Some(me.as_str()))
             .map_or(0, vote_of);
         let head = text(&diff["head"]);
-        // The policies are asked for by the project's own id. Not being able to ask counts as not met.
-        let policies = get(
-            dova,
-            dir,
-            format!(
-                "/{0}/_apis/policy/evaluations?artifactId=vstfs:///CodeReview/CodeReviewId/{0}/{pr}&api-version=7.1-preview.1",
-                known.project_id
-            ),
-        )
-        .await;
-        Ok(Review {
+        let review = Review {
             pr: shape::<PullRequest>(view.clone())?,
             author: text(&view["author"]),
             description: text(&view["description"]),
@@ -200,7 +246,17 @@ impl Reviews {
             files: self.listed(dir, pr, &diff),
             base: text(&diff["base"]),
             head,
-        })
+        };
+        let held = Held {
+            asked,
+            mark,
+            view,
+            diff,
+            review: review.clone(),
+            read: Instant::now(),
+        };
+        self.held.lock().expect("not poisoned").insert(key, held);
+        Ok(review)
     }
 
     pub async fn vote(&self, dova: &Dova, dir: &str, pr: u64, vote: i8) -> Result<(), Error> {
@@ -240,8 +296,7 @@ impl Reviews {
     /// The pipeline runs on a pull request's branch and on its merge, the newest first.
     pub async fn checks(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Vec<CheckRun>, Error> {
         let known = self.known(dova, dir, pr).await?;
-        let raw = get(dova, dir, format!("{}?api-version=7.1", known.at)).await?;
-        let branches = [text(&raw["sourceRefName"]), format!("refs/pull/{pr}/merge")];
+        let branches = [known.source.clone(), format!("refs/pull/{pr}/merge")];
         let mut runs: Vec<CheckRun> = Vec::new();
         for branch in branches {
             let path = format!(
@@ -259,6 +314,10 @@ impl Reviews {
             projects.insert(run.id, known.project_id.clone());
         }
         drop(projects);
+        self.checked
+            .lock()
+            .expect("not poisoned")
+            .insert((dir.to_string(), pr), (Instant::now(), runs.clone()));
         Ok(runs)
     }
 
@@ -266,6 +325,35 @@ impl Reviews {
     async fn named(&self, dova: &Dova, dir: &str, pr: u64) -> Result<(String, String), Error> {
         let known = self.known(dova, dir, pr).await?;
         Ok((known.project, known.repo))
+    }
+
+    /// A pull request as it was read a moment ago, or read now.
+    async fn reviewed(&self, dova: &Dova, dir: &str, pr: u64) -> Result<Review, Error> {
+        let key = (dir.to_string(), pr);
+        let review = {
+            let held = self.held.lock().expect("not poisoned");
+            let lately = held.get(&key).filter(|held| held.read.elapsed() < FRESH);
+            lately.map(|held| held.review.clone())
+        };
+        match review {
+            Some(review) => Ok(review),
+            None => self.open(dova, dir, pr).await,
+        }
+    }
+
+    /// A pull request's pipeline runs as they were listed a moment ago, or listed now. None
+    /// when they can't be listed.
+    async fn checked(&self, dova: &Dova, dir: &str, pr: u64) -> Vec<CheckRun> {
+        let key = (dir.to_string(), pr);
+        let runs = {
+            let checked = self.checked.lock().expect("not poisoned");
+            let lately = checked.get(&key).filter(|(when, _)| when.elapsed() < FRESH);
+            lately.map(|(_, runs)| runs.clone())
+        };
+        match runs {
+            Some(runs) => runs,
+            None => self.checks(dova, dir, pr).await.unwrap_or_default(),
+        }
     }
 
     /// What dova is given to name a pull request: its address, which says where it is. Its
@@ -354,7 +442,7 @@ impl Reviews {
         pr: u64,
         clone_it: bool,
     ) -> Result<(String, String), Error> {
-        let review = self.open(dova, dir, pr).await?;
+        let review = self.reviewed(dova, dir, pr).await?;
         let known = self.known(dova, dir, pr).await?;
         let mut clone = clone_of(dir, &known.project, &known.repo, at.found).await;
         if clone.is_none() && clone_it {
@@ -383,7 +471,7 @@ impl Reviews {
             list.push(made);
             keep_checkouts(at.own, &list);
         }
-        let runs = self.checks(dova, dir, pr).await.unwrap_or_default();
+        let runs = self.checked(dova, dir, pr).await;
         let link = clone.is_none().then(|| known.link(pr));
         Ok((
             own.display().to_string(),
@@ -573,6 +661,7 @@ impl Reviews {
             link: web.map(|web| format!("{web}/pullrequest/{pr}")),
             https: repo["remoteUrl"].as_str().map(str::to_string),
             ssh: repo["sshUrl"].as_str().map(str::to_string),
+            source: text(&raw["sourceRefName"]),
         };
         self.known
             .lock()
@@ -657,6 +746,28 @@ async fn clone_into(repos: &Path, known: &Known, found: &[Found]) -> Result<Path
         .await
         .map_err(|why| Error::Io(format!("git couldn't clone {}: {why}", known.repo)))?;
     Ok(target)
+}
+
+/// What of a pull request dova's view of it and the list of its files depend on: its last
+/// commit, where it stands, its title and description, and which threads it has. While this
+/// is as it was, they are not asked for again. A new thread changes it, so a comment you
+/// just posted is placed by dova at once.
+fn mark(raw: &Value, threads: &Value) -> String {
+    let all = threads["value"].as_array().into_iter().flatten();
+    let ids: Vec<String> = all
+        .filter_map(|thread| thread["id"].as_u64())
+        .map(|id| id.to_string())
+        .collect();
+    format!(
+        "{} {} {} {} {} {} {}",
+        raw["lastMergeSourceCommit"]["commitId"],
+        raw["status"],
+        raw["isDraft"],
+        raw["targetRefName"],
+        raw["title"],
+        raw["description"],
+        ids.join(",")
+    )
 }
 
 /// The clone a pull request's checkout is made from: the folder asked from when it is that
